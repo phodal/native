@@ -48,23 +48,23 @@ const apps: ShowcaseApp[] = [
   {
     id: "deck",
     name: "Deck",
-    tagline: "Soundboard’s twin, rebuilt as classic rack hardware.",
+    tagline: "Soundboard’s twin, rebuilt as vintage hi-fi rack hardware.",
     detail:
-      "The same library, transport, queue, and search in two fixed chromeless windows: a 460×180 player chassis and a playlist rack the PL key docks beneath it. The chassis — bevels, screws, seven-segment timecode — is a custom chrome pass over the same widgets, dark-only by design.",
+      "The same library, transport, queue, and search in two fixed chromeless windows: a 512×264 enamel player chassis and a playlist rack the PL key docks beneath it. The fascia — cream enamel, recessed screws, smoked-glass bays, seven-segment timecode, a rotary volume knob — is a custom chrome pass over the same widgets, one finish by design.",
     facts: [{ label: "Binary", value: "4.2 MB" }],
-    width: 920,
-    height: 360,
+    width: 1024,
+    height: 528,
     darkOnly: true,
     stack: [
       {
         src: "/home/deck-dark.webp",
-        alt: "The Deck example app rendered by the Native SDK engine: a fixed 460 by 180 chromeless hardware player chassis with a gold cap band, a seven-segment timecode, and a spectrum analyzer, dark by design",
-        width: 920,
-        height: 360,
+        alt: "The Deck example app rendered by the Native SDK engine: a fixed 512 by 264 chromeless hardware player in cream enamel with smoked-glass display bays, a phosphor seven-segment timecode, a spectrum analyzer, a five-band monitor, and a rotary volume knob",
+        width: 1024,
+        height: 528,
       },
       {
         src: "/home/deck-playlist-dark.webp",
-        alt: "Deck's playlist rack window: a matching 460 by 440 rack unit with a channel bank, the full track ledger with the playing row highlighted, and a search field",
+        alt: "Deck's playlist window: a matching enamel rack unit around one smoked-glass playlist bay — numbered phosphor rows with the playing row highlighted, right-aligned durations, and a glass search inset",
         width: 920,
         height: 880,
       },
@@ -147,7 +147,7 @@ export function Showcase() {
 
       {/* Screenshot: the light and dark captures are the same app state
           rendered per scheme; the site theme picks which one shows.
-          Dark-only apps (deck) ship a single capture for both themes.
+          Single-finish apps (deck) ship one capture for both themes.
           Every showcase window owns its own chrome (hidden-inset header
           bands or fixed chromeless chassis), so no capture gets an
           invented window frame — each sits on the page background as its
@@ -165,7 +165,10 @@ export function Showcase() {
               height={window.height}
               quality={90}
               loading="eager"
-              className="block h-auto w-full max-w-[460px]"
+              className="block h-auto w-full"
+              // Captures are 2x; each fixed window shows at its own
+              // natural 1x size (deck's two windows differ in width).
+              style={{ maxWidth: window.width / 2 }}
             />
           ))}
         </div>

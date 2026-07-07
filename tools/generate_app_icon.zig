@@ -8,10 +8,13 @@
 //!
 //! The design follows the macOS icon grid: a 1024x1024 canvas with a
 //! centered 824x824 rounded-rect plate (corner radius 185.4), a subtle
-//! baked drop shadow, a vertical blue-violet gradient adjacent to the
-//! design-token accent (#1447e6 light / #193cb8 dark), and a neutral
-//! layered-surface mark: two offset rounded sheets, the back one
-//! translucent. No letterforms, no wordmark.
+//! baked drop shadow, a vertical DARK-GRAY gradient on the design-token
+//! dark-neutral family (#262626 falling to #171717 — the dark scheme's
+//! surface_subtle and surface steps), and a neutral layered-surface
+//! mark: two offset rounded sheets, the back one translucent. No
+//! letterforms, no wordmark. Dark gray is the default-plate decision:
+//! apps that ship no icon get a quiet neutral plate, never a hue that
+//! could read as their brand.
 //!
 //! Regenerate everything with ONE command from the repo root:
 //!
@@ -56,11 +59,12 @@ const shadow_offset_y: f32 = 12;
 const shadow_sigma: f32 = 16;
 const shadow_alpha: f32 = 0.30;
 
-/// Vertical plate gradient, token-palette-adjacent: a lifted blue at the
-/// top falling to the dark-scheme accent at the bottom, bracketing the
-/// #1447e6 primary identity.
-const gradient_top = [3]f32{ 82.0 / 255.0, 124.0 / 255.0, 248.0 / 255.0 };
-const gradient_bottom = [3]f32{ 23.0 / 255.0, 55.0 / 255.0, 186.0 / 255.0 };
+/// Vertical plate gradient on the dark-neutral token family: #262626
+/// (the dark scheme's surface_subtle, oklch 0.269) at the top falling
+/// to #171717 (dark surface, oklch 0.205) — a dark-gray plate that
+/// stays register-neutral for apps that ship no icon of their own.
+const gradient_top = [3]f32{ 38.0 / 255.0, 38.0 / 255.0, 38.0 / 255.0 };
+const gradient_bottom = [3]f32{ 23.0 / 255.0, 23.0 / 255.0, 23.0 / 255.0 };
 
 /// The mark: two layered "surface" sheets, offset along the diagonal so
 /// the union is centered on the canvas. The back sheet is translucent

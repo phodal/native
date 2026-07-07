@@ -1,24 +1,25 @@
 //! deck: the radically skinned sibling of `examples/soundboard` — the same
 //! local music player (albums, tracks, transport, seek, queue, search)
-//! wearing rack-unit hardware identity, in the true two-window shape: a
-//! SMALL, FIXED player window (the window IS the device — hidden-inset
-//! titlebar, the gold cap band as the drag region) and a matching
-//! playlist rack unit declared through `windows_fn` while the model says
-//! it is open (the PL key and `primary+L` flip the flag). Everything
-//! visual comes from the deck theme's design tokens plus Zig-drawn chrome
-//! (the `ui.chart` spectrum, mono paragraph readouts, the seven-segment
-//! elapsed readout) over two small AI-generated textures registered
-//! through the runtime image channel; nothing forks the engine. Playback
-//! is REAL: the audio effect channel drives the platform player over the
+//! wearing vintage rack-unit hardware identity, in the true two-window
+//! shape: a SMALL, FIXED player window (the window IS the device —
+//! hidden-inset titlebar, the enamel cap band as the drag region) and a
+//! matching playlist unit declared through `windows_fn` while the model
+//! says it is open (the PL key and `primary+L` flip the flag).
+//! Everything visual comes from the deck theme's design tokens plus
+//! Zig-drawn chrome (the `ui.chart` spectrum, mono paragraph readouts,
+//! the seven-segment elapsed readout, the band ladders, the volume knob
+//! face) — pure fills, lines, gradients, and paths; this skin ships no
+//! bitmap texture assets, and nothing forks the engine. Playback is
+//! REAL: the audio effect channel drives the platform player over the
 //! shared committed catalog (the mp3s live once, in the soundboard's
 //! gitignored assets), and a failed load lands the honest NO MEDIA
-//! remedy on the VFD instead of a crash or silence.
+//! remedy on the display instead of a crash or silence.
 //!
 //! Authoring split (markup where it fits): the playlist's status strip is
 //! a `.native` view compiled at comptime; the faceplate and the playlist
 //! rack are Zig views because they need what the closed markup grammar
 //! deliberately excludes — the chart widget, scaled mono spans, per-row
-//! native context menus, and the registered-texture image leaf.
+//! native context menus, and the registered-image cover leaf.
 
 const std = @import("std");
 const runner = @import("runner");
@@ -56,7 +57,7 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
     .width = window_width,
     .height = window_height,
     // The player is a piece of hardware: fixed size (the chrome pass
-    // machines absolute geometry) and no OS titlebar — the gold cap
+    // machines absolute geometry) and no OS titlebar — the enamel cap
     // band is the drag region.
     .resizable = false,
     .titlebar = .hidden_inset,
@@ -65,40 +66,49 @@ const shell_windows = [_]native_sdk.ShellWindow{.{
 }};
 pub const shell_scene: native_sdk.ShellConfig = .{ .windows = &shell_windows };
 
-// ------------------------------------------------------------- textures
+// -------------------------------------------------------------- app icons
 
-/// The two committed texture assets, AI-generated and packed into the
-/// strict PNG subset (`tools/pack_textures.zig`; prompts in the README)
-/// so they decode both live and under the deterministic test decoder.
-pub const plate_texture_bytes = @embedFile("textures/plate.png");
-pub const weave_texture_bytes = @embedFile("textures/weave.png");
+/// The deck's own vector glyph: the transport STOP square, parsed at
+/// comptime from the common stroke-icon dialect (24x24, stroke-width 2,
+/// currentColor) — the built-in set carries every other transport verb
+/// but no square, and this skin refuses a text-labeled stop key.
+const stop_icon = canvas.svg_icon.parseComptime(@embedFile("icons/stop.svg"));
 
-pub const plate_texture_id: canvas.ImageId = 1;
-pub const weave_texture_id: canvas.ImageId = 2;
+/// The registered icon table: ONE declaration feeds boot-time
+/// registration (`registerIcons`, called from main and the test
+/// harness) AND the model contract's `app_icons` list, so `app:<name>`
+/// references are verified by `native check` against exactly what the
+/// app registers.
+pub const app_icons = [_]canvas.icons.Entry{
+    .{ .name = "stop", .icon = &stop_icon },
+};
 
-/// Album cover image ids derive from album ids, offset past the two
-/// texture ids so the registries never collide (2 textures + 8 covers =
-/// 10 of the runtime's 16 image slots).
-pub fn coverImageId(album_id: u8) canvas.ImageId {
-    return weave_texture_id + album_id;
+/// Install the app icon table; once, before views build (main does it
+/// first thing, and the tests' harness setup mirrors it).
+pub fn registerIcons() void {
+    canvas.icons.registerAppIcons(&app_icons);
 }
 
-/// Boot effect: decode and register the two textures plus every album's
-/// committed cover from the manifest's art slots. Registration is
-/// synchronous on the effects channel; ids reach the model only on
-/// success, so a failed decode leaves that surface on its vector
-/// fallback (the chrome's texture draw moves offscreen, the sleeve pane
-/// stays an engraved plate) — a bad asset can never break presentation.
-/// The covers are JPEG: live macOS decodes them through the platform
-/// codec, while the null platform's strict test decoder refuses them and
-/// the suite pins the degrade instead.
+// ---------------------------------------------------------------- covers
+
+/// Album cover image ids ARE the album ids (1-based): the covers are
+/// the only registered images this app carries — 8 of the runtime's 16
+/// slots. (An earlier round also registered two bitmap chassis
+/// textures; the vintage-enamel skin draws its texture with fills,
+/// lines, and gradients instead, so the image channel is covers-only.)
+pub fn coverImageId(album_id: u8) canvas.ImageId {
+    return album_id;
+}
+
+/// Boot effect: decode and register every album's committed cover from
+/// the manifest's art slots. Registration is synchronous on the effects
+/// channel; ids reach the model only on success, so a failed decode
+/// leaves that surface on its vector fallback (the art bay and sleeve
+/// pane stay engraved plates) — a bad asset can never break
+/// presentation. The covers are JPEG: live macOS decodes them through
+/// the platform codec, while the null platform's strict test decoder
+/// refuses them and the suite pins the degrade instead.
 pub fn boot(model: *Model, fx: *model_mod.Effects) void {
-    if (fx.registerImageBytes(plate_texture_id, plate_texture_bytes)) |_| {
-        model.texture_plate = plate_texture_id;
-    } else |_| {}
-    if (fx.registerImageBytes(weave_texture_id, weave_texture_bytes)) |_| {
-        model.texture_weave = weave_texture_id;
-    } else |_| {}
     inline for (model_mod.albums, 0..) |album, index| {
         if (album.art) |art_path| {
             const image_id = coverImageId(album.id);
@@ -159,10 +169,11 @@ pub fn deckOptions() DeckApp.Options {
         .init_fx = boot,
         .view = rootView,
         .tokens_fn = tokensFromModel,
-        // The sculpted hardware layer: brushed plate texture, gold cap
-        // band, bevels, wells, screws, scanlines, and the seven-segment
-        // readout — a fixed-count display-list pass drawn behind
-        // (prefix) and in front of (suffix) the widgets. See chrome.zig.
+        // The sculpted hardware layer: enamel chassis and cap band,
+        // bevels, wells, screws, scanlines, the seven-segment readout,
+        // the band ladders, and the volume knob face — a fixed-count
+        // display-list pass drawn behind (prefix) and in front of
+        // (suffix) the widgets. See chrome.zig.
         .chrome = .{
             .prefix_commands = chrome.prefix_commands,
             .suffix_commands = chrome.suffix_commands,
@@ -208,9 +219,10 @@ fn deckWindowView(ui: *DeckApp.Ui, model: *const Model, window_label: []const u8
     return view_mod.playlistView(ui, model);
 }
 
-/// Dark-only by the brief: the OS color scheme never reaches the theme.
-/// The appearance still matters for high contrast (which abandons the
-/// skin for the framework palette) and reduce motion.
+/// One finish, by the brief: hardware has exactly one enamel, so the OS
+/// color scheme never reaches the theme. The appearance still matters
+/// for high contrast (which abandons the skin for the framework
+/// palette) and reduce motion.
 pub fn tokensFromModel(model: *const Model) canvas.DesignTokens {
     return theme.tokens(model.appearance.high_contrast, model.appearance.reduce_motion);
 }
@@ -246,6 +258,8 @@ fn sync(model: *Model, layout: canvas.WidgetLayoutTree) void {
 // ------------------------------------------------------------------- main
 
 pub fn main(init: std.process.Init) !void {
+    // The app icon table installs before any view builds.
+    registerIcons();
     // Streaming configuration, resolved once at launch (same story as
     // the soundboard): NATIVE_SDK_MUSIC_URL_BASE overrides the
     // manifest's committed base, and the platform caches directory

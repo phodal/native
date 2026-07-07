@@ -1,13 +1,13 @@
 //! deck tests: typed dispatch through both windows' trees (the fixed
 //! player and the model-declared playlist rack), real playback through
 //! the audio effect channel's fake executor (request/feed round trips,
-//! auto-advance, the honest NO MEDIA degrade), the pbcopy spawn,
-//! spectrum and marquee determinism on the position-event clock, the
-//! image channel (strict decode, codec-less fallback, the JPEG covers'
-//! pinned degrade, the chrome's draw_image), the playlist window's full
-//! round-trip through real dispatch, the dark-only theming contract,
-//! markup engine parity, automation click-through on the transport, and
-//! layout/widget budgets at the fixed window sizes.
+//! the five-key transport, auto-advance, the honest NO MEDIA degrade),
+//! the pbcopy spawn, spectrum/band-monitor/marquee determinism on the
+//! position-event clock, the image channel (the JPEG covers' pinned
+//! degrade under the strict decoder, codec-less fallback), the playlist
+//! window's full round-trip through real dispatch, the one-finish
+//! theming contract, markup engine parity, automation click-through on
+//! the transport, and layout/widget budgets at the fixed window sizes.
 //!
 //! Every content-coupled assertion derives from the committed manifest
 //! (`music_manifest.zon` through model.zig's comptime tables) — no track
@@ -37,6 +37,10 @@ const App = main.DeckApp;
 // ------------------------------------------------------------- tree utils
 
 fn buildTree(arena: std.mem.Allocator, model: *const Model) !Ui.Tree {
+    // The stop key's `app:stop` icon resolves through the registered
+    // table; installing it here keeps standalone tree builds warning-free
+    // (registration is idempotent — one global table).
+    main.registerIcons();
     var ui = Ui.init(arena);
     return ui.finalizeWithTokens(view_mod.rootView(&ui, model), main.tokensFromModel(model));
 }
@@ -108,7 +112,7 @@ fn countMatches(query: []const u8) usize {
     return count;
 }
 
-/// ASCII-uppercase into a caller buffer (test-side mirror of the VFD's
+/// ASCII-uppercase into a caller buffer (test-side mirror of the display's
 /// stamping transform).
 fn upperBuf(buffer: []u8, source: []const u8) []const u8 {
     for (source, 0..) |byte, index| buffer[index] = std.ascii.toUpper(byte);
@@ -116,7 +120,7 @@ fn upperBuf(buffer: []u8, source: []const u8) []const u8 {
 }
 
 /// The composed marquee line for a track, uppercased — the exact string
-/// the VFD rotates, derived from the catalog.
+/// the display rotates, derived from the catalog.
 fn marqueeLine(buffer: []u8, track: *const model_mod.Track) []const u8 {
     const album = model_mod.albumById(track.album);
     var compose: [192]u8 = undefined;
@@ -136,6 +140,9 @@ const LiveApp = struct {
     app_state: *App,
 
     fn start(image_decode: bool) !LiveApp {
+        // The app's icon table (the stop key's square) installs exactly
+        // the way main does it, so `app:stop` resolves in tests too.
+        main.registerIcons();
         const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = surface_size });
         errdefer harness.destroy(testing.allocator);
         harness.null_platform.gpu_surfaces = true;
@@ -293,7 +300,7 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
         .text_expansions = &.{1},
     });
 
-    // The NO MEDIA state machines a different VFD (amber marquee stamp
+    // The NO MEDIA state machines a different display face (amber marquee stamp
     // plus the caption-pitch remedy line) — sweep it too, so the honest
     // degrade can never clip its own message.
     var failed = Model{};
@@ -473,10 +480,10 @@ test "track end auto-advances; the play-next queue wins over album order" {
     try testing.expectEqual(@as(?u8, album_tracks[0].id), app_state.model.now);
 }
 
-test "streaming resolution order drives the VFD honestly: stream, buffer, cache" {
+test "streaming resolution order drives the display honestly: stream, buffer, cache" {
     // The source cascade against the null platform's fake player with
     // the REAL executor — the deck's version of the soundboard's
-    // resolution-order proof, told in the VFD's voice.
+    // resolution-order proof, told in the display's voice.
     const live = try LiveApp.start(true);
     defer live.stop();
     const app_state = live.app_state;
@@ -532,7 +539,7 @@ test "a dead stream stamps STREAM LOST, not the prepare-script remedy" {
     try live.dispatch(.{ .play_track = first_track.id });
     // Offline with a cold cache: the stream dies with one `.failed`
     // event. With a URL base configured the prepare-script remedy
-    // would be a lie — the VFD names the network instead.
+    // would be a lie — the display names the network instead.
     try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.failAudio().?);
     try testing.expect(app_state.model.stream_failed);
     try testing.expect(!app_state.model.media_failed);
@@ -552,7 +559,7 @@ test "a dead stream stamps STREAM LOST, not the prepare-script remedy" {
     try testing.expect(!app_state.model.mediaFailed());
 }
 
-test "a failed load clears the deck and stamps the NO MEDIA remedy on the VFD" {
+test "a failed load clears the deck and stamps the NO MEDIA remedy on the display" {
     const live = try LiveApp.start(true);
     defer live.stop();
     const app_state = live.app_state;
@@ -567,7 +574,7 @@ test "a failed load clears the deck and stamps the NO MEDIA remedy on the VFD" {
     try testing.expect(!app_state.model.playing);
     try testing.expectEqual(@as(u32, 0), app_state.model.elapsed_ms);
 
-    // The VFD wears the degrade in the hardware voice: the amber NO
+    // The display wears the degrade in the hardware voice: the amber NO
     // MEDIA stamp on the marquee, and the channel line names the script
     // that prepares the shared library.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -670,8 +677,9 @@ test "a full session: load from the playlist ledger, queue via the context menu"
     var playlist = try buildPlaylistTree(arena, &model);
 
     // Press a ledger row (a mid-catalog track, derived): the track loads
-    // and plays; the player's VFD lights up (marquee live, pause icon on
-    // the play key, RUN lamp).
+    // and plays; the player's display lights up (marquee live, RUN lamp)
+    // and the five transport keys wear their hardware glyphs — the stop
+    // square is the app-registered icon.
     const load = &model_mod.albumTracks(3)[0];
     const row = findByLabel(playlist.root, load.title).?;
     apply(&model, playlist.msgForPointer(row.id, .up).?);
@@ -682,8 +690,11 @@ test "a full session: load from the playlist ledger, queue via the context menu"
     var title_upper: [192]u8 = undefined;
     const stamped = upperBuf(&title_upper, load.title);
     try testing.expect(std.mem.startsWith(u8, marquee.text, stamped[0..@min(stamped.len, model_mod.marquee_window)]));
-    try testing.expectEqualStrings("pause", findByLabel(player.root, "Play or pause").?.icon);
+    try testing.expect(findByText(player.root, .text, "RUN") != null);
     try testing.expectEqualStrings("skip-back", findByLabel(player.root, "Previous track").?.icon);
+    try testing.expectEqualStrings("play", findByLabel(player.root, "Play").?.icon);
+    try testing.expectEqualStrings("pause", findByLabel(player.root, "Pause").?.icon);
+    try testing.expectEqualStrings("app:stop", findByLabel(player.root, "Stop").?.icon);
     try testing.expectEqualStrings("skip-forward", findByLabel(player.root, "Next track").?.icon);
 
     // Pressing the loaded row again toggles pause; the power lamp drops
@@ -694,7 +705,6 @@ test "a full session: load from the playlist ledger, queue via the context menu"
     try testing.expect(!model.playing);
     player = try buildTree(arena, &model);
     try testing.expect(findByText(player.root, .text, "STBY") != null);
-    try testing.expectEqualStrings("play", findByLabel(player.root, "Play or pause").?.icon);
 
     // Context-menu items dispatch typed messages: Play Next queues (the
     // amber Q plate appears in the ledger, the cue strip names the
@@ -787,63 +797,54 @@ test "the playlist window round-trips through real dispatch" {
     try testing.expect(user_closed == null or !user_closed.?.open);
 }
 
-test "boot registers the textures; the JPEG covers degrade under the strict decoder" {
+test "the JPEG covers degrade under the strict decoder; the art surfaces stay plates" {
     const live = try LiveApp.start(true);
     defer live.stop();
     const app_state = live.app_state;
 
-    // init_fx ran on the installing frame; both strict-subset PNG
-    // textures decoded and registered. The album covers are committed
-    // JPEG — live macOS decodes them through the platform codec, but the
-    // null platform's strict test decoder refuses them, so every cover
-    // slot stays 0 and the count holds at the two textures. This test
-    // pins the DEGRADE, not a successful decode.
-    try testing.expectEqual(@as(usize, 2), live.harness.runtime.registeredCanvasImageCount());
-    try testing.expectEqual(main.plate_texture_id, app_state.model.texture_plate);
-    try testing.expectEqual(main.weave_texture_id, app_state.model.texture_weave);
+    // init_fx ran on the installing frame. The album covers are the only
+    // images this app registers, and they are committed JPEG — live
+    // macOS decodes them through the platform codec, but the null
+    // platform's strict test decoder refuses them, so every cover slot
+    // stays 0 and the registry stays empty. This test pins the DEGRADE,
+    // not a successful decode.
+    try testing.expectEqual(@as(usize, 0), live.harness.runtime.registeredCanvasImageCount());
     for (app_state.model.covers) |cover| {
         try testing.expectEqual(@as(canvas.ImageId, 0), cover);
     }
 
-    // The chrome pass carries the plate texture as an onscreen
-    // draw_image (offscreen while unregistered or in high contrast).
+    // The skin is pure vector by design: the chrome pass carries no
+    // draw_image at all — fills, lines, gradients, and paths are the
+    // whole texture story.
     var commands: [1024]canvas.CanvasCommand = undefined;
     var builder = canvas.Builder.init(&commands);
     try chrome.build(&app_state.model, &builder, surface_size, main.tokensFromModel(&app_state.model));
-    var plate_draws: usize = 0;
     for (builder.displayList().commands) |command| {
-        switch (command) {
-            .draw_image => |draw| {
-                try testing.expectEqual(main.plate_texture_id, draw.image_id);
-                try testing.expect(draw.dst.x < main.window_width);
-                plate_draws += 1;
-            },
-            else => {},
-        }
+        try testing.expect(std.meta.activeTag(command) != .draw_image);
     }
-    try testing.expectEqual(@as(usize, 1), plate_draws);
 
-    // The playlist rack's backdrop is an image leaf wearing the weave,
-    // and the sleeve pane — with no decoded cover — degrades to its
-    // engraved vector plate, idle and loaded alike.
+    // With no decoded cover, both art surfaces degrade to engraved
+    // plates — the player's art bay and the rack's sleeve pane, idle
+    // and loaded alike.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
+    var player = try buildTree(arena_state.allocator(), &app_state.model);
+    try testing.expectEqual(canvas.WidgetKind.panel, findByLabel(player.root, "Art bay").?.kind);
     var tree = try buildPlaylistTree(arena_state.allocator(), &app_state.model);
-    const backdrop = findByLabel(tree.root, "Weave backdrop").?;
-    try testing.expectEqual(canvas.WidgetKind.image, backdrop.kind);
-    try testing.expectEqual(main.weave_texture_id, backdrop.image_id);
     const idle_sleeve = findByLabel(tree.root, "Sleeve").?;
     try testing.expectEqual(canvas.WidgetKind.panel, idle_sleeve.kind);
     try live.dispatch(.{ .play_track = first_track.id });
+    player = try buildTree(arena_state.allocator(), &app_state.model);
+    try testing.expectEqual(canvas.WidgetKind.panel, findByLabel(player.root, "Art bay").?.kind);
     tree = try buildPlaylistTree(arena_state.allocator(), &app_state.model);
     const loaded_sleeve = findByLabel(tree.root, "Sleeve").?;
     try testing.expectEqual(canvas.WidgetKind.panel, loaded_sleeve.kind);
 }
 
-test "the sleeve pane wears the registered cover once a decode succeeds" {
+test "the art bay and sleeve wear the registered cover once a decode succeeds" {
     // The live path in miniature: hand the model a registered cover id
-    // (what boot does on a platform with a JPEG codec) and the sleeve
-    // becomes an image leaf bound to the loaded album's cover.
+    // (what boot does on a platform with a JPEG codec) and both art
+    // surfaces become image leaves bound to the loaded album's cover.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
@@ -851,35 +852,31 @@ test "the sleeve pane wears the registered cover once a decode succeeds" {
     apply(&model, .{ .play_track = first_track.id });
     const album_index: usize = first_track.album - 1;
     model.covers[album_index] = main.coverImageId(first_track.album);
+    const player = try buildTree(arena_state.allocator(), &model);
+    const art = findByLabel(player.root, "Art bay").?;
+    try testing.expectEqual(canvas.WidgetKind.image, art.kind);
+    try testing.expectEqual(main.coverImageId(first_track.album), art.image_id);
     const tree = try buildPlaylistTree(arena_state.allocator(), &model);
     const sleeve = findByLabel(tree.root, "Sleeve").?;
     try testing.expectEqual(canvas.WidgetKind.image, sleeve.kind);
     try testing.expectEqual(main.coverImageId(first_track.album), sleeve.image_id);
 }
 
-test "a codec-less platform keeps the chrome pure vector, never broken" {
+test "a codec-less platform keeps the fascia whole, never broken" {
     const live = try LiveApp.start(false);
     defer live.stop();
     const app_state = live.app_state;
 
     try testing.expectEqual(@as(usize, 0), live.harness.runtime.registeredCanvasImageCount());
-    try testing.expectEqual(@as(canvas.ImageId, 0), app_state.model.texture_plate);
-    try testing.expectEqual(@as(canvas.ImageId, 0), app_state.model.texture_weave);
     for (app_state.model.covers) |cover| {
         try testing.expectEqual(@as(canvas.ImageId, 0), cover);
     }
 
-    // Fixed-count contract: the texture command still exists, offscreen.
+    // Fixed-count contract holds with nothing decoded.
     var commands: [1024]canvas.CanvasCommand = undefined;
     var builder = canvas.Builder.init(&commands);
     try chrome.build(&app_state.model, &builder, surface_size, main.tokensFromModel(&app_state.model));
     try testing.expectEqual(chrome.prefix_commands + chrome.suffix_commands, builder.displayList().commands.len);
-    for (builder.displayList().commands) |command| {
-        switch (command) {
-            .draw_image => |draw| try testing.expect(draw.dst.x >= main.window_width),
-            else => {},
-        }
-    }
 }
 
 test "the spectrum is a deterministic function of the playback clock" {
@@ -911,10 +908,26 @@ test "the spectrum is a deterministic function of the playback clock" {
         try testing.expect(level <= 1);
     }
 
+    // The band monitor's five stops derive from the SAME bands: each
+    // stop is the mean of its slice, computed here independently.
+    const stops = model_mod.eqStopLevels(&app_state.model);
+    try testing.expectEqual(@as(usize, model_mod.eq_stops), stops.len);
+    const per_stop = model_mod.spectrum_bands / model_mod.eq_stops;
+    for (stops, 0..) |level, stop| {
+        const start = stop * per_stop;
+        const end = if (stop == model_mod.eq_stops - 1) model_mod.spectrum_bands else start + per_stop;
+        var sum: f32 = 0;
+        for (first[start..end]) |band| sum += band;
+        try testing.expectApproxEqAbs(sum / @as(f32, @floatFromInt(end - start)), level, 0.0001);
+    }
+
     // Pause freezes the bars: position events stop, the clock holds.
+    // The monitor stops freeze with them.
     try live.dispatch(.toggle_play);
     const paused = app_state.model.spectrumLevels(arena);
     try testing.expectEqualSlices(f32, first, paused);
+    const stops_paused = model_mod.eqStopLevels(&app_state.model);
+    try testing.expectEqualSlices(f32, &stops, &stops_paused);
 
     // Resume; the next position tick moves them.
     try live.dispatch(.toggle_play);
@@ -956,7 +969,7 @@ test "the marquee is a deterministic scroller on the playback clock" {
     // Loaded: a fixed window of the rotating TITLE /// ARTIST /// ALBUM
     // line — pure over (track id, elapsed ms), like the spectrum. The
     // expected text derives from the catalog's first album through the
-    // same uppercase stamping the VFD applies.
+    // same uppercase stamping the display applies.
     var line_buffer: [192]u8 = undefined;
     const full = marqueeLine(&line_buffer, first_track);
     try testing.expect(full.len > model_mod.marquee_window);
@@ -982,30 +995,33 @@ test "the marquee is a deterministic scroller on the playback clock" {
     try testing.expectEqualStrings(at_zero, model.marqueeText(arena));
 }
 
-test "the skin is dark-only; high contrast abandons it for the framework palette" {
+test "the skin has one finish; high contrast abandons it for the framework palette" {
     const live = try LiveApp.start(true);
     defer live.stop();
     const app_state = live.app_state;
 
-    // Default appearance (light OS scheme): still the chassis palette —
-    // hardware has no light mode.
+    // Default appearance (light OS scheme): the enamel palette — and
+    // the SAME palette under a dark OS scheme, because hardware has
+    // exactly one finish.
     try testing.expectEqualDeep(theme.chassis_colors, main.tokensFromModel(&app_state.model).colors);
     try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .appearance_changed = .{ .color_scheme = .light } });
     try testing.expectEqualDeep(theme.chassis_colors, (try live.harness.runtime.canvasWidgetDesignTokens(1, main.canvas_label)).colors);
     try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .appearance_changed = .{ .color_scheme = .dark } });
     try testing.expectEqualDeep(theme.chassis_colors, (try live.harness.runtime.canvasWidgetDesignTokens(1, main.canvas_label)).colors);
 
-    // The skin's control plating is live (squared slider, plate buttons).
+    // The skin's control plating is live (squared fader caps, soft
+    // hardware radii, compact density).
     const tokens = try live.harness.runtime.canvasWidgetDesignTokens(1, main.canvas_label);
     try testing.expectEqual(@as(?f32, 1), tokens.controls.slider.radius);
-    try testing.expectEqual(@as(f32, 2), tokens.radius.md);
+    try testing.expectEqual(@as(f32, 3), tokens.radius.md);
     try testing.expectEqual(canvas.Density.compact, tokens.density);
 
     // High contrast: accessibility beats brand — framework palette and
-    // stock control chrome.
+    // stock control chrome (the light register, matching the enamel's
+    // light base).
     try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .appearance_changed = .{ .color_scheme = .light, .high_contrast = true } });
     const hc = try live.harness.runtime.canvasWidgetDesignTokens(1, main.canvas_label);
-    try testing.expectEqualDeep(canvas.ColorTokens.highContrastDark(), hc.colors);
+    try testing.expectEqualDeep(canvas.ColorTokens.highContrastLight(), hc.colors);
     try testing.expectEqual(@as(?f32, null), hc.controls.slider.radius);
 }
 
@@ -1045,10 +1061,10 @@ test "automation click-through: the transport drives the deck" {
     defer live.stop();
     const app_state = live.app_state;
 
-    // Press play through the real automation path: focus + key dispatch
+    // Press PLAY through the real automation path: focus + key dispatch
     // through the widget route, exactly what `native automate` does.
     // From idle, the transport loads the catalog's first track.
-    const play_id = try live.widgetIdByLabel(main.canvas_label, 1, .button, "Play or pause");
+    const play_id = try live.widgetIdByLabel(main.canvas_label, 1, .button, "Play");
     try live.widgetAction(main.canvas_label, play_id, "press");
     try testing.expect(app_state.model.playing);
     try testing.expectEqual(@as(?u8, first_track.id), app_state.model.now);
@@ -1062,9 +1078,24 @@ test "automation click-through: the transport drives the deck" {
     try live.widgetAction(main.canvas_label, try live.widgetIdByLabel(main.canvas_label, 1, .button, "Previous track"), "press");
     try testing.expectEqual(@as(?u8, album_tracks[0].id), app_state.model.now);
 
-    // Pause through the play key again.
-    try live.widgetAction(main.canvas_label, try live.widgetIdByLabel(main.canvas_label, 1, .button, "Play or pause"), "press");
+    // PAUSE holds the deck in place; PLAY resumes it (the dedicated
+    // keys are one-verb hardware, not toggles).
+    try live.widgetAction(main.canvas_label, try live.widgetIdByLabel(main.canvas_label, 1, .button, "Pause"), "press");
     try testing.expect(!app_state.model.playing);
+    try live.widgetAction(main.canvas_label, try live.widgetIdByLabel(main.canvas_label, 1, .button, "Play"), "press");
+    try testing.expect(app_state.model.playing);
+
+    // STOP halts playback AND rewinds the head, keeping the record
+    // loaded — the classic stop-vs-pause distinction, through the real
+    // press path and out to the platform player.
+    try live.feedAudio(.position, 4_000, first_track.duration_ms, true);
+    try testing.expect(app_state.model.elapsed_ms > 0);
+    try live.widgetAction(main.canvas_label, try live.widgetIdByLabel(main.canvas_label, 1, .button, "Stop"), "press");
+    try testing.expect(!app_state.model.playing);
+    try testing.expectEqual(@as(u32, 0), app_state.model.elapsed_ms);
+    try testing.expectEqual(@as(?u8, album_tracks[0].id), app_state.model.now);
+    try testing.expect(!app_state.effects.audioSnapshot().playing);
+    try testing.expectEqual(@as(u64, 0), app_state.effects.audioSnapshot().position_ms);
 }
 
 test "space is the app-wide transport key; focused widgets outrank it" {
@@ -1114,21 +1145,23 @@ test "space is the app-wide transport key; focused widgets outrank it" {
 
 test "the chrome pass holds its exact command counts across model states" {
     // The chrome contract requires exactly prefix+suffix commands per
-    // build; state-dependent marks move offscreen instead of dropping
-    // out. Rebuild across the states that steer the pass: idle (no
-    // textures yet), playing mid-song with textures registered, the NO
-    // MEDIA degrade, and high contrast.
-    var states = [_]Model{ .{}, .{}, .{}, .{} };
+    // build; state-dependent marks (lit segments, lit ladder cells, the
+    // knob dot's sweep) move offscreen instead of dropping out. Rebuild
+    // across the states that steer the pass: idle, playing mid-song at
+    // both volume extremes, the NO MEDIA degrade, and high contrast.
+    var states = [_]Model{ .{}, .{}, .{}, .{}, .{} };
     states[1].now = model_mod.albumTracks(2)[0].id;
     states[1].playing = true;
     states[1].elapsed_ms = 84_500;
     states[1].now_duration_ms = model_mod.albumTracks(2)[0].duration_ms;
-    states[1].texture_plate = main.plate_texture_id;
-    states[1].texture_weave = main.weave_texture_id;
-    states[2].media_failed = true;
-    states[2].texture_plate = main.plate_texture_id;
-    states[3].appearance = .{ .high_contrast = true };
-    states[3].texture_plate = main.plate_texture_id;
+    states[1].volume_fraction = 0;
+    states[2].now = model_mod.albumTracks(2)[0].id;
+    states[2].playing = true;
+    states[2].elapsed_ms = 12_250;
+    states[2].now_duration_ms = model_mod.albumTracks(2)[0].duration_ms;
+    states[2].volume_fraction = 1;
+    states[3].media_failed = true;
+    states[4].appearance = .{ .high_contrast = true };
 
     for (&states) |*model| {
         var commands: [1024]canvas.CanvasCommand = undefined;
@@ -1196,13 +1229,21 @@ test "render deck screenshots (env-gated)" {
 
     // Playing mid-song, one queued cue. The mid-song position comes from
     // REAL seek steps on the fader (the widget keyboard path), so the
-    // fader, the VFD progress strip, and the timecode all agree.
+    // fader, the display's progress strip, and the timecode all agree.
+    // Shot under a LIGHT OS scheme and again under DARK: the skin has
+    // one finish, so the two captures must be byte-identical — diff the
+    // artifacts for the honest proof.
     try live.dispatch(.{ .play_track = model_mod.albumTracks(2)[0].id });
     try live.dispatch(.{ .queue_track = model_mod.albumTracks(2)[3].id });
     const seek_id = try live.widgetIdByLabel(main.canvas_label, 1, .slider, "Seek");
     for (0..8) |_| try live.widgetAction(main.canvas_label, seek_id, "increment");
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .light } });
     try presentShotFrame(live, 3);
-    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/deck-shots/deck-playing-artifacts", "Deck");
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/deck-shots/deck-playing-light-artifacts", "Deck");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot deck-canvas 2");
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .dark } });
+    try presentShotFrame(live, 4);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/deck-shots/deck-playing-dark-artifacts", "Deck");
     try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot deck-canvas 2");
 
     // The playlist rack, racked in through the real toggle.
@@ -1219,8 +1260,9 @@ test "render deck screenshots (env-gated)" {
 // CI): renders the docs-homepage showcase state OFFSCREEN through the
 // deterministic reference renderer — the chassis with a track playing
 // mid-song and one queued cue, then the playlist rack racked in through
-// the real PL toggle. Deck is dark-only by design, so unlike the other
-// homepage shots there is exactly one capture per window. PNGs land in
+// the real PL toggle. Deck has ONE finish by design (the OS scheme
+// changes nothing), so unlike the other homepage shots there is exactly
+// one capture per window. PNGs land in
 // /tmp/homepage-shots/deck-dark-artifacts/ and
 // /tmp/homepage-shots/deck-playlist-dark-artifacts/. To use:
 //
@@ -1234,7 +1276,7 @@ test "render homepage screenshots (env-gated)" {
 
     // The hero state: a track playing mid-song, one queued cue, the full
     // ledger selected. The mid-song position comes from REAL seek steps
-    // on the fader (the widget keyboard path), so the fader, the VFD
+    // on the fader (the widget keyboard path), so the fader, the display's
     // progress strip, and the timecode all agree.
     try live.dispatch(.{ .play_track = model_mod.albumTracks(2)[0].id });
     try live.dispatch(.{ .queue_track = model_mod.albumTracks(2)[3].id });

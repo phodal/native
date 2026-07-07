@@ -1,30 +1,31 @@
 //! deck chrome: the sculpted hardware layer, drawn through the sanctioned
-//! `ChromeOptions` display-list pass (`UiApp.chrome`) — the same seam the
-//! gpu-dashboard example uses for its hero gradient, pushed to the
-//! classic hardware-player-era extreme on a SMALL, FIXED window (460x180, resizable =
-//! false), so every coordinate below is absolute machining:
+//! `ChromeOptions` display-list pass (`UiApp.chrome`) — pushed to the
+//! vintage rack-unit extreme on a SMALL, FIXED window (512x264,
+//! resizable = false), so every coordinate below is absolute machining:
 //!
-//!   prefix (behind the widgets): the chassis fill, the AI-generated
-//!   brushed-plate texture (one `draw_image` of a registered 256x256
-//!   asset under everything — the texture supports the chassis feel, the
-//!   machining stays vector), the faceplate gradient, the gold cap band
-//!   (the window's drag region wears it as a titlebar), outer bevels, a
-//!   ridged grip band, corner screws, and inset control wells behind the
-//!   transport cluster and the output block;
+//!   prefix (behind the widgets): the cream enamel chassis fill, the
+//!   warm faceplate gradient with a set of near-invisible grain
+//!   hairlines (honest texture: fills, lines, and gradients only — this
+//!   skin ships no bitmap assets), the enamel cap band with its raised
+//!   brand plate, outer bevels, a ridged grip band, four recessed
+//!   corner screws, and inset control wells behind the transport
+//!   cluster and the volume block;
 //!
-//!   suffix (in front of the widgets): inset bevel frames around the VFD,
-//!   the spectrum, and the seek fader, CRT scanlines and a diagonal glare
-//!   wash over the glass, raised bevel edges on the three transport keys
-//!   and the PL key, and a seven-segment elapsed readout drawn as sheared
-//!   hexagon paths — ghost segments always visible (VFD ghosting), lit
-//!   segments doubled with a translucent glow stroke.
+//!   suffix (in front of the widgets): inset bevel frames around the
+//!   five glass bays and the seek fader, scanlines and a diagonal glare
+//!   wash over the display glass, the seven-segment elapsed readout
+//!   drawn as sheared hexagon paths (ghost segments always visible —
+//!   display ghosting — lit segments doubled with a translucent glow
+//!   stroke), the band monitor's five phosphor ladders, the analog
+//!   volume knob face with its position dot over the volume slider, and
+//!   raised bevel edges on the six keys.
 //!
 //! The chrome contract requires an EXACT command count per build, so
 //! every section emits a fixed number of commands regardless of model
-//! state: state-dependent marks (lit segments, the texture before its
-//! image registers) are drawn offscreen when hidden instead of skipped.
-//! The counts are module constants and the test suite rebuilds the chrome
-//! across model states to hold them.
+//! state: state-dependent marks (lit segments, lit ladder cells) are
+//! drawn offscreen when hidden instead of skipped. The counts are module
+//! constants and the test suite rebuilds the chrome across model states
+//! to hold them.
 //!
 //! Path elements and gradient stops are captured by reference until the
 //! runtime deep-copies the display list at install, so runtime-computed
@@ -32,9 +33,10 @@
 //! builds only) and gradient stops are comptime constants.
 //!
 //! High contrast keeps the layout of the pass (same counts) but drops
-//! the decoration: the texture moves offscreen, gold and glare and
-//! scanlines go transparent, bevels fall back to the border token, and
-//! the segment readout uses the high-contrast text color.
+//! the decoration: grain, glare, and scanlines go transparent, bevels
+//! fall back to the border token, the knob flattens to bordered
+//! surface + text-colored dot, and the readouts use the high-contrast
+//! text color.
 
 const std = @import("std");
 const native_sdk = @import("native_sdk");
@@ -50,67 +52,77 @@ const Model = model_mod.Model;
 // ------------------------------------------------------------- counts
 
 const glass_scanlines: usize = 20;
+const eq_scanlines: usize = 12;
 const screw_commands: usize = 3;
 const ridge_pairs = 3; // comptime_int: used in both command counts and f32 machining
+const grain_lines: usize = 14;
+const eq_cells: usize = 6; // ladder cells per frequency stop
+const knob_ticks: usize = 5;
 
 pub const prefix_commands: usize =
     1 + // chassis fill
-    1 + // brushed-plate texture (draw_image; offscreen until registered)
     1 + // faceplate gradient
-    3 + // gold cap band (fill + top catch-light + bottom shadow)
+    grain_lines + // enamel grain hairlines
+    3 + // cap band (fill + top catch-light + bottom shadow)
+    5 + // raised brand plate (fill + bevel)
     4 + // window outer bevel
     ridge_pairs * 2 + // ridged grip band above the bottom edge
     4 * screw_commands + // corner screws
     5 + // transport well (fill + inset bevel)
-    5; // output well (fill + inset bevel)
+    5; // volume well (fill + inset bevel)
 
 pub const suffix_commands: usize =
-    4 + 4 + 4 + // VFD + spectrum + seek inset bevels
-    glass_scanlines * 2 + // VFD + spectrum scanlines
-    2 + // glass glare washes (VFD, spectrum)
+    5 * 4 + // display + art + spectrum + monitor + seek inset bevels
+    glass_scanlines * 2 + eq_scanlines + // display, spectrum, monitor scanlines
+    4 + // glass glare washes (display, art, spectrum, monitor)
     segment_commands + // seven-segment elapsed readout
-    4 * 4; // raised bevels: prev, play, next, PL
+    model_mod.eq_stops * eq_cells * 2 + // band ladders (ghost + lit per cell)
+    knob_commands + // the volume knob face
+    6 * 4; // raised bevels: prev, play, pause, stop, next, PL
 
 const segment_commands: usize = 3 * 21 + 6; // 3 digits x (ghost+glow+lit) + colon
+const knob_commands: usize = knob_ticks + 5; // ticks + slider cover + ring + face + dot glow + dot
 
 // ---------------------------------------------------------- palette
 
 // Decorative chrome colors live here (they are machining, not theme
-// tokens); the phosphor family comes from the theme so the readout and
+// tokens); the phosphor family comes from the theme so the readouts and
 // the widgets stay one hue.
-const chassis = Color.rgb8(9, 11, 10);
-const faceplate_top = Color.rgb8(27, 33, 30);
-const faceplate_bottom = Color.rgb8(13, 16, 14);
-const bevel_light = Color.rgba8(255, 255, 255, 36);
-const bevel_shadow = Color.rgba8(0, 0, 0, 170);
-const ridge_light = Color.rgba8(255, 255, 255, 30);
-const ridge_dark = Color.rgba8(0, 0, 0, 160);
-const scanline = Color.rgba8(0, 0, 0, 44);
-const glare = Color.rgba8(255, 255, 255, 8);
-const gold_hi = Color.rgb8(224, 188, 110);
-const gold_mid = Color.rgb8(166, 130, 64);
-const gold_low = Color.rgb8(100, 76, 36);
-const steel = Color.rgb8(52, 60, 54);
-const steel_dark = Color.rgb8(18, 22, 20);
-const well = Color.rgb8(11, 14, 12);
+const chassis = Color.rgb8(214, 207, 189);
+const faceplate_top = Color.rgb8(240, 234, 220);
+const faceplate_bottom = Color.rgb8(221, 214, 196);
+const cap_top = Color.rgb8(247, 242, 230);
+const cap_bottom = Color.rgb8(228, 221, 203);
+const brand_face = Color.rgb8(224, 217, 198);
+const bevel_light = Color.rgba8(255, 253, 244, 210);
+const bevel_shadow = Color.rgba8(74, 66, 48, 150);
+const ridge_light = Color.rgba8(255, 253, 244, 130);
+const ridge_dark = Color.rgba8(74, 66, 48, 70);
+/// The enamel grain: alternating warm hairlines a few alpha steps above
+/// invisible — the honest stand-in for sprayed-enamel texture.
+const grain = Color.rgba8(120, 110, 85, 9);
+const scanline = Color.rgba8(0, 0, 0, 46);
+const glare = Color.rgba8(255, 255, 255, 9);
+const steel = Color.rgb8(196, 189, 172);
+const steel_dark = Color.rgb8(110, 103, 84);
+const well = Color.rgb8(216, 208, 187);
+const knob_rim = Color.rgb8(87, 80, 60);
+const knob_top = Color.rgb8(246, 241, 229);
+const knob_bottom = Color.rgb8(210, 202, 181);
 const transparent = Color.rgba8(0, 0, 0, 0);
 
 const seg_lit = theme.phosphor;
-const seg_ghost = Color.rgba8(54, 226, 138, 24);
-const seg_glow = Color.rgba8(54, 226, 138, 60);
-
-/// The brushed-plate texture rides UNDER the machining at reduced
-/// opacity: it tones the gradient, it never reads as an image.
-const plate_texture_opacity: f32 = 0.5;
+const seg_ghost = Color.rgba8(62, 224, 138, 24);
+const seg_glow = Color.rgba8(62, 224, 138, 60);
+const cell_ghost = Color.rgba8(62, 224, 138, 22);
 
 const faceplate_stops = [_]canvas.GradientStop{
     .{ .offset = 0, .color = faceplate_top },
     .{ .offset = 1, .color = faceplate_bottom },
 };
-const gold_stops = [_]canvas.GradientStop{
-    .{ .offset = 0, .color = gold_hi },
-    .{ .offset = 0.45, .color = gold_mid },
-    .{ .offset = 1, .color = gold_low },
+const cap_stops = [_]canvas.GradientStop{
+    .{ .offset = 0, .color = cap_top },
+    .{ .offset = 1, .color = cap_bottom },
 };
 const glare_stops = [_]canvas.GradientStop{
     .{ .offset = 0, .color = glare },
@@ -120,15 +132,20 @@ const screw_stops = [_]canvas.GradientStop{
     .{ .offset = 0, .color = steel },
     .{ .offset = 1, .color = steel_dark },
 };
+const knob_stops = [_]canvas.GradientStop{
+    .{ .offset = 0, .color = knob_top },
+    .{ .offset = 1, .color = knob_bottom },
+};
 const hc_stops = [_]canvas.GradientStop{
     .{ .offset = 0, .color = transparent },
     .{ .offset = 1, .color = transparent },
 };
 
 // ------------------------------------------------------------ geometry
-// Absolute machining on the fixed 460x180 chassis. Every rect below is
+// Absolute machining on the fixed 512x264 chassis. Every rect below is
 // spelled from the layout table (layout.zig) — the same constants the
-// widget views flow — so the metalwork hugs the widgets by construction.
+// widget views flow — so the enamel work hugs the widgets by
+// construction.
 
 const W: f32 = layout.window_width;
 const H: f32 = layout.window_height;
@@ -141,32 +158,55 @@ fn rect(x: f32, y: f32, w: f32, h: f32) geometry.RectF {
 /// the current model state.
 const offscreen: f32 = 100_000;
 
-const vfd_rect = rect(layout.pad, layout.row1_y, layout.vfd_width, layout.row1_height);
-const spectrum_rect = rect(layout.pad + layout.vfd_width + layout.gap, layout.row1_y, layout.spectrum_width, layout.row1_height);
+const display_rect = rect(layout.pad, layout.row1_y, layout.display_width, layout.row1_height);
+const art_rect = rect(layout.art_x, layout.row1_y, layout.art_size, layout.row1_height);
+const spectrum_rect = rect(layout.pad, layout.row2_y, layout.spectrum_width, layout.row2_height);
+const eq_rect = rect(layout.eq_x, layout.row2_y, layout.eq_width, layout.row2_height);
 const seek_rect = rect(layout.pad, layout.seek_y, W - layout.pad * 2, layout.seek_height);
 const prev_key = rect(layout.prev_x, layout.key_y, layout.btn_prev_width, layout.key_height);
 const play_key = rect(layout.play_x, layout.key_y, layout.btn_play_width, layout.key_height);
+const pause_key = rect(layout.pause_x, layout.key_y, layout.btn_pause_width, layout.key_height);
+const stop_key = rect(layout.stop_x, layout.key_y, layout.btn_stop_width, layout.key_height);
 const next_key = rect(layout.next_x, layout.key_y, layout.btn_next_width, layout.key_height);
 const pl_key = rect(layout.pl_x, layout.key_y, layout.btn_pl_width, layout.key_height);
 const transport_well = rect(layout.transport_well_x, layout.well_y, layout.transport_well_width, layout.well_height);
-const output_well = rect(layout.output_well_x, layout.well_y, layout.output_well_width, layout.well_height);
+const volume_well = rect(layout.output_well_x, layout.well_y, layout.output_well_width, layout.well_height);
 
 // Chrome-only decoration bands, snapped to the chassis grid: the bottom
 // strip between the transport row and the window edge carries the four
 // screws' lower pair and the ridged grip band, both centered in it.
-const bottom_band_center: f32 = (layout.transport_y + layout.transport_height + H) / 2; // 174
-/// Screw centers: flush with the glass panels' outer edges horizontally,
+const bottom_band_center: f32 = (layout.transport_y + layout.transport_height + H) / 2; // 258
+/// Screw centers: flush with the glass bays' outer edges horizontally,
 /// centered in the top strip (cap band to glass) and the bottom band.
 const screw_radius: f32 = 4;
 const screw_left_x: f32 = layout.pad + screw_radius; // 16
-const screw_right_x: f32 = W - layout.pad - screw_radius; // 444
-const screw_top_y: f32 = (layout.cap_height + layout.row1_y) / 2; // 34
-const screw_bottom_y: f32 = bottom_band_center; // 174
+const screw_right_x: f32 = W - layout.pad - screw_radius; // 496
+const screw_top_y: f32 = (layout.cap_height + layout.row1_y) / 2; // 36
+const screw_bottom_y: f32 = bottom_band_center; // 258
 /// The ridge band runs between the screws with a clear grid gap.
 const ridge_x0: f32 = screw_left_x + screw_radius + layout.grid * 2; // 28
-const ridge_x1: f32 = screw_right_x - screw_radius - layout.grid * 2; // 432
+const ridge_x1: f32 = screw_right_x - screw_radius - layout.grid * 2; // 484
 const ridge_pitch: f32 = 3;
-const ridge_y0: f32 = bottom_band_center - (ridge_pitch * (ridge_pairs - 1) + 1) / 2; // 170.5
+const ridge_y0: f32 = bottom_band_center - (ridge_pitch * (ridge_pairs - 1) + 1) / 2; // 254.5
+
+/// The volume knob's center: the middle of the volume slider's frame
+/// (layout.knob_*), which is also the middle of the volume well band.
+const knob_cx: f32 = layout.knob_x + layout.knob_width / 2;
+const knob_cy: f32 = layout.transport_y + layout.transport_height / 2;
+const knob_radius: f32 = layout.knob_size / 2; // 17
+
+// The band monitor's ladder grid, derived from the same interior the
+// widget label row divides — stamps sit under their columns by
+// construction.
+const eq_inner_x: f32 = layout.eq_x + layout.glass_inset;
+const eq_inner_width: f32 = layout.eq_width - layout.glass_inset * 2; // 116
+const eq_stop_pitch: f32 = eq_inner_width / layout.eq_stop_count; // 23.2
+const eq_cell_width: f32 = 14;
+const eq_cell_height: f32 = 2.8;
+const eq_cell_pitch: f32 = 4;
+/// The ladders rise from the label strip's top edge; six cells at the
+/// 4px pitch land exactly on the glass interior's top.
+const eq_base_y: f32 = layout.row2_y + layout.row2_height - layout.glass_inset - layout.eq_label_height;
 
 // ------------------------------------------------------------- build
 
@@ -178,7 +218,7 @@ pub fn build(model: *const Model, builder: *canvas.Builder, size: geometry.SizeF
 }
 
 fn buildPrefix(model: *const Model, builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
-    // Chassis fill, then the machined faceplate gradient.
+    // Chassis fill, then the warm enamel faceplate gradient.
     try builder.fillRect(.{ .rect = rect(0, 0, W, H), .fill = .{ .color = if (hc) tokens.colors.background else chassis } });
     const faceplate = rect(0, layout.cap_height, W, H - layout.cap_height);
     try builder.fillRect(.{ .rect = faceplate, .fill = if (hc) .{ .color = tokens.colors.surface } else .{ .linear_gradient = .{
@@ -187,26 +227,32 @@ fn buildPrefix(model: *const Model, builder: *canvas.Builder, tokens: canvas.Des
         .stops = &faceplate_stops,
     } } });
 
-    // The brushed-plate texture over the gradient at reduced opacity —
-    // real grain where v1 faked 170 hairlines. Offscreen until the boot
-    // effect registers the image (and in high contrast).
-    const texture_shift: f32 = if (hc or model.texture_plate == 0) offscreen else 0;
-    try builder.drawImage(.{
-        .image_id = model.texture_plate,
-        .dst = faceplate.translate(geometry.OffsetF.init(texture_shift, 0)),
-        .opacity = plate_texture_opacity,
-        .fit = .cover,
-    });
+    // The enamel grain: a sparse comb of near-invisible warm hairlines
+    // across the faceplate — texture by honest means (no bitmap skin
+    // assets anywhere in this app).
+    const grain_pitch = (H - layout.cap_height - 12) / @as(f32, @floatFromInt(grain_lines - 1));
+    for (0..grain_lines) |index| {
+        const y = layout.cap_height + 6 + @as(f32, @floatFromInt(index)) * grain_pitch;
+        try hline(builder, 2, W - 2, y, if (hc) transparent else grain, 1);
+    }
 
-    // The gold cap band: the window's titlebar, machined. A catch-light
-    // on its top edge, a hard shadow under it.
+    // The cap band: lighter enamel with a catch-light on its top edge
+    // and a hard shadow under it — the band reads as its own plate.
     try builder.fillRect(.{ .rect = rect(0, 0, W, layout.cap_height), .fill = if (hc) .{ .color = tokens.colors.surface } else .{ .linear_gradient = .{
         .start = point(0, 0),
         .end = point(0, layout.cap_height),
-        .stops = &gold_stops,
+        .stops = &cap_stops,
     } } });
-    try hline(builder, 0, W, 0.5, if (hc) tokens.colors.border else Color.rgba8(255, 236, 190, 90), 1);
+    try hline(builder, 0, W, 0.5, if (hc) tokens.colors.border else bevel_light, 1);
     try hline(builder, 0, W, layout.cap_height + 0.5, if (hc) tokens.colors.border else bevel_shadow, 1);
+
+    // The raised brand plate under the D E C K stamp: its x tracks the
+    // live chrome inset plus the cap row's gap, exactly where the view's
+    // flow puts the stamp — so the embossed label always sits centered
+    // on its plate.
+    const brand = rect(model.chrome_leading + layout.pad + layout.cap_gap, layout.brand_y, layout.brand_width, layout.brand_height);
+    try builder.fillRect(.{ .rect = brand, .fill = .{ .color = if (hc) tokens.colors.surface else brand_face } });
+    try bevelOut(builder, brand, tokens, hc);
 
     // Window outer bevel: the whole device is one raised plate.
     try bevelOut(builder, rect(0, 0, W, H), tokens, hc);
@@ -220,7 +266,7 @@ fn buildPrefix(model: *const Model, builder: *canvas.Builder, tokens: canvas.Des
         ridge += ridge_pitch;
     }
 
-    // Corner screws: flush with the glass panels' outer edges, centered
+    // Corner screws: flush with the glass bays' outer edges, centered
     // in the top strip and the bottom band — clear of the glass frames,
     // the wells, and the ridge band.
     try screw(builder, screw_left_x, screw_top_y, hc);
@@ -228,32 +274,48 @@ fn buildPrefix(model: *const Model, builder: *canvas.Builder, tokens: canvas.Des
     try screw(builder, screw_left_x, screw_bottom_y, hc);
     try screw(builder, screw_right_x, screw_bottom_y, hc);
 
-    // Inset wells: the transport cluster and the output block sit in
+    // Inset wells: the transport cluster and the volume block sit in
     // recessed pockets, like keys machined into the panel.
     try insetWell(builder, transport_well, tokens, hc);
-    try insetWell(builder, output_well, tokens, hc);
+    try insetWell(builder, volume_well, tokens, hc);
 }
 
 fn buildSuffix(model: *const Model, builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
-    // Inset bevels: every glass is recessed into the faceplate.
-    try bevelIn(builder, vfd_rect, tokens, hc);
+    // Inset bevels: every glass bay is recessed into the enamel.
+    try bevelIn(builder, display_rect, tokens, hc);
+    try bevelIn(builder, art_rect, tokens, hc);
     try bevelIn(builder, spectrum_rect, tokens, hc);
+    try bevelIn(builder, eq_rect, tokens, hc);
     try bevelIn(builder, seek_rect, tokens, hc);
 
-    // CRT scanlines over the glass.
-    try scanlines(builder, vfd_rect, glass_scanlines, hc);
+    // Scanlines over the printing glass (the art bay keeps clear glass:
+    // it shows a photograph, not phosphor). Over the spectrum chart the
+    // lines double as the classic segmented-ladder look — real bars,
+    // honestly segmented by the glass in front of them.
+    try scanlines(builder, display_rect, glass_scanlines, hc);
     try scanlines(builder, spectrum_rect, glass_scanlines, hc);
+    try scanlines(builder, eq_rect, eq_scanlines, hc);
 
     // Diagonal glare wash: light falls across the glass from top-left.
-    try glareWash(builder, vfd_rect, hc);
+    try glareWash(builder, display_rect, hc);
+    try glareWash(builder, art_rect, hc);
     try glareWash(builder, spectrum_rect, hc);
+    try glareWash(builder, eq_rect, hc);
 
-    // The seven-segment elapsed readout on the VFD's clear glass.
+    // The seven-segment elapsed readout on the display's clear glass.
     try segmentReadout(model, builder, tokens, hc);
+
+    // The band monitor's phosphor ladders.
+    try bandLadders(model, builder, tokens, hc);
+
+    // The analog volume knob over the volume slider.
+    try volumeKnob(model, builder, tokens, hc);
 
     // Raised bevel edges on the sculpted keys.
     try bevelOut(builder, prev_key, tokens, hc);
     try bevelOut(builder, play_key, tokens, hc);
+    try bevelOut(builder, pause_key, tokens, hc);
+    try bevelOut(builder, stop_key, tokens, hc);
     try bevelOut(builder, next_key, tokens, hc);
     try bevelOut(builder, pl_key, tokens, hc);
 }
@@ -294,13 +356,13 @@ fn bevelIn(builder: *canvas.Builder, r: geometry.RectF, tokens: canvas.DesignTok
     try builder.drawLine(.{ .from = point(x1 - 0.5, r.y), .to = point(x1 - 0.5, y1), .stroke = .{ .fill = .{ .color = light }, .width = 1 } });
 }
 
-/// Recessed pocket: dark fill + inset bevel. 5 commands.
+/// Recessed pocket: darker enamel fill + inset bevel. 5 commands.
 fn insetWell(builder: *canvas.Builder, r: geometry.RectF, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
     try builder.fillRect(.{ .rect = r, .fill = .{ .color = if (hc) tokens.colors.background else well } });
     try bevelIn(builder, r, tokens, hc);
 }
 
-/// One machined screw: steel disc, slot, and a catch-light. 3 commands.
+/// One recessed screw: steel disc, slot, and a catch-light. 3 commands.
 fn screw(builder: *canvas.Builder, cx: f32, cy: f32, hc: bool) anyerror!void {
     const r: f32 = screw_radius;
     try builder.fillRoundedRect(.{ .rect = rect(cx - r, cy - r, r * 2, r * 2), .radius = canvas.Radius.all(r), .fill = if (hc) .{ .color = transparent } else .{ .linear_gradient = .{
@@ -328,11 +390,88 @@ fn glareWash(builder: *canvas.Builder, r: geometry.RectF, hc: bool) anyerror!voi
     } } });
 }
 
+// ------------------------------------------------------- band ladders
+
+/// The band monitor: per frequency stop, a vertical ladder of phosphor
+/// cells lit from the bottom by the stop's level — the same pure
+/// spectrum function the chart binds (see model.eqStopLevels), so pause
+/// freezes the ladders with everything else. Ghost cells always draw
+/// (powered glass); lit cells shift offscreen when dark, keeping the
+/// command count fixed.
+fn bandLadders(model: *const Model, builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
+    const levels = model_mod.eqStopLevels(model);
+    const ghost = if (hc) transparent else cell_ghost;
+    const lit = if (hc) tokens.colors.text else seg_lit;
+    for (levels, 0..) |level, stop| {
+        const cx = eq_inner_x + (@as(f32, @floatFromInt(stop)) + 0.5) * eq_stop_pitch;
+        const x = cx - eq_cell_width / 2;
+        const lit_cells: usize = @intFromFloat(@round(level * eq_cells));
+        for (0..eq_cells) |cell| {
+            const y = eq_base_y - @as(f32, @floatFromInt(cell + 1)) * eq_cell_pitch;
+            try builder.fillRect(.{ .rect = rect(x, y, eq_cell_width, eq_cell_height), .fill = .{ .color = ghost } });
+            const shift: f32 = if (cell < lit_cells) 0 else offscreen;
+            try builder.fillRect(.{ .rect = rect(x + shift, y, eq_cell_width, eq_cell_height), .fill = .{ .color = lit } });
+        }
+    }
+}
+
+// ------------------------------------------------------- volume knob
+
+/// The analog volume knob: drawn OVER the volume slider widget (the
+/// slider is the real control — drag, arrow keys, automation, focus
+/// ring — and the knob is its analog face). The position dot's angle
+/// derives from the same `volume_fraction` the slider syncs into the
+/// model, sweeping 270 degrees from min (down-left) to max
+/// (down-right) like every amplifier dial ever cast.
+fn volumeKnob(model: *const Model, builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
+    const r = knob_radius;
+    // Position ticks at 0/25/50/75/100 percent, engraved on the well
+    // around the knob.
+    for (0..knob_ticks) |index| {
+        const fraction = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(knob_ticks - 1));
+        const theta = knobAngle(fraction);
+        try builder.drawLine(.{
+            .from = point(knob_cx + @cos(theta) * (r - 1), knob_cy + @sin(theta) * (r - 1)),
+            .to = point(knob_cx + @cos(theta) * (r + 2), knob_cy + @sin(theta) * (r + 2)),
+            .stroke = .{ .fill = .{ .color = if (hc) transparent else bevel_shadow }, .width = 1 },
+        });
+    }
+    // A well-colored cover over the slider's own track and thumb: the
+    // slider stays the live control underneath (hits, focus, keys), but
+    // the knob is the only thing the eye gets. High contrast keeps the
+    // cover transparent so the stock slider shows honestly.
+    try builder.fillRect(.{ .rect = rect(layout.knob_x, layout.key_y, layout.knob_width, layout.key_height), .fill = .{ .color = if (hc) transparent else well } });
+    // The dark rim ring, then the enamel face lit from the top.
+    try builder.fillRoundedRect(.{ .rect = rect(knob_cx - r, knob_cy - r, r * 2, r * 2), .radius = canvas.Radius.all(r), .fill = .{ .color = if (hc) tokens.colors.border else knob_rim } });
+    const face = r - 2;
+    try builder.fillRoundedRect(.{ .rect = rect(knob_cx - face, knob_cy - face, face * 2, face * 2), .radius = canvas.Radius.all(face), .fill = if (hc) .{ .color = tokens.colors.surface } else .{ .linear_gradient = .{
+        .start = point(knob_cx, knob_cy - face),
+        .end = point(knob_cx, knob_cy + face),
+        .stops = &knob_stops,
+    } } });
+    // The position dot with a phosphor glow halo (transparent in high
+    // contrast; the dot itself flips to the text color).
+    const theta = knobAngle(std.math.clamp(model.volume_fraction, 0, 1));
+    const dot_r: f32 = 2.2;
+    const dot_x = knob_cx + @cos(theta) * (face - 4.5);
+    const dot_y = knob_cy + @sin(theta) * (face - 4.5);
+    try builder.fillRoundedRect(.{ .rect = rect(dot_x - dot_r - 1.5, dot_y - dot_r - 1.5, (dot_r + 1.5) * 2, (dot_r + 1.5) * 2), .radius = canvas.Radius.all(dot_r + 1.5), .fill = .{ .color = if (hc) transparent else seg_glow } });
+    try builder.fillRoundedRect(.{ .rect = rect(dot_x - dot_r, dot_y - dot_r, dot_r * 2, dot_r * 2), .radius = canvas.Radius.all(dot_r), .fill = .{ .color = if (hc) tokens.colors.text else seg_lit } });
+}
+
+/// The dial sweep in y-down screen radians: fraction 0 sits down-left
+/// (135 degrees), fraction 1 down-right (405 == 45 degrees), turning
+/// clockwise through the top.
+fn knobAngle(fraction: f32) f32 {
+    const degrees = 135.0 + fraction * 270.0;
+    return degrees * std.math.pi / 180.0;
+}
+
 // ----------------------------------------------------- seven-segment
 
 // Segment order: A top, B top-right, C bottom-right, D bottom, E
 // bottom-left, F top-left, G middle. Classic sheared display, sized for
-// the small VFD's clear glass (`layout.segment_area_width`).
+// the display bay's clear glass (`layout.segment_area_width`).
 const digit_width: f32 = 18;
 const digit_height: f32 = 28;
 const seg_thickness: f32 = 3.8;
@@ -364,11 +503,11 @@ var ghost_paths: [3][7][7]canvas.PathElement = undefined;
 var lit_paths: [3][7][7]canvas.PathElement = undefined;
 
 fn segmentReadout(model: *const Model, builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
-    // Dead-centered in the clear glass the VFD reserves at its left:
-    // vertically in the full glass height, horizontally in the segment
-    // area (accounting for the shear lean).
-    const x0 = vfd_rect.x + layout.glass_inset + (layout.segment_area_width - readout_width - shear_reach) / 2;
-    const y0 = vfd_rect.y + (layout.row1_height - digit_height) / 2;
+    // Dead-centered in the clear glass the display reserves at its
+    // left: vertically in the full glass height, horizontally in the
+    // segment area (accounting for the shear lean).
+    const x0 = display_rect.x + layout.glass_inset + (layout.segment_area_width - readout_width - shear_reach) / 2;
+    const y0 = display_rect.y + (layout.row1_height - digit_height) / 2;
 
     // Digits: M : S S. Idle shows dashes (G segments), the classic
     // no-signal readout.
@@ -415,7 +554,8 @@ fn segmentReadout(model: *const Model, builder: *canvas.Builder, tokens: canvas.
 }
 
 fn shearAt(y0: f32, y: f32) f32 {
-    // Positive shear leans the display to the right, like every VFD ever.
+    // Positive shear leans the display to the right, like every
+    // segment display ever.
     return (y0 + digit_height - y) * shear;
 }
 

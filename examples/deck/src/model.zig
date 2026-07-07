@@ -14,7 +14,7 @@
 //! simulation had, now fed by the platform player.
 //!
 //! A failed load (missing mp3s, a platform without audio) clears the
-//! deck and lights the honest degraded state: the VFD marquee stamps
+//! deck and lights the honest degraded state: the display marquee stamps
 //! `NO MEDIA` and the channel line names the remedy
 //! (`tools/prepare-example-music.sh`). Browsing, search, and queueing
 //! never need the audio files — the catalog is committed.
@@ -169,15 +169,20 @@ pub fn albumTracks(album_id: u8) []const Track {
 pub const max_queue = 16;
 pub const max_search = 48;
 pub const spectrum_bands = 32;
+/// The band monitor's labeled frequency stops (see `eqStopLevels`): the
+/// classic equalizer fascia as a VISUALIZER — five phosphor ladders on
+/// stamped frequency labels, each averaging its slice of the spectrum.
+pub const eq_stops = 5;
+pub const eq_stop_labels = [eq_stops][]const u8{ "60", "240", "1K", "4K", "12K" };
 /// Marquee geometry: visible window in mono characters, and how much
 /// playback time advances the scroll by one character. 22 characters of
 /// bold mono at the view's pitch-snapped marquee scale (7 px pitch) fill
-/// the VFD's text column with clear glass to spare on both sides (24 ran
+/// the display's text column with clear glass to spare on both sides (24 ran
 /// flush against the right bevel).
 pub const marquee_window = 22;
 pub const marquee_step_ms: u32 = 500;
 
-/// The honest degraded state the VFD wears after a failed load: the
+/// The honest degraded state the display wears after a failed load: the
 /// marquee stamp, and the channel-line remedy naming the script that
 /// prepares the shared gitignored audio.
 pub const no_media_marquee = "NO MEDIA";
@@ -226,6 +231,15 @@ pub const Msg = union(enum) {
     clear_search,
     play_track: u8,
     toggle_play,
+    /// The dedicated PLAY key: starts from idle, resumes from pause,
+    /// and is a no-op while already playing — a latching hardware key,
+    /// not a toggle (`toggle_play` stays the space-bar/shortcut verb).
+    transport_play,
+    /// The dedicated PAUSE key: pauses only. Resume is PLAY's job.
+    transport_pause,
+    /// The STOP key: playback halts and the head returns to 0:00, but
+    /// the track stays loaded — the classic stop-vs-pause distinction.
+    stop,
     next_track,
     prev_track,
     /// Seek slider changed; the reconciled value arrives through the
@@ -264,10 +278,10 @@ pub const Model = struct {
     /// the `.loaded` acknowledgment arrives.
     now_duration_ms: u32 = 0,
     /// A load failed (missing mp3s, no URL base, or a platform without
-    /// audio): the VFD wears the NO MEDIA remedy until the next
+    /// audio): the display wears the NO MEDIA remedy until the next
     /// successful load attempt.
     media_failed: bool = false,
-    /// A STREAM failed (URL base configured, network gone): the VFD
+    /// A STREAM failed (URL base configured, network gone): the display
     /// wears the STREAM LOST remedy instead — different problem,
     /// different fix.
     stream_failed: bool = false,
@@ -299,13 +313,6 @@ pub const Model = struct {
     /// Copy-to-clipboard bookkeeping: how many pbcopy spawns finished ok.
     copies_done: u32 = 0,
     copy_failed: bool = false,
-    /// Registered texture ImageIds (0 while unregistered): the brushed
-    /// plate the main-window chrome lays under its machining and the
-    /// carbon weave behind the playlist rack. Registered once in `boot`;
-    /// a failed decode leaves the id 0 and the chrome stays pure vector —
-    /// a bad asset can never break presentation.
-    texture_plate: canvas.ImageId = 0,
-    texture_weave: canvas.ImageId = 0,
     /// Registered album cover ImageIds, index = album id - 1; 0 while
     /// unregistered (the strict test decoder has no JPEG codec, so under
     /// the null platform every slot stays 0 and the sleeve pane degrades
@@ -335,7 +342,7 @@ pub const Model = struct {
         return model.now == null;
     }
 
-    /// Any degraded playback state, for the VFD's warning tint (the
+    /// Any degraded playback state, for the display's warning tint (the
     /// stamps themselves name which problem it is).
     pub fn mediaFailed(model: *const Model) bool {
         return model.media_failed or model.stream_failed;
@@ -400,7 +407,7 @@ pub const Model = struct {
         return std.fmt.allocPrint(arena, "{d}/{d} TRK", .{ model.visibleTracks(arena).len, tracks.len }) catch "";
     }
 
-    /// VFD channel readout: "TRK 07". Short by design — the album is
+    /// Display channel readout: "TRK 07". Short by design — the album is
     /// already in the marquee, and the timecode rides the same line
     /// (round 1 caught the long form wrapping over the progress strip).
     pub fn channelLabel(model: *const Model, arena: std.mem.Allocator) []const u8 {
@@ -408,7 +415,23 @@ pub const Model = struct {
         return std.fmt.allocPrint(arena, "TRK {d:0>2}", .{track.id}) catch "";
     }
 
-    /// The VFD marquee: title, artist, and album on one rotating line —
+    /// The source readout under the channel line: average bitrate and
+    /// file size, BOTH computed from the committed manifest's real bytes
+    /// and duration — the deck states what it can actually know about
+    /// the stream and nothing more (no invented sample rates, no codec
+    /// badges). Idle prints the powered-on dashes.
+    pub fn sourceLabel(model: *const Model, arena: std.mem.Allocator) []const u8 {
+        const track = model.nowTrack() orelse return "--- KBPS  --.- MB";
+        const duration = model.now_duration_ms;
+        if (duration == 0 or track.bytes == 0) return "--- KBPS  --.- MB";
+        const kbps = (track.bytes * 8) / duration; // bytes*8 bits / ms = kbit/s
+        const mb_tenths = (track.bytes * 10) / (1024 * 1024);
+        return std.fmt.allocPrint(arena, "{d} KBPS  {d}.{d} MB", .{
+            kbps, mb_tenths / 10, mb_tenths % 10,
+        }) catch "";
+    }
+
+    /// The display marquee: title, artist, and album on one rotating line —
     /// the classic scroller, derived (never stored) as a pure function
     /// of the loaded track and the progress clock. The composed line
     /// rotates one step every `marquee_step_ms` of PLAYBACK time, so
@@ -457,30 +480,32 @@ pub const Model = struct {
         return formatMs(arena, model.now_duration_ms);
     }
 
-    /// The 32 spectrum band levels in [0, 1] — a pure function of the
-    /// loaded track and the progress clock (see the module doc). Derived
-    /// into the build arena per rebuild.
-    pub fn spectrumLevels(model: *const Model, arena: std.mem.Allocator) []const f32 {
-        const out = arena.alloc(f32, spectrum_bands) catch return &.{};
+    /// One spectrum band's level in [0, 1] — THE pure function every
+    /// live display derives from: (track id, elapsed ms, band index) and
+    /// nothing else, so pause freezes every reader at once and the same
+    /// model state always paints the same glass. Idle shows the noise
+    /// floor — a fixed comb, so the display reads as powered-on hardware
+    /// rather than a dead widget.
+    pub fn bandLevel(model: *const Model, band: usize) f32 {
         const track = model.nowTrack() orelse {
-            // Idle: the noise floor, a fixed comb so the display reads as
-            // powered-on hardware rather than a dead widget.
-            for (out, 0..) |*level, band| {
-                level.* = if (band % 4 == 0) 0.05 else 0.02;
-            }
-            return out;
+            return if (band % 4 == 0) 0.05 else 0.02;
         };
         const seed: f32 = @floatFromInt(@as(u32, track.id) * 7 + 3);
         const phase = @as(f32, @floatFromInt(model.elapsed_ms)) / 1000.0;
-        for (out, 0..) |*level, band| {
-            const x: f32 = @floatFromInt(band);
-            // Mid-weighted envelope: lows tall, highs rolled off.
-            const envelope = 0.35 + 0.65 * @exp(-x * x / 420.0);
-            const wave =
-                0.6 * @abs(@sin(phase * (1.3 + seed * 0.01) + x * 0.55 + seed)) +
-                0.4 * @abs(@sin(phase * 2.9 + x * 1.35 + seed * 0.5));
-            level.* = std.math.clamp(0.06 + envelope * wave * 0.94, 0, 1);
-        }
+        const x: f32 = @floatFromInt(band);
+        // Mid-weighted envelope: lows tall, highs rolled off.
+        const envelope = 0.35 + 0.65 * @exp(-x * x / 420.0);
+        const wave =
+            0.6 * @abs(@sin(phase * (1.3 + seed * 0.01) + x * 0.55 + seed)) +
+            0.4 * @abs(@sin(phase * 2.9 + x * 1.35 + seed * 0.5));
+        return std.math.clamp(0.06 + envelope * wave * 0.94, 0, 1);
+    }
+
+    /// The 32 spectrum band levels, derived into the build arena per
+    /// rebuild (the chart widget binds this).
+    pub fn spectrumLevels(model: *const Model, arena: std.mem.Allocator) []const f32 {
+        const out = arena.alloc(f32, spectrum_bands) catch return &.{};
+        for (out, 0..) |*level, band| level.* = model.bandLevel(band);
         return out;
     }
 
@@ -580,6 +605,29 @@ pub const Model = struct {
     }
 };
 
+/// The band monitor's five stop levels: each labeled frequency stop
+/// averages its slice of the same 32 bands the spectrum draws — a
+/// VISUALIZER at equalizer-style stops, never a control (the deck has
+/// no equalizer DSP, and this skin refuses to fake one). No arena: the
+/// chrome pass calls this and chrome builds carry no allocator — a
+/// fixed array is the honest shape anyway. Module-scope on purpose: the
+/// markup reflection walks Model's method decls, and an array-returning
+/// method is outside the binding grammar it type-checks.
+pub fn eqStopLevels(model: *const Model) [eq_stops]f32 {
+    var out: [eq_stops]f32 = undefined;
+    const per_stop = spectrum_bands / eq_stops; // 6 whole bands each...
+    for (&out, 0..) |*level, stop| {
+        // ...with the remainder folded into the last stop so every
+        // band feeds exactly one meter.
+        const start = stop * per_stop;
+        const end = if (stop == eq_stops - 1) spectrum_bands else start + per_stop;
+        var sum: f32 = 0;
+        for (start..end) |band| sum += model.bandLevel(band);
+        level.* = sum / @as(f32, @floatFromInt(end - start));
+    }
+    return out;
+}
+
 pub const TrackRow = struct {
     id: u8,
     number: []const u8,
@@ -639,6 +687,28 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
                 startTrack(model, fx, tracks[0].id);
             } else {
                 setPlaying(model, fx, !model.playing);
+            }
+        },
+        .transport_play => {
+            if (model.now == null) {
+                startTrack(model, fx, tracks[0].id);
+            } else if (!model.playing) {
+                setPlaying(model, fx, true);
+            }
+        },
+        .transport_pause => {
+            if (model.now != null and model.playing) setPlaying(model, fx, false);
+        },
+        .stop => {
+            if (model.now != null) {
+                // Halt AND rewind, keeping the record loaded: pause the
+                // platform player, seek it home, and zero the progress
+                // clock so everything derived from it (marquee,
+                // spectrum, timecode) returns to the top deterministically.
+                model.playing = false;
+                model.elapsed_ms = 0;
+                fx.pauseAudio();
+                fx.seekAudio(0);
             }
         },
         .next_track => advance(model, fx),

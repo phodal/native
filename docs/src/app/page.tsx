@@ -313,10 +313,10 @@ export default function HomePage() {
               library, transport, queue, and search — separated only by
               design tokens and a chrome pass. Both windows own their own
               chrome (soundboard's header IS its titlebar; deck is a fixed
-              460x180 chassis), so neither gets an invented window frame —
+              512x264 chassis), so neither gets an invented window frame —
               each capture sits on the page as its own silhouette, and the
               size contrast is part of the point. Soundboard follows the
-              site theme; deck is dark by design, so it never swaps. */}
+              site theme; deck has one finish by design, so it never swaps. */}
           <figure className="mt-12">
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="overflow-hidden rounded-md border border-gray-alpha-400 shadow-[0_24px_48px_-24px_rgba(0,0,0,0.18)] dark:shadow-[0_24px_48px_-24px_rgba(0,0,0,0.7)]">
@@ -337,11 +337,11 @@ export default function HomePage() {
               <div className="flex items-center justify-center px-6 py-10 sm:px-10">
                 <Image
                   src="/home/deck-dark.webp"
-                  alt="The Deck example app rendered by the Native SDK engine: the same music player rebuilt as a fixed 460 by 180 chromeless hardware chassis with a gold cap band, a seven-segment timecode, and a spectrum analyzer, dark by design"
-                  width={920}
-                  height={360}
+                  alt="The Deck example app rendered by the Native SDK engine: the same music player rebuilt as a fixed 512 by 264 chromeless hardware unit in cream enamel with smoked-glass display bays, a phosphor seven-segment timecode, a spectrum analyzer, and a rotary volume knob"
+                  width={1024}
+                  height={528}
                   quality={90}
-                  className="block h-auto w-full max-w-[460px]"
+                  className="block h-auto w-full max-w-[512px]"
                 />
               </div>
             </div>
@@ -353,7 +353,7 @@ export default function HomePage() {
                 Every difference between <InlineCode>examples/soundboard</InlineCode> and{" "}
                 <InlineCode>examples/deck</InlineCode> is design tokens and a chrome pass — same
                 widgets, same engine. One is an airy app window that follows the site theme; the
-                other is a dense 460×180 hardware chassis, dark by design.
+                other is a dense 512×264 enamel-and-glass hardware unit with one finish by design.
               </p>
             </figcaption>
           </figure>

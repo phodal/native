@@ -355,6 +355,9 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, assign) NSUInteger canvasTextureWidth;
 @property(nonatomic, assign) NSUInteger canvasTextureHeight;
 @property(nonatomic, assign) BOOL hasCanvasTexture;
+/// Queue flag for the pre-first-present immediate frame request only
+/// (see requestRetainedCanvasFrame's textureless branch); every steady
+/// state emission rides the single scheduler below instead.
 @property(nonatomic, assign) BOOL retainedFrameRequestPending;
 /// One-shot: the pre-first-present immediate frame request already fired
 /// (see requestRetainedCanvasFrame) — later textureless requests drop
@@ -362,16 +365,32 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 /// an unpaced request loop.
 @property(nonatomic, assign) BOOL firstCanvasFrameRequestEmitted;
 @property(nonatomic, assign) uint64_t retainedFrameLastEmitNs;
-/* Deferred present-completion emission (paced to the display interval):
- * completions landing while one is queued fold into it — the queued
- * block emits the LATEST completed frame. Without coalescing, several
- * in-flight completions all compute their delay against the same stale
- * last-emit stamp and fire together at the next boundary, and the burst
- * re-exhausts the drawable pool the pacing exists to protect. */
-@property(nonatomic, assign) BOOL completionEmissionPending;
-@property(nonatomic, assign) NSUInteger pendingCompletionFrameIndex;
-@property(nonatomic, assign) uint32_t pendingCompletionSampleColor;
-@property(nonatomic, assign) BOOL pendingCompletionNonblank;
+/* ONE frame-event scheduler per surface. Every producer that wants a
+ * frame event — runtime frame requests (armed animations, widget
+ * changes), GPU present completions, and occluded logical completions —
+ * funnels through scheduleFrameEventEmission, which keeps at most one
+ * emission in flight and fires it on the display-interval grid anchored
+ * at retainedFrameLastEmitNs. Before this gate the request stream and
+ * the completion stream each kept their own once-per-interval promise
+ * against the shared clock, so an armed frame loop whose phases
+ * interleaved delivered TWO events per interval (measured 3.7 ms/5.5 ms
+ * alternation — ~215 Hz of re-renders on a 120 Hz panel), and under
+ * main-thread load the two streams' serialized blocks re-based the
+ * clock from completion time each cycle, stretching armed intervals
+ * frame over frame instead of holding cadence. Producers landing while
+ * an emission is queued fold into it: their facts (sample color,
+ * nonblank, retained canvas state) are already view state by the time
+ * the block fires, so the one event carries the freshest truth. */
+@property(nonatomic, assign) BOOL frameEventEmissionScheduled;
+/* Held while the frame channel is ARMED (an emission is scheduled and
+ * each fired emission re-arms another): without it the OS is free to
+ * app-nap the process mid-animation, and its timer coalescing stretches
+ * the paced dispatch deadlines progressively — the measured decay from
+ * 5 ms deltas toward ~75 ms over six frames of a background app's
+ * 180 ms tween. The assertion begins with the first scheduled emission
+ * and ends the moment an emission fires with no follow-up scheduled,
+ * so an IDLE app holds nothing and keeps full app-nap batching. */
+@property(nonatomic, strong) id<NSObject> frameChannelActivity;
 @property(nonatomic, assign) BOOL glassFlushPending;
 @property(nonatomic, assign) BOOL pointerMotionInputPending;
 @property(nonatomic, assign) NSInteger pendingPointerMotionKind;
@@ -510,9 +529,9 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)flushQueuedFirstCanvasFrameRequestNow;
 - (void)advanceRetainedFramePacingClock;
 - (void)emitFirstCanvasFrameRequest;
-- (void)emitRetainedCanvasFrameRequest;
 - (void)renderFrame;
-- (void)emitPacedCompletionEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
+- (void)scheduleFrameEventEmission;
+- (void)emitScheduledFrameEvent;
 - (void)emitFrameEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank;
 - (void)emitResizeEvent;
 - (void)emitInputEventWithKind:(NSInteger)kind event:(NSEvent *)event button:(NSInteger)button deltaX:(double)deltaX deltaY:(double)deltaY;
@@ -2750,7 +2769,7 @@ static NSDictionary *NativeSdkPacketDictionaryFromBinary(const uint8_t *bytes, N
     // second per frame before returning nil. Disallowing it means
     // nextDrawable BLOCKS until a drawable is free — which is why frame
     // completion events are paced to the display interval (see
-    // emitPacedCompletionEventWithFrameIndex): a paced loop keeps pool
+    // scheduleFrameEventEmission): a paced loop keeps pool
     // slack so the block is momentary. Occluded windows that do return a
     // nil drawable take the retained-completion path in renderFrame.
     _metalLayer.allowsNextDrawableTimeout = NO;
@@ -4721,7 +4740,6 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 }
 
 - (void)requestRetainedCanvasFrame {
-    if (self.retainedFrameRequestPending) return;
     if (!self.hasCanvasTexture) {
         // FIRST canvas frame: nothing is retained and nothing has ever
         // presented, so there is no drawable pool to protect with pacing.
@@ -4729,7 +4747,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         // present waiting for the 60 Hz placeholder timer to tick — a
         // measured 40+ ms of launch-to-glass latency. Emit the request
         // immediately instead, once; failures fall back to the timer.
-        if (self.firstCanvasFrameRequestEmitted) return;
+        if (self.retainedFrameRequestPending || self.firstCanvasFrameRequestEmitted) return;
         self.firstCanvasFrameRequestEmitted = YES;
         self.retainedFrameRequestPending = YES;
         __weak NativeSdkMetalSurfaceView *weakSelf = self;
@@ -4740,19 +4758,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         });
         return;
     }
-    self.retainedFrameRequestPending = YES;
-    const uint64_t now = NativeSdkTimestampNanoseconds();
-    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
-    uint64_t delayNs = 0;
-    if (self.retainedFrameLastEmitNs > 0 && now < self.retainedFrameLastEmitNs + frameIntervalNs) {
-        delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
-    }
-    __weak NativeSdkMetalSurfaceView *weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
-        if (!strongSelf) return;
-        [strongSelf emitRetainedCanvasFrameRequest];
-    });
+    [self scheduleFrameEventEmission];
 }
 
 // Synchronous pre-run flush for a first-frame request queued during the
@@ -4772,16 +4778,27 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 // the paced loop ran at 8.33 ms + ~1.2 ms == ~105 Hz on a 120 Hz panel.
 // Stamping the scheduled deadline keeps the average period exactly one
 // display interval (jitter stays, drift doesn't). A fire more than one
-// interval late resets to `now` — pacing never death-spirals trying to
-// catch up.
+// interval late used to reset the clock to `now`, which re-based every
+// following period on completion time — under sustained main-thread
+// load each armed interval then carried the full work time on top of
+// the display interval, the measured frame-over-frame stretch. Advance
+// to the last GRID point at or before `now` instead: whole missed
+// intervals are skipped (never queued as a catch-up burst), and the
+// next emission lands back on cadence.
 - (void)advanceRetainedFramePacingClock {
     const uint64_t now = NativeSdkTimestampNanoseconds();
     const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
-    const uint64_t scheduledNs = self.retainedFrameLastEmitNs + frameIntervalNs;
-    if (self.retainedFrameLastEmitNs != 0 && now >= scheduledNs && now - scheduledNs < frameIntervalNs) {
-        self.retainedFrameLastEmitNs = scheduledNs;
-    } else {
+    if (self.retainedFrameLastEmitNs == 0) {
         self.retainedFrameLastEmitNs = now;
+        return;
+    }
+    const uint64_t scheduledNs = self.retainedFrameLastEmitNs + frameIntervalNs;
+    if (now < scheduledNs) {
+        // Fired before the deadline (clock skew); re-basing at `now`
+        // keeps the next delay a full interval instead of stretching it.
+        self.retainedFrameLastEmitNs = now;
+    } else {
+        self.retainedFrameLastEmitNs = scheduledNs + ((now - scheduledNs) / frameIntervalNs) * frameIntervalNs;
     }
 }
 
@@ -4792,9 +4809,9 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     if (!self.retainedFrameRequestPending) return;
     self.retainedFrameRequestPending = NO;
     if (self.hasCanvasTexture) {
-        // A texture landed while the request was queued: the normal
-        // retained path (with its own guards) owns it now.
-        [self emitRetainedCanvasFrameRequest];
+        // A texture landed while the request was queued: the paced
+        // scheduler (with its own guards) owns it now.
+        [self scheduleFrameEventEmission];
         return;
     }
     if (![self isAvailable] || self.hidden || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
@@ -4805,9 +4822,50 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     [self emitFrameEventWithFrameIndex:requestedFrameIndex sampleColor:0 nonblank:NO];
 }
 
-- (void)emitRetainedCanvasFrameRequest {
-    self.retainedFrameRequestPending = NO;
-    if (![self isAvailable] || self.hidden || !self.hasCanvasTexture || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
+/* Schedule the surface's next frame event on the display-interval grid.
+ * At most one emission is ever in flight; producers arriving while it
+ * is queued fold into it (see the property comment). Always fires
+ * through the queue — a request lands mid engine dispatch and a
+ * synchronous emission would re-enter the engine — and the pacing
+ * clock's grid stamping keeps the queue hop out of the period. */
+- (void)scheduleFrameEventEmission {
+    if (self.frameEventEmissionScheduled) return;
+    if (![self isAvailable] || self.hidden || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
+    self.frameEventEmissionScheduled = YES;
+    // Armed: suspend app-nap timer coalescing until the channel goes
+    // quiet, so the paced deadlines below fire on the display grid even
+    // for an unfocused or occluded window (see the property comment).
+    if (!self.frameChannelActivity) {
+        self.frameChannelActivity = [[NSProcessInfo processInfo] beginActivityWithOptions:(NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical) reason:@"armed gpu-surface frame channel"];
+    }
+    const uint64_t now = NativeSdkTimestampNanoseconds();
+    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
+    uint64_t delayNs = 0;
+    if (self.retainedFrameLastEmitNs > 0 && now < self.retainedFrameLastEmitNs + frameIntervalNs) {
+        delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
+    }
+    __weak NativeSdkMetalSurfaceView *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
+        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.frameEventEmissionScheduled = NO;
+        [strongSelf emitScheduledFrameEvent];
+        // The emission's engine dispatch re-arms the channel when more
+        // frames are wanted; if it did not, the animation is over —
+        // release the activity so the idle app naps again.
+        if (!strongSelf.frameEventEmissionScheduled && strongSelf.frameChannelActivity) {
+            [[NSProcessInfo processInfo] endActivity:strongSelf.frameChannelActivity];
+            strongSelf.frameChannelActivity = nil;
+        }
+    });
+}
+
+/* The single frame-event emission: retained canvas state is the
+ * payload (the completion handlers already folded their sample color
+ * and nonblank verdicts into view state before scheduling), so one
+ * event serves frame requests and present completions alike. */
+- (void)emitScheduledFrameEvent {
+    if (![self isAvailable] || self.hidden || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
     [self updateDrawableSize];
     [self advanceRetainedFramePacingClock];
     const NSUInteger requestedFrameIndex = self.frameIndex;
@@ -4815,34 +4873,6 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     const BOOL nonblank = self.verifiedNonblankFrame || self.hasCanvasTexture;
     const uint32_t sampleColor = self.verifiedNonblankFrame ? self.lastSampleColor : 0;
     [self emitFrameEventWithFrameIndex:requestedFrameIndex sampleColor:sampleColor nonblank:nonblank];
-}
-
-/* Emit a present-completion frame event, paced to the display's refresh
- * interval and coalesced: completions arriving while an emission is
- * queued fold their payload into it, so at most one frame event fires
- * per interval no matter how many presents completed inside it. */
-- (void)emitPacedCompletionEventWithFrameIndex:(NSUInteger)frameIndex sampleColor:(uint32_t)sampleColor nonblank:(BOOL)nonblank {
-    self.pendingCompletionFrameIndex = frameIndex;
-    self.pendingCompletionSampleColor = sampleColor;
-    self.pendingCompletionNonblank = nonblank;
-    if (self.completionEmissionPending) return;
-    const uint64_t now = NativeSdkTimestampNanoseconds();
-    const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
-    if (self.retainedFrameLastEmitNs == 0 || now >= self.retainedFrameLastEmitNs + frameIntervalNs) {
-        self.retainedFrameLastEmitNs = now;
-        [self emitFrameEventWithFrameIndex:frameIndex sampleColor:sampleColor nonblank:nonblank];
-        return;
-    }
-    self.completionEmissionPending = YES;
-    const uint64_t delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
-    __weak NativeSdkMetalSurfaceView *weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-        NativeSdkMetalSurfaceView *strongSelf = weakSelf;
-        if (!strongSelf) return;
-        strongSelf.completionEmissionPending = NO;
-        [strongSelf advanceRetainedFramePacingClock];
-        [strongSelf emitFrameEventWithFrameIndex:strongSelf.pendingCompletionFrameIndex sampleColor:strongSelf.pendingCompletionSampleColor nonblank:strongSelf.pendingCompletionNonblank];
-    });
 }
 
 - (void)renderFrame {
@@ -4869,23 +4899,7 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         // regardless of window visibility; only the physical glass flush
         // is deferred to visibility.
         self.glassFlushPending = YES;
-        const NSUInteger completedFrameIndex = self.frameIndex;
-        self.frameIndex += 1;
-        const uint64_t now = NativeSdkTimestampNanoseconds();
-        const uint64_t frameIntervalNs = NativeSdkRetainedFrameIntervalNanoseconds(self.window.screen ?: NSScreen.mainScreen);
-        uint64_t delayNs = 0;
-        if (self.retainedFrameLastEmitNs > 0 && now < self.retainedFrameLastEmitNs + frameIntervalNs) {
-            delayNs = self.retainedFrameLastEmitNs + frameIntervalNs - now;
-        }
-        __weak NativeSdkMetalSurfaceView *weakSelf = self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delayNs), dispatch_get_main_queue(), ^{
-            NativeSdkMetalSurfaceView *strongSelf = weakSelf;
-            if (!strongSelf) return;
-            [strongSelf advanceRetainedFramePacingClock];
-            const BOOL nonblank = strongSelf.verifiedNonblankFrame || strongSelf.hasCanvasTexture;
-            const uint32_t sampleColor = strongSelf.verifiedNonblankFrame ? strongSelf.lastSampleColor : 0;
-            [strongSelf emitFrameEventWithFrameIndex:completedFrameIndex sampleColor:sampleColor nonblank:nonblank];
-        });
+        [self scheduleFrameEventEmission];
         return;
     }
     const double phase = (double)(self.frameIndex % 360) / 360.0;
@@ -4933,7 +4947,6 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         [blit endEncoding];
     }
 
-    const NSUInteger completedFrameIndex = self.frameIndex;
     __weak NativeSdkMetalSurfaceView *weakSelf = self;
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
         (void)completedBuffer;
@@ -4947,27 +4960,25 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
         dispatch_async(dispatch_get_main_queue(), ^{
             NativeSdkMetalSurfaceView *strongSelf = weakSelf;
             if (!strongSelf) return;
-            BOOL eventNonblank = nonblank;
-            uint32_t eventSampleColor = sampleColor;
-            if (eventNonblank) {
+            if (nonblank) {
                 strongSelf.verifiedNonblankFrame = YES;
-                strongSelf.lastSampleColor = eventSampleColor;
-            } else if (strongSelf.verifiedNonblankFrame) {
-                eventNonblank = YES;
-                eventSampleColor = strongSelf.lastSampleColor;
+                strongSelf.lastSampleColor = sampleColor;
             }
             strongSelf.renderedFrame = YES;
-            /* Pace the completion event to the display's refresh interval
-             * (the retained-frame and nil-drawable paths already do). The
-             * completion handler fires when the GPU finishes rendering —
-             * microseconds of work, well before the glass flip — so an
-             * unpaced emission spins the engine's frame loop as fast as
-             * the drawable pool recycles (measured ~240 Hz): every cycle
-             * re-plans, re-draws, and then stalls in nextDrawable waiting
-             * for the pool, which is exactly where the present stage's
-             * milliseconds went. Emission-time pacing keeps the pool slack
-             * so presents themselves stay wait-free. */
-            [strongSelf emitPacedCompletionEventWithFrameIndex:completedFrameIndex sampleColor:eventSampleColor nonblank:eventNonblank];
+            /* Fold the completion into the surface's ONE frame-event
+             * scheduler. The completion handler fires when the GPU
+             * finishes rendering — microseconds of work, well before the
+             * glass flip — so an unpaced emission spins the engine's
+             * frame loop as fast as the drawable pool recycles (measured
+             * ~240 Hz): every cycle re-plans, re-draws, and then stalls
+             * in nextDrawable waiting for the pool, which is exactly
+             * where the present stage's milliseconds went. The shared
+             * scheduler paces the emission to the display interval AND
+             * coalesces it with any pending frame request, so an armed
+             * animation loop sees one event per interval, not one per
+             * producer. The verdict above is already view state, so the
+             * scheduled event carries this completion's truth. */
+            [strongSelf scheduleFrameEventEmission];
         });
     }];
 

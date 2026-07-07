@@ -39,6 +39,17 @@ fn copyInto(buffer: []u8, value: []const u8) ![]const u8 {
     return buffer[0..value.len];
 }
 
+/// One armed layout tween: the declared spec plus the runtime's clock
+/// state. `from` is the retained value at arming (or retarget) time;
+/// `start_ns` stays 0 until the first advancing frame stamps it, the
+/// same first-tick discipline the manual Msg idiom uses, so a tween
+/// armed mid-dispatch starts its 0..1 ramp on the frame clock.
+pub const CanvasWidgetLayoutTweenState = struct {
+    spec: canvas.CanvasWidgetLayoutTween,
+    from: f32,
+    start_ns: u64 = 0,
+};
+
 pub const CanvasWidgetScrollSource = view_widget_scroll.CanvasWidgetScrollSource;
 pub const CanvasWidgetToggleAnimation = view_widget_control.CanvasWidgetToggleAnimation;
 pub const CanvasWidgetDisplayListChrome = view_canvas.CanvasWidgetDisplayListChrome;
@@ -174,6 +185,13 @@ pub const RuntimeView = struct {
     presented_canvas_has_unkeyed: bool = false,
     canvas_render_animations: [max_canvas_render_animations_per_view]canvas.CanvasRenderAnimation = undefined,
     canvas_render_animation_count: usize = 0,
+    /// Runtime-driven layout tweens (split fractions easing toward
+    /// declared targets). Advanced once per presented frame from the
+    /// frame event's timestamp; each step mutates retained layout
+    /// through the split-drag path, so dirty regions, resize events,
+    /// and the source-wins reconcile all behave exactly as a drag.
+    canvas_widget_layout_tweens: [canvas_limits.max_canvas_widget_layout_tweens_per_view]CanvasWidgetLayoutTweenState = undefined,
+    canvas_widget_layout_tween_count: usize = 0,
     /// Command id of the caret currently carrying the looping blink
     /// animation (0 when no caret is showing), so display-list refreshes
     /// can retarget or remove the blink as focus and selection move.
@@ -515,6 +533,39 @@ pub const RuntimeView = struct {
     pub const copyWidgetSpans = CanvasWidgetTreeMethods.copyWidgetSpans;
     pub const copyWidgetContextMenu = CanvasWidgetTreeMethods.copyWidgetContextMenu;
     pub const copyWidgetChart = CanvasWidgetTreeMethods.copyWidgetChart;
+
+    pub fn canvasWidgetLayoutTweensActive(self: *const RuntimeView) bool {
+        return self.canvas_widget_layout_tween_count > 0;
+    }
+
+    pub fn findCanvasWidgetLayoutTween(self: *RuntimeView, id: canvas.ObjectId) ?*CanvasWidgetLayoutTweenState {
+        for (self.canvas_widget_layout_tweens[0..self.canvas_widget_layout_tween_count]) |*tween| {
+            if (tween.spec.id == id) return tween;
+        }
+        return null;
+    }
+
+    /// Arm (append) a layout tween. False when every slot is taken —
+    /// the caller snaps the value instead, so motion degrades under
+    /// pressure but the state change always lands.
+    pub fn armCanvasWidgetLayoutTween(self: *RuntimeView, state: CanvasWidgetLayoutTweenState) bool {
+        if (self.canvas_widget_layout_tween_count >= self.canvas_widget_layout_tweens.len) return false;
+        self.canvas_widget_layout_tweens[self.canvas_widget_layout_tween_count] = state;
+        self.canvas_widget_layout_tween_count += 1;
+        return true;
+    }
+
+    /// Retire a layout tween by widget id (order is not meaningful;
+    /// swap-remove keeps this O(1)).
+    pub fn removeCanvasWidgetLayoutTween(self: *RuntimeView, id: canvas.ObjectId) void {
+        var index: usize = 0;
+        while (index < self.canvas_widget_layout_tween_count) : (index += 1) {
+            if (self.canvas_widget_layout_tweens[index].spec.id != id) continue;
+            self.canvas_widget_layout_tween_count -= 1;
+            self.canvas_widget_layout_tweens[index] = self.canvas_widget_layout_tweens[self.canvas_widget_layout_tween_count];
+            return;
+        }
+    }
 
     // By pointer, never by value: a RuntimeView is multiple MiB of fixed
     // capacity arrays, and a by-value self parameter copies it onto the

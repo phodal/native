@@ -402,6 +402,22 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// as `start_ns`. Returns the number of animations written to
             /// `out`.
             animations: ?*const fn (model: *const ModelT, tree: *const Ui.Tree, start_ns: u64, out: []canvas.CanvasRenderAnimation) usize = null,
+            /// Layout tweens derived from the model and current tree,
+            /// re-declared after every rebuild through
+            /// `startCanvasWidgetLayoutTween` (idempotent: an armed
+            /// tween re-declared with the same target keeps its clock).
+            /// Where `animations` moves PIXELS (opacity/transform, no
+            /// reflow), a layout tween moves LAYOUT: the runtime eases
+            /// a split's first-pane fraction from its current rendered
+            /// value to the declared target, one step per presented
+            /// frame, and the neighboring pane reflows exactly as if
+            /// the divider were dragged — no hand-rolled per-frame
+            /// Msgs. Declare the RESTING target (derive `to` from the
+            /// model's collapsed flag); keep the split's `value` bound
+            /// the way drags already require. Reduced-motion
+            /// appearances snap instead of animating. Returns the
+            /// number of tweens written to `out`.
+            layout_tweens: ?*const fn (model: *const ModelT, tree: *const Ui.Tree, out: []canvas.CanvasWidgetLayoutTween) usize = null,
             /// Elm-style update. Set exactly one of `update` and
             /// `update_fx`: the plain form for pure apps, the `_fx` form
             /// when update needs the effects channel. Both drive the
@@ -1129,6 +1145,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 self.clearContextMenuFallback();
             }
             try self.scheduleAnimations(runtime, window_id);
+            try self.scheduleLayoutTweens(runtime, window_id);
             self.applyWebPanes(runtime, window_id, layout);
             self.applyStatusItem(runtime);
             self.applyWindows(runtime);
@@ -1754,6 +1771,26 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             var animations: [canvas_limits.max_canvas_render_animations_per_view]canvas.CanvasRenderAnimation = undefined;
             const count = animations_fn(&self.model, tree, self.frame_timestamp_ns, &animations);
             _ = try runtime.setCanvasRenderAnimations(window_id, self.options.canvas_label, animations[0..count]);
+        }
+
+        /// Re-declare the model-derived layout tweens after a rebuild.
+        /// `startCanvasWidgetLayoutTween` is idempotent per target, so
+        /// declaring on every rebuild arms a tween exactly when the
+        /// declared target diverges from the rendered value — the
+        /// declarative twin of `scheduleAnimations`. A stale id (the
+        /// widget left the tree this rebuild) is skipped, not an error:
+        /// the hook reads the CURRENT tree, so ids are normally fresh.
+        fn scheduleLayoutTweens(self: *Self, runtime: *Runtime, window_id: platform.WindowId) anyerror!void {
+            const layout_tweens_fn = self.options.layout_tweens orelse return;
+            const tree = &(self.tree orelse return);
+            var tweens: [canvas_limits.max_canvas_widget_layout_tweens_per_view]canvas.CanvasWidgetLayoutTween = undefined;
+            const count = layout_tweens_fn(&self.model, tree, &tweens);
+            for (tweens[0..@min(count, tweens.len)]) |tween| {
+                _ = runtime.startCanvasWidgetLayoutTween(window_id, self.options.canvas_label, tween) catch |err| switch (err) {
+                    error.InvalidCommand => continue,
+                    else => return err,
+                };
+            }
         }
 
         fn buildViewNode(self: *Self, ui: *Ui) anyerror!Ui.Node {

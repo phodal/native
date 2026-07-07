@@ -198,6 +198,114 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             return self.views[index].info();
         }
 
+        /// Arm (or retarget) a runtime-driven layout tween: the split's
+        /// first-pane fraction eases from its CURRENT retained value to
+        /// `tween.to` over `tween.duration_ms`, one step per presented
+        /// frame, sampled from the frame event's recorded timestamp —
+        /// so a recorded session replays to identical frames and idle
+        /// apps present nothing (the tween itself keeps the frame
+        /// channel armed only while it runs).
+        ///
+        /// Contract, in declaration order:
+        ///   - id 0 or a non-split id is a teaching error;
+        ///   - already at the target (and nothing armed): no-op;
+        ///   - reduce-motion appearance or duration 0: SNAP through the
+        ///     same mutation path a divider drag uses (dirty region,
+        ///     resize event, reconcile survival), never animate;
+        ///   - re-declared with the same target while armed: no-op —
+        ///     the per-rebuild declarative hook calls this every
+        ///     rebuild and must not restart the clock;
+        ///   - re-declared with a NEW target while armed: retarget from
+        ///     the current animated value, fresh clock;
+        ///   - every tween slot taken: snap (motion degrades under
+        ///     pressure; the state change always lands).
+        pub fn startCanvasWidgetLayoutTween(self: *Runtime, window_id: platform.WindowId, label: []const u8, tween: canvas.CanvasWidgetLayoutTween) anyerror!platform.ViewInfo {
+            try validateRuntimeViewParent(self, window_id);
+            try validateViewLabel(label);
+            const index = runtimeFindViewIndex(self, window_id, label) orelse return error.ViewNotFound;
+            if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
+            if (tween.id == 0) return error.InvalidCommand;
+            if (!std.math.isFinite(tween.to)) return error.InvalidCommand;
+            const node_index = self.views[index].canvasWidgetNodeIndexById(tween.id) orelse return error.InvalidCommand;
+            if (self.views[index].widget_layout_nodes[node_index].widget.kind != .split) return error.InvalidCommand;
+            const current = self.views[index].widget_layout_nodes[node_index].widget.value;
+
+            const snap = self.appearance.reduce_motion or tween.duration_ms == 0;
+            if (self.views[index].findCanvasWidgetLayoutTween(tween.id)) |active| {
+                if (snap) {
+                    // Reduce motion arrived (or the declaration turned
+                    // instant) while armed: retire the tween and land
+                    // on the target through the snap path below.
+                    self.views[index].removeCanvasWidgetLayoutTween(tween.id);
+                } else {
+                    if (active.spec.to == tween.to) return self.views[index].info();
+                    active.spec = tween;
+                    active.from = current;
+                    active.start_ns = 0;
+                    try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
+                    return self.views[index].info();
+                }
+            }
+            if (current == tween.to) return self.views[index].info();
+
+            if (!snap and self.views[index].armCanvasWidgetLayoutTween(.{ .spec = tween, .from = current })) {
+                try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
+                return self.views[index].info();
+            }
+            if (try self.views[index].applyCanvasWidgetSplitFraction(node_index, tween.to)) |dirty| {
+                try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, index, dirty);
+            }
+            return self.views[index].info();
+        }
+
+        /// One presented frame's worth of layout-tween motion for a
+        /// view, called from the frame event dispatch (the kinetic
+        /// scroll's sibling). Each active tween samples its eased
+        /// fraction at the frame's timestamp and lands it through the
+        /// split-drag mutation path — retained-diff dirty regions and
+        /// `on_resize` events for free. Completed tweens snap to the
+        /// exact target and retire; while any remain active the next
+        /// frame is requested, so the channel disarms itself the frame
+        /// after the last tween settles.
+        pub fn advanceCanvasWidgetLayoutTweensForFrame(self: *Runtime, view_index: usize, timestamp_ns: u64) anyerror!void {
+            if (view_index >= self.view_count) return;
+            if (self.views[view_index].kind != .gpu_surface) return;
+            if (!self.views[view_index].canvasWidgetLayoutTweensActive()) return;
+
+            var tween_index: usize = 0;
+            while (tween_index < self.views[view_index].canvas_widget_layout_tween_count) {
+                const tween = &self.views[view_index].canvas_widget_layout_tweens[tween_index];
+                // The widget vanished from the tree (the model dropped
+                // the split): retire silently, nothing to move.
+                const node_index = self.views[view_index].canvasWidgetNodeIndexById(tween.spec.id) orelse {
+                    self.views[view_index].removeCanvasWidgetLayoutTween(tween.spec.id);
+                    continue;
+                };
+                // First advancing frame stamps the clock: the ramp runs
+                // on the frame clock from the first frame that could
+                // have painted it, the manual idiom's discipline.
+                if (tween.start_ns == 0 or timestamp_ns < tween.start_ns) {
+                    tween.start_ns = timestamp_ns;
+                }
+                const progress = canvas.layoutTweenProgress(tween.spec.easing, tween.spec.spring, tween.start_ns, tween.spec.duration_ms, timestamp_ns);
+                const done = progress >= 1;
+                const value = if (done) tween.spec.to else tween.from + (tween.spec.to - tween.from) * progress;
+                if (try self.views[view_index].applyCanvasWidgetSplitFraction(node_index, value)) |dirty| {
+                    try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, view_index, dirty);
+                }
+                if (done) {
+                    // removeCanvasWidgetLayoutTween swap-removes, so the
+                    // slot at tween_index now holds an unvisited tween.
+                    self.views[view_index].removeCanvasWidgetLayoutTween(tween.spec.id);
+                    continue;
+                }
+                tween_index += 1;
+            }
+            if (self.views[view_index].canvasWidgetLayoutTweensActive()) {
+                try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, view_index);
+            }
+        }
+
         pub fn setCanvasWidgetDesignTokens(self: *Runtime, window_id: platform.WindowId, label: []const u8, tokens: canvas.DesignTokens) anyerror!platform.ViewInfo {
             try validateRuntimeViewParent(self, window_id);
             try validateViewLabel(label);

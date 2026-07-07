@@ -51,7 +51,18 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 if (frame_event.packet_decode_ns > 0) self.frame_profile.recordNs(.host_decode, frame_event.packet_decode_ns);
                 if (frame_event.packet_draw_ns > 0) self.frame_profile.recordNs(.host_draw, frame_event.packet_draw_ns);
                 try CanvasWidgetDisplayMethods().advanceCanvasWidgetKineticScrollForFrame(self, index, frame_event.frame_interval_ns, had_pending_input);
+                // Layout tweens step on the frame event's RECORDED
+                // timestamp (never a wall clock), so session replay
+                // reproduces identical layouts frame for frame. Stepped
+                // before the pending-event dispatch below so the resize
+                // event each step notes reaches the app THIS frame.
+                try self.advanceCanvasWidgetLayoutTweensForFrame(index, frame_event.timestamp_ns);
                 try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
+                // Tween steps note split-resize events with no input in
+                // flight; drain them here so the controlled-split echo
+                // (`on_resize` -> model -> `value`) rides the SAME frame
+                // the step painted, exactly as a divider drag's does.
+                try dispatchPendingCanvasWidgetResizeEvents(self, app, index);
                 // Observable snapshots (automation, bridge state) only
                 // republish when the runtime is invalidated, and a frame
                 // completion carrying a NEW discrete fact may have no

@@ -221,6 +221,13 @@ pub const max_canvas_widget_autofocus_per_view: usize = 16;
 /// static instead of degrading the frame budget.
 pub const max_canvas_widget_loop_animations_per_view: usize = 16;
 
+/// Concurrent runtime-driven LAYOUT tweens per view (split fractions
+/// animating toward declared targets). Layout tweens are gesture-scale
+/// — a pane collapse, a drawer slide — so a handful covers real apps;
+/// a start past the budget snaps the value to its target instead of
+/// dropping the state change (motion degrades, truth never does).
+pub const max_canvas_widget_layout_tweens_per_view: usize = 8;
+
 // Widget provenance (write-back's read half; `UiApp` retains it only in
 // markup-interpreter builds, and only fills it when automation is on).
 // One record per markup-authored widget of the main canvas view, so the

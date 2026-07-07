@@ -436,3 +436,158 @@ test "a virtual list declaring the tree role scopes the tree keymap over its row
     try key.down(harness, app, "end");
     try std.testing.expectEqual(@as(canvas.ObjectId, 23), view.canvas_widget_focused_id);
 }
+
+// ------------------------------------------------------- layout tweens
+
+/// Install the standard 0.5 split on a fresh gpu-surface view and
+/// return its split id — the shared opening move of the tween tests.
+fn installTweenSplit(harness: anytype, app: App, arena: std.mem.Allocator) !canvas.ObjectId {
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 309, 100),
+    });
+    var ui = TestUi.init(arena);
+    const tree = try ui.finalize(buildSplitTree(&ui));
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 309, 100), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    return tree.root.id;
+}
+
+fn tweenFrame(harness: anytype, app: App, timestamp_ns: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(309, 100),
+        .timestamp_ns = timestamp_ns,
+    } });
+}
+
+fn splitFraction(harness: anytype, id: canvas.ObjectId) !f32 {
+    return (try harness.runtime.canvasWidgetLayout(1, "canvas")).findById(id).?.widget.value;
+}
+
+test "layout tween eases the split fraction on the frame clock and retires at the target" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const split_id = try installTweenSplit(harness, app, arena.allocator());
+
+    // Arming requests the frame that will drive the first step.
+    const requests_before = harness.null_platform.gpu_surface_frame_request_count;
+    _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{
+        .id = split_id,
+        .to = 0.2,
+        .duration_ms = 160,
+        .easing = .linear,
+    });
+    try std.testing.expect(harness.null_platform.gpu_surface_frame_request_count > requests_before);
+
+    // First frame stamps the clock: the fraction has not moved yet, and
+    // the tween keeps the channel armed by requesting the next frame.
+    const t0: u64 = 1_000_000_000;
+    try tweenFrame(harness, app, t0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try splitFraction(harness, split_id), 0.0001);
+
+    // Halfway on the recorded clock: exactly halfway on a linear ease —
+    // and the app hears the same `canvas_widget_resize` a drag emits,
+    // on the SAME frame the step painted.
+    try tweenFrame(harness, app, t0 + 80_000_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.35), try splitFraction(harness, split_id), 0.0001);
+    try std.testing.expect(app_state.resize_count > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.35), app_state.last_resize_fraction, 0.0001);
+
+    // Past the duration: snapped to the exact target and retired. The
+    // frames that follow request nothing — the channel disarms itself,
+    // so an idle app goes back to zero frames.
+    try tweenFrame(harness, app, t0 + 200_000_000);
+    try std.testing.expectEqual(@as(f32, 0.2), try splitFraction(harness, split_id));
+    const requests_settled = harness.null_platform.gpu_surface_frame_request_count;
+    try tweenFrame(harness, app, t0 + 210_000_000);
+    try std.testing.expectEqual(requests_settled, harness.null_platform.gpu_surface_frame_request_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), app_state.last_resize_fraction, 0.0001);
+}
+
+test "layout tween re-declares idempotently and retargets from the animated value" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const split_id = try installTweenSplit(harness, app, arena.allocator());
+
+    _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{ .id = split_id, .to = 0.2, .duration_ms = 160, .easing = .linear });
+    const t0: u64 = 1_000_000_000;
+    try tweenFrame(harness, app, t0);
+    try tweenFrame(harness, app, t0 + 80_000_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.35), try splitFraction(harness, split_id), 0.0001);
+
+    // Same target re-declared (every rebuild does this): the clock must
+    // NOT restart — the next step continues the original ramp.
+    _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{ .id = split_id, .to = 0.2, .duration_ms = 160, .easing = .linear });
+    try tweenFrame(harness, app, t0 + 120_000_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.275), try splitFraction(harness, split_id), 0.0001);
+
+    // A NEW target retargets from the animated value with a fresh clock
+    // stamped by the next frame — a mid-flight reversal never jumps.
+    _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{ .id = split_id, .to = 0.5, .duration_ms = 100, .easing = .linear });
+    try tweenFrame(harness, app, t0 + 130_000_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.275), try splitFraction(harness, split_id), 0.0001);
+    try tweenFrame(harness, app, t0 + 180_000_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3875), try splitFraction(harness, split_id), 0.0001);
+    try tweenFrame(harness, app, t0 + 240_000_000);
+    try std.testing.expectEqual(@as(f32, 0.5), try splitFraction(harness, split_id));
+}
+
+test "reduce motion snaps the layout tween through the drag mutation path" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const split_id = try installTweenSplit(harness, app, arena.allocator());
+
+    harness.runtime.appearance.reduce_motion = true;
+    _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{ .id = split_id, .to = 0.2, .duration_ms = 160 });
+    // Snapped immediately: no frames needed, panes re-laid, and the
+    // resize event pends exactly as one coalesced drag step would.
+    try std.testing.expectEqual(@as(f32, 0.2), try splitFraction(harness, split_id));
+    const divider = findNodeByKind(try harness.runtime.canvasWidgetLayout(1, "canvas"), .split_divider) orelse return error.TestUnexpectedResult;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2 * 300.0), divider.frame.x, 0.001);
+    try tweenFrame(harness, app, 1_000_000_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), app_state.last_resize_fraction, 0.0001);
+}
+
+test "identical recorded frame clocks replay a layout tween to identical fractions" {
+    // The replay-determinism contract at tween scale: two runtimes fed
+    // the SAME frame-event timestamps step the same tween to bitwise
+    // identical fractions — no wall clock ever participates.
+    const timestamps = [_]u64{ 5_000_000, 13_000_000, 29_000_000, 60_000_000, 120_000_000, 200_000_000 };
+    var fractions: [2][timestamps.len]f32 = undefined;
+    for (0..2) |run| {
+        const harness = try TestHarness().create(std.testing.allocator, .{});
+        defer harness.destroy(std.testing.allocator);
+        var app_state: ObservingApp = .{};
+        const app = app_state.app();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const split_id = try installTweenSplit(harness, app, arena.allocator());
+        _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{ .id = split_id, .to = 0.25, .duration_ms = 180, .easing = .standard });
+        for (timestamps, 0..) |timestamp_ns, index| {
+            try tweenFrame(harness, app, timestamp_ns);
+            fractions[run][index] = try splitFraction(harness, split_id);
+        }
+    }
+    for (fractions[0], fractions[1]) |first, second| {
+        try std.testing.expectEqual(first, second);
+    }
+}

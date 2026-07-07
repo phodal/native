@@ -468,7 +468,11 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "pendingScrollDeltaY += deltaY" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "emitQueuedScrollInputEvent" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "dispatch_after(dispatch_time(DISPATCH_TIME_NOW" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)emitRetainedCanvasFrameRequest" },
+        // The single per-surface frame-event scheduler: every producer
+        // (requests, completions, occluded completions) coalesces into
+        // one paced emission per display interval.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)scheduleFrameEventEmission" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)emitScheduledFrameEvent" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-drawable-integral-pixels", "Verify AppKit GPU surfaces use integral drawable pixels", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "ceil(size.width * scale)" },
@@ -679,6 +683,7 @@ pub fn build(b: *std.Build) void {
     addExampleTestStep(b, host_cli_exe, native_examples_step, "test-example-markdown-viewer", "Run markdown viewer example tests", "examples/markdown-viewer", .managed);
     addExampleTestStep(b, host_cli_exe, native_examples_step, "test-example-calculator", "Run calculator example tests", "examples/calculator", .managed);
     addExampleTestStep(b, host_cli_exe, native_examples_step, "test-example-notes", "Run notes example tests", "examples/notes", .managed);
+    addExampleTestStep(b, host_cli_exe, native_examples_step, "test-example-split-collapse", "Run split collapse example tests", "examples/split-collapse", .managed);
     addExampleTestStep(b, host_cli_exe, native_examples_step, "test-example-system-monitor", "Run system monitor example tests", "examples/system-monitor", .managed);
     addExampleTestStep(b, host_cli_exe, native_examples_step, "test-example-effects-probe", "Run effects probe example tests", "examples/effects-probe", .managed);
     addExampleTestStep(b, host_cli_exe, native_examples_step, "test-example-feed", "Run feed example tests", "examples/feed", .managed);

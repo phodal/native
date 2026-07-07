@@ -136,6 +136,37 @@ pub const CanvasRenderAnimation = struct {
     loop: CanvasRenderAnimationLoop = .none,
 };
 
+/// A LAYOUT tween the runtime drives on retained widget state: the value
+/// channel of a layout-owning widget — v1 covers a split's first-pane
+/// fraction — animates from its CURRENT retained value to `to` over
+/// `duration_ms`. Render animations (above) move pixels without moving
+/// layout; a layout tween moves the layout itself, so the neighboring
+/// pane reflows every step exactly as a divider drag would.
+///
+/// Replay discipline: the runtime samples an armed tween only from
+/// presented-frame timestamps (`GpuSurfaceFrameEvent.timestamp_ns`) —
+/// the same recorded clock the manual on_frame/Msg-tick idiom reads —
+/// and each step lands through the split-drag mutation path, noting the
+/// same `on_resize` events a pointer drag notes. A recorded session
+/// therefore replays to identical frames with no new event kinds.
+pub const CanvasWidgetLayoutTween = struct {
+    /// Split widget id whose first-pane fraction animates.
+    id: ObjectId,
+    /// Target first-pane fraction (what the model now declares).
+    to: f32,
+    duration_ms: u32 = 180,
+    easing: Easing = .standard,
+    spring: SpringToken = .{},
+};
+
+/// Eased 0..1 progress of a layout tween at `timestamp_ns`: the render
+/// animations' clock math (start stamped by the first advancing frame,
+/// duration in wall milliseconds of the frame clock) shared so both
+/// animation families sample identically from recorded timestamps.
+pub fn layoutTweenProgress(easing: Easing, spring: SpringToken, start_ns: u64, duration_ms: u32, timestamp_ns: u64) f32 {
+    return easedMotionProgress(easing, spring, rawMotionProgress(start_ns, duration_ms, timestamp_ns));
+}
+
 pub fn applyRenderOverrides(commands: []RenderCommand, overrides: []const CanvasRenderOverride) ?geometry.RectF {
     var bounds: ?geometry.RectF = null;
     for (commands) |*command| {

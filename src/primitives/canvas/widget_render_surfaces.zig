@@ -568,11 +568,18 @@ pub fn emitAccordionChevron(builder: *Builder, widget: Widget, tokens: DesignTok
     }
 }
 
-/// The house style TabsList: ONE muted rounded container the
-/// `segmented_control` triggers sit inside — the container provides the
-/// wash, the active trigger lifts to the surface, inactive triggers
-/// stay transparent. Borderless by default; themed control tokens or an
-/// explicit style can add one.
+/// The TabsList chrome, shaped by the theme's tab register
+/// (`ControlTokens.tabs_indicator`):
+///
+/// - `.pill` (house): ONE muted rounded container the
+///   `segmented_control` triggers sit inside — the container provides
+///   the wash, the active trigger lifts to the surface, inactive
+///   triggers stay transparent. Borderless by default; themed control
+///   tokens or an explicit style can add one.
+/// - `.underline`: a bare strip closed by a single bottom hairline (the
+///   `tabs` table's border channel) — no wash, no rounding. The active
+///   trigger's bar sinks to this same edge and covers the hairline
+///   where they meet.
 pub fn emitTabsListWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     // No children guard: the retained layout copy flattens children into
     // sibling nodes, so the container paints purely from its own frame
@@ -582,22 +589,50 @@ pub fn emitTabsListWidgetChrome(builder: *Builder, widget: Widget, tokens: Desig
     if (frame.isEmpty()) return;
     const visual = tokens.controls.tabs;
     const radius = controlRadius(widget, visual, tokens.radius.lg);
-    try builder.fillRoundedRect(.{
-        .id = widgetPartId(widget.id, 1),
-        .rect = frame,
-        .radius = radius,
-        .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface_subtle)),
-    });
-    if (widget.style.border orelse visual.border) |border| {
-        try builder.strokeRect(.{
-            .id = widgetPartId(widget.id, 2),
-            .rect = frame,
-            .radius = radius,
-            .stroke = .{
-                .fill = colorFill(border),
-                .width = controlStrokeWidth(widget, visual, tokens.stroke.hairline),
-            },
-        });
+    switch (tokens.controls.tabs_indicator) {
+        .pill => {
+            try builder.fillRoundedRect(.{
+                .id = widgetPartId(widget.id, 1),
+                .rect = frame,
+                .radius = radius,
+                .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface_subtle)),
+            });
+            if (widget.style.border orelse visual.border) |border| {
+                try builder.strokeRect(.{
+                    .id = widgetPartId(widget.id, 2),
+                    .rect = frame,
+                    .radius = radius,
+                    .stroke = .{
+                        .fill = colorFill(border),
+                        .width = controlStrokeWidth(widget, visual, tokens.stroke.hairline),
+                    },
+                });
+            }
+        },
+        .underline => {
+            // The strip stays transparent unless the author or theme
+            // states a wash explicitly — the register's ground is the
+            // page itself.
+            if (widget.style.background orelse visual.background) |background| {
+                try builder.fillRoundedRect(.{
+                    .id = widgetPartId(widget.id, 1),
+                    .rect = frame,
+                    .radius = radius,
+                    .fill = colorFill(background),
+                });
+            }
+            // The closing hairline: a filled rect (not a stroke) so it
+            // hugs the frame's bottom edge exactly — a centered stroke
+            // would straddle it and thin to a half-covered line.
+            const hairline = @min(frame.height, controlStrokeWidth(widget, visual, tokens.stroke.hairline));
+            if (hairline > 0) {
+                try builder.fillRect(.{
+                    .id = widgetPartId(widget.id, 2),
+                    .rect = pixelSnapGeometryRect(tokens, geometry.RectF.init(frame.x, frame.maxY() - hairline, frame.width, hairline)),
+                    .fill = colorFill(widget.style.border orelse visual.border orelse tokens.colors.border),
+                });
+            }
+        },
     }
 }
 

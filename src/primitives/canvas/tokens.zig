@@ -489,6 +489,11 @@ pub const ControlMetricTokens = struct {
     slider_track_height: f32 = 4,
     slider_thumb_width: f32 = 12,
     slider_thumb_height: f32 = 12,
+    /// The selected-tab marker's weight in the `.underline` tab register
+    /// (see `ControlTokens.tabs_indicator`): the bar drawn under the
+    /// active trigger's label. Unused by the house `.pill` register —
+    /// the default only matters once a theme opts into underlines.
+    tabs_indicator_thickness: f32 = 2,
 };
 
 pub const ShadowToken = struct {
@@ -830,6 +835,24 @@ pub const PixelSnapTokens = struct {
     scale: f32 = 1,
 };
 
+/// How a tab strip marks its selected trigger — a REGISTER choice, not
+/// a color: the two kinds are different geometry, so it lives beside
+/// the control tables rather than inside a `ControlVisualTokens` entry.
+///
+/// - `.pill`: the house treatment. The TabsList paints one muted
+///   rounded container; the active trigger lifts to the page surface
+///   as a bordered pill inside it.
+/// - `.underline`: text tabs on a bare strip. The TabsList paints only
+///   a bottom hairline (its `tabs` table's border channel), and the
+///   active trigger draws a short bar under its label
+///   (`ControlMetricTokens.tabs_indicator_thickness` weight, ink from
+///   the `segmented_control` table's active_background channel, falling
+///   back to the primary text color) that overlaps the strip hairline.
+pub const TabsIndicatorKind = enum {
+    pill,
+    underline,
+};
+
 pub const ControlVisualTokens = struct {
     background: ?Color = null,
     hover_background: ?Color = null,
@@ -880,6 +903,10 @@ pub const ControlTokens = struct {
     /// wash the `segmented_control` triggers sit on.
     tabs: ControlVisualTokens = .{},
     segmented_control: ControlVisualTokens = .{},
+    /// The tab strip's indicator register — pill (house) or underline.
+    /// A geometry switch shared by the TabsList chrome and the trigger
+    /// emitter, so both halves of the control change shape together.
+    tabs_indicator: TabsIndicatorKind = .pill,
     checkbox: ControlVisualTokens = .{},
     radio: ControlVisualTokens = .{},
     switch_control: ControlVisualTokens = .{},
@@ -1070,6 +1097,7 @@ pub const ControlMetricTokenOverrides = struct {
     slider_track_height: ?f32 = null,
     slider_thumb_width: ?f32 = null,
     slider_thumb_height: ?f32 = null,
+    tabs_indicator_thickness: ?f32 = null,
 
     pub fn apply(self: ControlMetricTokenOverrides, base: ControlMetricTokens) ControlMetricTokens {
         return applyFlatTokenOverrides(ControlMetricTokens, base, self);
@@ -1224,6 +1252,7 @@ pub const ControlTokenOverrides = struct {
     data_cell: ControlVisualTokenOverrides = .{},
     tabs: ControlVisualTokenOverrides = .{},
     segmented_control: ControlVisualTokenOverrides = .{},
+    tabs_indicator: ?TabsIndicatorKind = null,
     checkbox: ControlVisualTokenOverrides = .{},
     radio: ControlVisualTokenOverrides = .{},
     switch_control: ControlVisualTokenOverrides = .{},
@@ -1269,6 +1298,7 @@ pub const ControlTokenOverrides = struct {
         next.data_cell = self.data_cell.apply(next.data_cell);
         next.tabs = self.tabs.apply(next.tabs);
         next.segmented_control = self.segmented_control.apply(next.segmented_control);
+        if (self.tabs_indicator) |tabs_indicator| next.tabs_indicator = tabs_indicator;
         next.checkbox = self.checkbox.apply(next.checkbox);
         next.radio = self.radio.apply(next.radio);
         next.switch_control = self.switch_control.apply(next.switch_control);

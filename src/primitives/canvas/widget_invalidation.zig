@@ -11,6 +11,7 @@ const widget_tree = @import("widget_tree.zig");
 const widget_render = @import("widget_render.zig");
 const widget_render_style = @import("widget_render_style.zig");
 const widget_render_surfaces = @import("widget_render_surfaces.zig");
+const widget_render_controls = @import("widget_render_controls.zig");
 const textSpansEqual = @import("text_spans.zig").textSpansEqual;
 const chartDataEqual = @import("chart.zig").chartDataEqual;
 
@@ -418,6 +419,16 @@ fn widgetFullPaintBoundsWithTransform(node: WidgetLayoutNode, transform: Affine,
     // repaint covers exactly what the emit pass inks.
     if (widget_render_surfaces.bubbleWidgetReactionsPillRect(widgetWithFrame(node.widget, node.frame), tokens)) |pill| {
         bounds = geometry.RectF.unionWith(bounds, pill.inflate(geometry.InsetsF.all(widget_render_surfaces.bubble_reactions_ring)).normalized());
+    }
+    // The underline tab register's selected bar sinks past the trigger
+    // frame to the TabsList container's bottom edge (the same
+    // outside-the-box chrome as the bubble pill above), so its rect
+    // joins the damage region — selection moving between triggers must
+    // erase the old bar, not just the old frame.
+    if (node.widget.kind == .segmented_control) {
+        if (widget_render_controls.segmentedControlUnderlineRect(widgetWithFrame(node.widget, node.frame), tokens)) |bar| {
+            bounds = geometry.RectF.unionWith(bounds, bar.normalized());
+        }
     }
     return transform.transformRect(bounds).normalized();
 }

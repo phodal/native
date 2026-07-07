@@ -84,6 +84,10 @@ pub fn designTokens(color_scheme: ColorScheme, contrast: ColorContrast) DesignTo
             .slider_track_height = 8,
             .slider_thumb_width = 6,
             .slider_thumb_height = 14,
+            // The underline tab register's selected bar: a 2px rule in
+            // the primary ink under the active label (see the tabs
+            // entries in `controlTokens` below).
+            .tabs_indicator_thickness = 2,
         },
     };
 }
@@ -345,6 +349,31 @@ fn controlTokens(color_scheme: ColorScheme, contrast: ColorContrast) ControlToke
                 .dark => Color.rgb8(69, 69, 69),
             },
             .radius = 1,
+        },
+        // The pack's tabs are the UNDERLINE register, a different shape
+        // from the house pill-on-muted-track: bare 14px text triggers on
+        // a transparent strip, a 1px hairline closing the strip's bottom
+        // edge, and a 2px bar in the primary ink under the active label,
+        // overlapping the hairline where they meet. Inactive labels sit
+        // in the secondary ink and preview the primary ink on hover; the
+        // bar's ink itself falls back to `colors.text`, so no
+        // segmented_control entry is needed.
+        .tabs_indicator = .underline,
+        .tabs = .{
+            // The strip hairline is a SOLID quiet-border step (gray-400:
+            // light #eaeaea, dark #333333), not the pack's translucent
+            // hairline — a strip divider underlines content rather than
+            // outlining a control, so it must stay whisper-quiet on the
+            // page. High contrast keeps the palette's loud hairline
+            // instead: the mute would undo the contrast the user asked
+            // for.
+            .border = switch (contrast) {
+                .standard => switch (color_scheme) {
+                    .light => Color.rgb8(234, 234, 234),
+                    .dark => Color.rgb8(51, 51, 51),
+                },
+                .high => null,
+            },
         },
         // Floating and raised surfaces take the 12px corner; the
         // tooltip stays on the control corner (it is a label, not a

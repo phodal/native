@@ -883,50 +883,110 @@ fn segmentedTriggerRadius(widget: Widget, visual: ControlVisualTokens, tokens: D
     return Radius.all(@max(0, widgetSizedRadiusValue(widget, container) - widget_model.tabs_list_inset));
 }
 
+/// The selected-tab bar for the `.underline` tab register: a short
+/// filled rect hugging the trigger's label (measured width plus a 2px
+/// shoulder each side — the label's own breathing room, mirroring the
+/// house reference's tab padding), sunk to the BOTTOM of the TabsList
+/// container. The trigger sits `tabs_list_inset` above the container's
+/// edge, so the bar extends past the trigger frame by exactly that
+/// inset and covers the strip hairline — the underline and the track
+/// line meet, which is the register's signature. Null in the `.pill`
+/// register; shared with invalidation so damage covers the overhang.
+pub fn segmentedControlUnderlineRect(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
+    if (tokens.controls.tabs_indicator != .underline) return null;
+    const frame = widget.frame.normalized();
+    if (frame.isEmpty()) return null;
+    const thickness = @min(frame.height, widgetSizedDensityValue(widget, tokens, tokens.metrics.tabs_indicator_thickness));
+    const text_size = widgetLabelTextSize(widget, tokens);
+    const text_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.font_id, widget.text, text_size);
+    // An icon-only or empty trigger underlines its full width — there
+    // is no label to hug.
+    const bar_width = if (text_width > 0) @min(frame.width, text_width + 4) else frame.width;
+    return pixelSnapGeometryRect(tokens, geometry.RectF.init(
+        frame.x + (frame.width - bar_width) * 0.5,
+        frame.maxY() + widget_model.tabs_list_inset - thickness,
+        bar_width,
+        thickness,
+    ));
+}
+
 pub fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const selected = widget.state.selected or widget.value >= 0.5;
     const visual = selectionControlVisualTokens(widget, tokens);
     const radius = segmentedTriggerRadius(widget, visual, tokens);
     const text_size = widgetLabelTextSize(widget, tokens);
     const text_inset = widgetControlInset(widget, tokens, tokens.spacing.md);
-    // The tab-trigger treatment: the active segment lifts to the page
-    // surface with a hairline border; inactive segments stay TRANSPARENT
-    // with muted text, so the muted TabsList container behind them
-    // (`emitTabsListWidgetChrome`) provides the wash — selection reads
-    // by elevation, not by an accent fill.
-    if (selected) {
-        try builder.fillRoundedRect(.{
-            .id = widgetPartId(widget.id, 1),
-            .rect = widget.frame,
-            .radius = radius,
-            .fill = colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.surface)),
-        });
-    } else if (widget.style.background orelse visual.background) |background| {
-        try builder.fillRoundedRect(.{
-            .id = widgetPartId(widget.id, 1),
-            .rect = widget.frame,
-            .radius = radius,
-            .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, background))),
-        });
-    }
-    if (selected) {
-        try builder.strokeRect(.{
-            .id = widgetPartId(widget.id, 2),
-            .rect = widget.frame,
-            .radius = radius,
-            .stroke = .{
-                .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
-                .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
-            },
-        });
+    switch (tokens.controls.tabs_indicator) {
+        // The house tab-trigger treatment: the active segment lifts to
+        // the page surface with a hairline border; inactive segments
+        // stay TRANSPARENT with muted text, so the muted TabsList
+        // container behind them (`emitTabsListWidgetChrome`) provides
+        // the wash — selection reads by elevation, not by an accent
+        // fill.
+        .pill => {
+            if (selected) {
+                try builder.fillRoundedRect(.{
+                    .id = widgetPartId(widget.id, 1),
+                    .rect = widget.frame,
+                    .radius = radius,
+                    .fill = colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.surface)),
+                });
+            } else if (widget.style.background orelse visual.background) |background| {
+                try builder.fillRoundedRect(.{
+                    .id = widgetPartId(widget.id, 1),
+                    .rect = widget.frame,
+                    .radius = radius,
+                    .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, background))),
+                });
+            }
+            if (selected) {
+                try builder.strokeRect(.{
+                    .id = widgetPartId(widget.id, 2),
+                    .rect = widget.frame,
+                    .radius = radius,
+                    .stroke = .{
+                        .fill = widgetBorderFill(widget, visual.border orelse tokens.colors.border),
+                        .width = controlStrokeWidth(widget, visual, tokens.stroke.regular),
+                    },
+                });
+            }
+        },
+        // The underline treatment: triggers are bare text — no pill, no
+        // border — and the active one carries a short bar under its
+        // label in the primary ink. State speaks through TYPE (active
+        // ink vs muted) plus the bar, never through a fill.
+        .underline => {
+            if (widget.style.background orelse visual.background) |background| {
+                try builder.fillRoundedRect(.{
+                    .id = widgetPartId(widget.id, 1),
+                    .rect = widget.frame,
+                    .radius = radius,
+                    .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, background))),
+                });
+            }
+            if (selected) {
+                if (segmentedControlUnderlineRect(widget, tokens)) |bar| {
+                    try builder.fillRect(.{
+                        .id = widgetPartId(widget.id, 2),
+                        .rect = bar,
+                        .fill = colorFill(widgetAccentColor(widget, visual.active_background orelse tokens.colors.text)),
+                    });
+                }
+            }
+        },
     }
     if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 4, widget.frame, radius);
+    // Inactive labels sit in the muted ink; in the underline register a
+    // hovered (enabled) trigger previews the active ink — the register
+    // has no hover WASH, so the type itself is the hover feedback.
+    const active_ink = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
+    const hover_preview = tokens.controls.tabs_indicator == .underline and widget.state.hovered and !widget.state.disabled;
     try builder.drawText(.{
         .id = widgetPartId(widget.id, 3),
         .font_id = tokens.typography.font_id,
         .size = text_size,
         .origin = pixelSnapTextPoint(tokens, boundedTextOrigin(widget.frame, text_size, text_inset)),
-        .color = if (selected) widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text) else widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted),
+        .color = if (selected or hover_preview) active_ink else widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text_muted),
         .text = widget.text,
         .text_layout = boundedTextLayout(widget.frame, text_size, text_inset, .center, .none, widget.text_overflow, tokens),
     });

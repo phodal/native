@@ -751,13 +751,23 @@ test "gpu components display list renders stable geist reference snapshot" {
     // the slider control table. Only the slider tile moves. Reviewed
     // via the live docs tile under the pack in both schemes before
     // blessing.
+    // Re-pinned 2026-07-07 (tabs fidelity round): the pack's tabs move
+    // to the underline register through the new `tabs_indicator` token
+    // channel — bare text triggers on a transparent strip, a 1px solid
+    // gray-400 hairline closing the strip's bottom edge, and a 2px bar
+    // in the primary ink hugging the active label, overlapping the
+    // hairline where they meet. Inactive labels keep the secondary ink.
+    // Only the tabs tile moves; the house pin above is untouched (the
+    // pill register renders byte-identically). Reviewed via the live
+    // docs tabs tile under the pack toggle in both site schemes before
+    // blessing.
     const pixel_count = @as(usize, @intFromFloat(canvas_width)) * @as(usize, @intFromFloat(canvas_height)) * 4;
     const pixels = try std.testing.allocator.alloc(u8, pixel_count);
     defer std.testing.allocator.free(pixels);
     const scratch = try std.testing.allocator.alloc(u8, pixel_count);
     defer std.testing.allocator.free(scratch);
     const surface = try renderComponentsReferenceSurface(componentTokensForPack(.geist, .light), pixels, scratch);
-    try std.testing.expectEqual(@as(u64, 3652534619317080972), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 13909327935355943876), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

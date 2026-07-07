@@ -350,6 +350,94 @@ test "runtime spins visible spinners and parks the view on unmount" {
     try std.testing.expect(!view.canvasRenderAnimationsActive(60 * std.time.ns_per_s));
 }
 
+test "runtime staggers segmented spinner opacity loops and removes them on unmount" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-canvas-spinner-segments", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    try harness.start(app_state.app());
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 120),
+    });
+
+    const spinner = canvas.Widget{
+        .id = 5,
+        .kind = .spinner,
+        .frame = geometry.RectF.init(20, 20, 20, 20),
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{spinner} }, geometry.RectF.init(0, 0, 240, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    // A segmented-register theme (structure rides the token surface, so
+    // the pack choice IS the register choice — the runtime never asks).
+    const tokens = canvas.DesignTokens.theme(.{ .pack = .geist });
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", tokens);
+
+    // The visible dial arms one `.wrap` opacity loop PER SEGMENT, each
+    // segment starting one count-th of the period after its neighbor.
+    const view = &harness.runtime.views[0];
+    const count = canvas.spinnerWidgetSegmentCount(tokens);
+    try std.testing.expectEqual(@as(usize, 12), count);
+    try std.testing.expectEqual(count, view.canvas_widget_loop_animation_count);
+    try std.testing.expectEqual(count, view.canvas_render_animation_count);
+    const period_ns: u64 = 1200 * std.time.ns_per_ms;
+    const step_ns = period_ns / 12;
+    const anchor = view.canvasRenderAnimations()[0].start_ns;
+    for (view.canvasRenderAnimations(), 0..) |animation, segment| {
+        try std.testing.expectEqual(canvas.spinnerWidgetSegmentCommandId(5, segment), animation.id);
+        try std.testing.expectEqual(canvas.CanvasRenderAnimationLoop.wrap, animation.loop);
+        try std.testing.expectEqual(@as(u32, 1200), animation.duration_ms);
+        try std.testing.expectEqual(@as(f32, 1), animation.from_opacity.?);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.15), animation.to_opacity.?, 0.001);
+        try std.testing.expectEqual(anchor + step_ns * segment, animation.start_ns);
+    }
+    try std.testing.expect(view.canvasRenderAnimationsActive(60 * std.time.ns_per_s));
+
+    // The trail SAMPLES as a linear head-to-tail ramp: one whole period
+    // past the anchor, segment 0 has just restarted (the bright head)
+    // while its counterclockwise neighbor, one step older, has faded
+    // one twelfth of the way to the floor.
+    var overrides: [16]canvas.CanvasRenderOverride = undefined;
+    const sampled = try view.sampleCanvasRenderAnimations(anchor + period_ns, &overrides);
+    try std.testing.expectEqual(count, sampled.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), sampled[0].opacity.?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1 - 0.85 / 12.0), sampled[11].opacity.?, 0.001);
+    // Half a period along, the head's opposite segment is mid-fade.
+    const mid = try view.sampleCanvasRenderAnimations(anchor + period_ns + period_ns / 2, &overrides);
+    try std.testing.expectApproxEqAbs(@as(f32, 1 - 0.85 / 2.0), mid[0].opacity.?, 0.001);
+
+    // An unrelated display refresh must NOT reset the stagger's phase.
+    _ = try harness.runtime.emitCanvasWidgetDisplayListWithStoredTokens(1, "canvas");
+    try std.testing.expectEqual(count, view.canvas_render_animation_count);
+    try std.testing.expectEqual(anchor, view.canvasRenderAnimations()[0].start_ns);
+    try std.testing.expectEqual(anchor + step_ns * 11, view.canvasRenderAnimations()[11].start_ns);
+
+    // Unmount: a rebuild without the spinner removes every segment loop
+    // so the view goes idle (the frame pump's park condition).
+    const empty = [_]canvas.Widget{.{
+        .id = 6,
+        .kind = .text,
+        .frame = geometry.RectF.init(10, 10, 80, 20),
+        .text = "Done",
+    }};
+    var empty_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const empty_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &empty }, geometry.RectF.init(0, 0, 240, 120), &empty_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", empty_layout);
+    try std.testing.expectEqual(@as(usize, 0), view.canvas_widget_loop_animation_count);
+    try std.testing.expectEqual(@as(usize, 0), view.canvas_render_animation_count);
+    try std.testing.expect(!view.canvasRenderAnimationsActive(60 * std.time.ns_per_s));
+}
+
 test "runtime pulses visible skeletons and removes the loop on unmount" {
     const TestApp = struct {
         fn app(self: *@This()) App {

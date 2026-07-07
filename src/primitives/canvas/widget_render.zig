@@ -26,6 +26,7 @@ const Error = canvas.Error;
 const ObjectId = canvas.ObjectId;
 const Builder = canvas.Builder;
 const Affine = drawing_model.Affine;
+const Color = drawing_model.Color;
 const Radius = drawing_model.Radius;
 const Fill = drawing_model.Fill;
 const Stroke = drawing_model.Stroke;
@@ -1463,67 +1464,180 @@ fn emitTableRowSeparatorLine(builder: *Builder, row_id: ObjectId, row_frame: geo
     });
 }
 
-/// Compact activity-indicator stroke: 2px at every size (the icon
-/// register), before per-widget/theme overrides.
-const spinner_stroke_width: f32 = 2;
-/// Sweep of the accent arc segment, in degrees — a quarter turn.
-const spinner_arc_sweep_degrees: f32 = 90;
+/// Sweep of the arc register's stroked segment, in degrees: the box
+/// leaves a 72-degree mouth open, so the shape reads as a broken ring
+/// even when a static render freezes it.
+const spinner_arc_sweep_degrees: f32 = 288;
+/// Arc centerline radius as a fraction of the box extent — the icon
+/// register's inset circle (a radius-9 circle in a 24 box), so the
+/// glyph breathes inside its frame instead of bleeding to the edge.
+const spinner_arc_radius_ratio: f32 = 9.0 / 24.0;
+/// Arc stroke as a fraction of the box extent (a 2-unit stroke in the
+/// 24 box): the stroke scales with the size rung, before per-widget and
+/// theme overrides.
+const spinner_arc_stroke_ratio: f32 = 2.0 / 24.0;
 
-/// Draw a `.spinner` widget: a muted full-circle track plus an accent
-/// quarter-arc segment, both stroked at the shared 2px width — the
-/// house activity-indicator register. Emission is deterministic: the
-/// arc's start angle is a pure function of `widget.value` (fractions of
-/// a turn from twelve o'clock), so static renders — docs previews,
-/// screenshots — pose it reproducibly. The LIVE spin is not emitted
-/// here: the runtime keeps a looping `.wrap` rotation render animation
-/// on the arc command (`spinnerWidgetArcCommandId`), rotating it about
-/// `spinnerWidgetRotationCenter` without re-emitting the display list.
+/// Draw a `.spinner` widget. Emission is deterministic: the pose is a
+/// pure function of `widget.value` (fractions of a cycle from twelve
+/// o'clock), so static renders — docs previews, screenshots — pose it
+/// reproducibly. The LIVE motion is not emitted here; the runtime arms
+/// looping render animations on the emitted command ids instead of
+/// re-emitting the display list. Two structural registers, chosen by
+/// `metrics.spinner_style` (structure is a pack signature — see the
+/// token's comment — so the emitter never asks which pack is active):
+///
+/// - `.arc`: one stroked 288-degree arc in the widget's ink, no track;
+///   the runtime spins it about `spinnerWidgetRotationCenter` via a
+///   `.wrap` rotation on `spinnerWidgetArcCommandId`.
+/// - `.segmented`: a dial of radial pill segments at fixed angles, one
+///   `fillPath` per segment (`spinnerWidgetSegmentCommandId`) so the
+///   runtime can stagger a `.wrap` opacity loop per segment — the
+///   bright head steps around the dial while each pill fades in place.
+///   Animated frames emit every pill at full ink (the OVERRIDE channel
+///   multiplies emitted alpha, so a baked fade would double-darken);
+///   under reduced motion no loop ever arms, so the fade IS baked and
+///   the static pose shows the head-to-tail trail.
 fn emitSpinnerWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = componentControlVisualTokens(widget, tokens);
     const normalized = widget.frame.normalized();
     if (normalized.isEmpty()) return;
     const size = @min(normalized.width, normalized.height);
     if (size <= 0) return;
-
-    const stroke_width = controlStrokeWidth(widget, visual, spinner_stroke_width);
     const center = geometry.PointF.init(normalized.x + normalized.width * 0.5, normalized.y + normalized.height * 0.5);
-    const radius = (size - stroke_width) * 0.5;
+    const ink = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
+
+    switch (tokens.metrics.spinner_style) {
+        .arc => try emitSpinnerArc(builder, widget, visual, center, size, ink),
+        .segmented => try emitSpinnerSegments(builder, widget, tokens, center, size, ink),
+    }
+}
+
+/// The arc register: a single stroked arc whose start angle carries the
+/// deterministic pose. Split into <=90-degree cubic segments (the
+/// circle-from-cubics constant generalized per segment angle), accurate
+/// to sub-pixel error at control sizes.
+fn emitSpinnerArc(builder: *Builder, widget: Widget, visual: ControlVisualTokens, center: geometry.PointF, size: f32, ink: Color) Error!void {
+    const stroke_width = controlStrokeWidth(widget, visual, size * spinner_arc_stroke_ratio);
+    const radius = size * spinner_arc_radius_ratio;
     if (radius <= 0) return;
 
-    const track_rect = geometry.RectF.init(center.x - radius, center.y - radius, radius * 2, radius * 2);
-    try builder.strokeRect(.{
-        .id = widgetPartId(widget.id, 1),
-        .rect = track_rect,
-        .radius = Radius.all(radius),
-        .stroke = .{
-            .fill = colorFill(widgetBackgroundColor(widget, visual.background orelse tokens.colors.border)),
-            .width = stroke_width,
-        },
-    });
-
-    // One cubic approximates the quarter arc to sub-pixel error at
-    // these sizes (the standard circle-from-cubics constant).
     const start_degrees = -90 + std.math.clamp(widget.value, 0, 1) * 360;
+    const segment_total: usize = @intFromFloat(@ceil(spinner_arc_sweep_degrees / 90.0));
+    const delta_degrees = spinner_arc_sweep_degrees / @as(f32, @floatFromInt(segment_total));
+    const kappa = (4.0 / 3.0) * @tan(std.math.degreesToRadians(delta_degrees) * 0.25) * radius;
+
+    const elements = try allocFramePathElements(1 + segment_total);
     const start_radians = std.math.degreesToRadians(start_degrees);
-    const end_radians = std.math.degreesToRadians(start_degrees + spinner_arc_sweep_degrees);
-    const kappa: f32 = 0.5522847498 * radius;
-    const start = geometry.PointF.init(center.x + radius * @cos(start_radians), center.y + radius * @sin(start_radians));
-    const end = geometry.PointF.init(center.x + radius * @cos(end_radians), center.y + radius * @sin(end_radians));
-    const elements = try allocFramePathElements(2);
-    elements[0] = .{ .verb = .move_to, .points = .{ start, geometry.PointF.zero(), geometry.PointF.zero() } };
-    elements[1] = .{ .verb = .cubic_to, .points = .{
-        geometry.PointF.init(start.x - kappa * @sin(start_radians), start.y + kappa * @cos(start_radians)),
-        geometry.PointF.init(end.x + kappa * @sin(end_radians), end.y - kappa * @cos(end_radians)),
-        end,
+    elements[0] = .{ .verb = .move_to, .points = .{
+        geometry.PointF.init(center.x + radius * @cos(start_radians), center.y + radius * @sin(start_radians)),
+        geometry.PointF.zero(),
+        geometry.PointF.zero(),
     } };
+    for (0..segment_total) |segment| {
+        const a0 = std.math.degreesToRadians(start_degrees + delta_degrees * @as(f32, @floatFromInt(segment)));
+        const a1 = std.math.degreesToRadians(start_degrees + delta_degrees * @as(f32, @floatFromInt(segment + 1)));
+        const from = geometry.PointF.init(center.x + radius * @cos(a0), center.y + radius * @sin(a0));
+        const to = geometry.PointF.init(center.x + radius * @cos(a1), center.y + radius * @sin(a1));
+        elements[1 + segment] = .{ .verb = .cubic_to, .points = .{
+            geometry.PointF.init(from.x - kappa * @sin(a0), from.y + kappa * @cos(a0)),
+            geometry.PointF.init(to.x + kappa * @sin(a1), to.y - kappa * @cos(a1)),
+            to,
+        } };
+    }
     try builder.strokePath(.{
         .id = spinnerWidgetArcCommandId(widget.id),
         .elements = elements,
         .stroke = .{
-            .fill = colorFill(widgetForegroundColor(widget, tokens, visual.foreground orelse visual.active_background orelse tokens.colors.accent)),
+            .fill = colorFill(ink),
             .width = stroke_width,
         },
     });
+}
+
+/// The segmented register: `n` pill segments pointing outward at fixed
+/// angles, segment 0 at twelve o'clock and the rest stepping clockwise.
+/// Each pill is a filled stadium path (two straight edges, two
+/// two-cubic semicircle caps) so it stays a pill at any angle —
+/// rounded-rect commands are axis-aligned and cannot rotate.
+fn emitSpinnerSegments(builder: *Builder, widget: Widget, tokens: DesignTokens, center: geometry.PointF, size: f32, ink: Color) Error!void {
+    const count = spinnerWidgetSegmentCount(tokens);
+    const length = size * @max(0, tokens.metrics.spinner_segment_length_ratio);
+    const thickness = size * @max(0, tokens.metrics.spinner_segment_thickness_ratio);
+    const orbit = size * @max(0, tokens.metrics.spinner_segment_radius_ratio);
+    if (length <= 0 or thickness <= 0) return;
+    const tail = std.math.clamp(tokens.metrics.spinner_tail_opacity, 0, 1);
+    // Reduced motion is the one world where the runtime never arms the
+    // per-segment opacity loops, so the trail must be baked into the
+    // emitted inks for the register to read as an indicator at all.
+    // Animated worlds bake nothing: overrides MULTIPLY emitted alpha,
+    // and a baked trail under an animated trail would double-darken.
+    const reduce_motion = tokens.motion.durationMs(.slow) == 0;
+    const value = std.math.clamp(widget.value, 0, 1);
+
+    const cap = thickness * 0.5;
+    const half = @max(length * 0.5 - cap, 0);
+    const cap_kappa: f32 = 0.5522847498 * cap;
+    for (0..count) |segment| {
+        const angle = std.math.degreesToRadians(-90 + 360 * @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(count)));
+        // Radial and tangential unit vectors: pills point outward along
+        // `u`, caps bulge along `u`, straight edges run offset by `v`.
+        const u = geometry.PointF.init(@cos(angle), @sin(angle));
+        const v = geometry.PointF.init(-@sin(angle), @cos(angle));
+        const pill_center = geometry.PointF.init(center.x + orbit * u.x, center.y + orbit * u.y);
+        const inner = geometry.PointF.init(pill_center.x - half * u.x, pill_center.y - half * u.y);
+        const outer = geometry.PointF.init(pill_center.x + half * u.x, pill_center.y + half * u.y);
+
+        var opacity: f32 = 1;
+        if (reduce_motion) {
+            // The frozen pose: the head sits `value` turns past twelve
+            // o'clock, and each step CLOCKWISE ahead of it is one cycle
+            // fraction older — the same linear head-to-tail ramp the
+            // staggered loops trace live.
+            var distance = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(count)) - value;
+            distance -= @floor(distance);
+            var age = 1 - distance;
+            if (age >= 1) age = 0;
+            opacity = 1 - (1 - tail) * age;
+        }
+
+        const a = geometry.PointF.init(inner.x + cap * v.x, inner.y + cap * v.y);
+        const b = geometry.PointF.init(outer.x + cap * v.x, outer.y + cap * v.y);
+        const outer_mid = geometry.PointF.init(outer.x + cap * u.x, outer.y + cap * u.y);
+        const e = geometry.PointF.init(outer.x - cap * v.x, outer.y - cap * v.y);
+        const f = geometry.PointF.init(inner.x - cap * v.x, inner.y - cap * v.y);
+        const inner_mid = geometry.PointF.init(inner.x - cap * u.x, inner.y - cap * u.y);
+
+        const elements = try allocFramePathElements(8);
+        elements[0] = .{ .verb = .move_to, .points = .{ a, geometry.PointF.zero(), geometry.PointF.zero() } };
+        elements[1] = .{ .verb = .line_to, .points = .{ b, geometry.PointF.zero(), geometry.PointF.zero() } };
+        elements[2] = .{ .verb = .cubic_to, .points = .{
+            geometry.PointF.init(b.x + cap_kappa * u.x, b.y + cap_kappa * u.y),
+            geometry.PointF.init(outer_mid.x + cap_kappa * v.x, outer_mid.y + cap_kappa * v.y),
+            outer_mid,
+        } };
+        elements[3] = .{ .verb = .cubic_to, .points = .{
+            geometry.PointF.init(outer_mid.x - cap_kappa * v.x, outer_mid.y - cap_kappa * v.y),
+            geometry.PointF.init(e.x + cap_kappa * u.x, e.y + cap_kappa * u.y),
+            e,
+        } };
+        elements[4] = .{ .verb = .line_to, .points = .{ f, geometry.PointF.zero(), geometry.PointF.zero() } };
+        elements[5] = .{ .verb = .cubic_to, .points = .{
+            geometry.PointF.init(f.x - cap_kappa * u.x, f.y - cap_kappa * u.y),
+            geometry.PointF.init(inner_mid.x - cap_kappa * v.x, inner_mid.y - cap_kappa * v.y),
+            inner_mid,
+        } };
+        elements[6] = .{ .verb = .cubic_to, .points = .{
+            geometry.PointF.init(inner_mid.x + cap_kappa * v.x, inner_mid.y + cap_kappa * v.y),
+            geometry.PointF.init(a.x - cap_kappa * u.x, a.y - cap_kappa * u.y),
+            a,
+        } };
+        elements[7] = .{ .verb = .close };
+        try builder.fillPath(.{
+            .id = spinnerWidgetSegmentCommandId(widget.id, segment),
+            .elements = elements,
+            .fill = colorFill(colorWithAlpha(ink, ink.a * opacity)),
+        });
+    }
 }
 
 /// The command id of a spinner's accent arc segment — the part slot
@@ -1539,6 +1653,22 @@ pub fn spinnerWidgetArcCommandId(id: ObjectId) ObjectId {
 pub fn spinnerWidgetRotationCenter(widget: Widget, tokens: DesignTokens) geometry.PointF {
     const normalized = pixelSnapGeometryRect(tokens, widget.frame).normalized();
     return geometry.PointF.init(normalized.x + normalized.width * 0.5, normalized.y + normalized.height * 0.5);
+}
+
+/// The command id of segment `index` of a segmented-register spinner —
+/// the part slot `emitSpinnerSegments` fills it under — so the runtime
+/// can stagger a looping opacity animation per segment.
+pub fn spinnerWidgetSegmentCommandId(id: ObjectId, index: usize) ObjectId {
+    return widgetPartId(id, @intCast(1 + index));
+}
+
+/// How many segments a segmented-register spinner draws: the token
+/// count clamped to the widget part-id space (16 slots per widget, one
+/// reserved so slot arithmetic never rolls into the next widget's id
+/// range). Emitter and runtime both resolve the count through here, so
+/// the armed opacity loops always match the emitted commands one-to-one.
+pub fn spinnerWidgetSegmentCount(tokens: DesignTokens) usize {
+    return @intCast(std.math.clamp(tokens.metrics.spinner_segment_count, 3, 15));
 }
 
 // ------------------------------------------------------------------ chart

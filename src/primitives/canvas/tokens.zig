@@ -436,6 +436,20 @@ pub const StateTokens = struct {
     secondary_hover_alpha: f32 = 0.8,
 };
 
+/// The spinner's structural register: which SHAPE the activity
+/// indicator draws. Structure is a pack signature the same way thumb
+/// shape is for sliders, so it rides the token surface — the emitter
+/// reads the channel and never asks which pack is active.
+pub const SpinnerStyleToken = enum {
+    /// A single stroked arc that the runtime spins continuously — the
+    /// house register.
+    arc,
+    /// A dial of radial pill segments at fixed angles whose opacities
+    /// fade head-to-tail — the runtime staggers one opacity loop per
+    /// segment so the bright head steps around the dial.
+    segmented,
+};
+
 /// The control metric ladder: the measured size register every control
 /// draws from, promoted to tokens so a theme pack can restate the whole
 /// scale (heights, insets, icon metrics) without touching layout code.
@@ -494,6 +508,34 @@ pub const ControlMetricTokens = struct {
     /// active trigger's label. Unused by the house `.pill` register —
     /// the default only matters once a theme opts into underlines.
     tabs_indicator_thickness: f32 = 2,
+    /// The spinner's structural register, promoted to tokens because
+    /// indicator SHAPE is a pack signature, not a color: the house
+    /// spinner is one stroked arc spun continuously, while other
+    /// registers draw a dial of fading pill segments. The segment
+    /// fields are ratios of the spinner's box (so every size rung keeps
+    /// the register's proportions) and are read only when the style is
+    /// `.segmented`; the defaults leave `.arc` rendering untouched.
+    spinner_style: SpinnerStyleToken = .arc,
+    /// Segments around the dial. Clamped to the widget part-id space at
+    /// emit time (15 slots), so counts stay honest per-command targets
+    /// for the runtime's per-segment opacity loops.
+    spinner_segment_count: u32 = 12,
+    /// Radial pill length as a fraction of the box extent.
+    spinner_segment_length_ratio: f32 = 0.25,
+    /// Pill thickness as a fraction of the box extent.
+    spinner_segment_thickness_ratio: f32 = 0.1,
+    /// Distance from the dial center to each pill's own center, as a
+    /// fraction of the box extent.
+    spinner_segment_radius_ratio: f32 = 0.365,
+    /// The opacity floor a segment fades to at the end of the trail;
+    /// the head sits at full strength.
+    spinner_tail_opacity: f32 = 0.15,
+    /// One full cycle of the indicator, in milliseconds: a whole turn
+    /// of the arc register, or one head-lap of the segmented dial. Kept
+    /// with the structural fields (not the motion ladder) because the
+    /// cycle is part of the register's identity, and reduced motion
+    /// already gates the loop through `MotionTokens` upstream.
+    spinner_period_ms: u32 = 1000,
 };
 
 pub const ShadowToken = struct {
@@ -1098,6 +1140,13 @@ pub const ControlMetricTokenOverrides = struct {
     slider_thumb_width: ?f32 = null,
     slider_thumb_height: ?f32 = null,
     tabs_indicator_thickness: ?f32 = null,
+    spinner_style: ?SpinnerStyleToken = null,
+    spinner_segment_count: ?u32 = null,
+    spinner_segment_length_ratio: ?f32 = null,
+    spinner_segment_thickness_ratio: ?f32 = null,
+    spinner_segment_radius_ratio: ?f32 = null,
+    spinner_tail_opacity: ?f32 = null,
+    spinner_period_ms: ?u32 = null,
 
     pub fn apply(self: ControlMetricTokenOverrides, base: ControlMetricTokens) ControlMetricTokens {
         return applyFlatTokenOverrides(ControlMetricTokens, base, self);

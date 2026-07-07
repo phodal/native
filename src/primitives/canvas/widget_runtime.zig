@@ -217,6 +217,14 @@ pub fn spinnerWidgetRotationCenter(widget: Widget, tokens: DesignTokens) geometr
     return widget_render.spinnerWidgetRotationCenter(widget, tokens);
 }
 
+pub fn spinnerWidgetSegmentCommandId(id: ObjectId, index: usize) ObjectId {
+    return widget_render.spinnerWidgetSegmentCommandId(id, index);
+}
+
+pub fn spinnerWidgetSegmentCount(tokens: DesignTokens) usize {
+    return widget_render.spinnerWidgetSegmentCount(tokens);
+}
+
 /// The rect a chart's data plots into (padded frame minus opted-in axis
 /// label gutters) — the runtime's hover logic and the renderer share it.
 pub fn chartWidgetPlotRect(widget: Widget, tokens: DesignTokens) geometry.RectF {

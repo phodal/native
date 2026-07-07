@@ -2194,7 +2194,7 @@ test "built-in component primitive widgets render distinct house chrome" {
     try layout.emitDisplayList(&builder, .{});
 
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 10), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
     try std.testing.expect(display_list.commands[0] == .fill_rounded_rect);
     switch (display_list.commands[1]) {
         .draw_text => |text| try std.testing.expectEqualStrings("NS", text.text),
@@ -2211,18 +2211,16 @@ test "built-in component primitive widgets render distinct house chrome" {
     }
     try std.testing.expect(display_list.commands[6] == .fill_rect);
     try std.testing.expect(display_list.commands[7] == .fill_rounded_rect);
-    // The spinner: a muted circular track plus the accent arc segment.
+    // The spinner (house arc register): ONE stroked arc in the page
+    // ink — no track — with the stroke scaling at 1/12 of the box
+    // (28px box -> 2.333px stroke).
     switch (display_list.commands[8]) {
-        .stroke_rect => |track| {
-            try expectFillColor(ColorTokens.light().border, track.stroke.fill);
-            try std.testing.expectEqual(track.rect.width * 0.5, track.radius.top_left);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-    switch (display_list.commands[9]) {
         .stroke_path => |arc| {
-            try expectFillColor(ColorTokens.light().accent, arc.stroke.fill);
-            try std.testing.expectEqual(@as(f32, 2), arc.stroke.width);
+            try expectFillColor(ColorTokens.light().text, arc.stroke.fill);
+            try std.testing.expectApproxEqAbs(@as(f32, 28.0 * 2.0 / 24.0), arc.stroke.width, 0.001);
+            // A 288-degree sweep needs four <=90-degree cubic segments
+            // after the initial move.
+            try std.testing.expectEqual(@as(usize, 5), arc.elements.len);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -2253,6 +2251,68 @@ test "built-in component primitive widgets render distinct house chrome" {
     }
     try std.testing.expect(image_display_list.commands[3] == .pop_clip);
     try std.testing.expect(image_display_list.commands[4] == .stroke_rect);
+}
+
+test "spinner segmented register emits one pill per segment; the trail bakes only under reduced motion" {
+    const spinner = builtinComponentWidget(.spinner, .{
+        .id = 7,
+        .frame = geometry.RectF.init(0, 0, 20, 20),
+    });
+
+    // Animated world: one fill_path pill per segment, each addressable
+    // by its segment command id, every one at the dial ink's FULL
+    // alpha — the live trail is the runtime's staggered opacity loops,
+    // and those MULTIPLY emitted alpha, so a baked trail here would
+    // double-darken under them.
+    const tokens = DesignTokens.theme(.{ .pack = .geist });
+    try std.testing.expectEqual(canvas.SpinnerStyleToken.segmented, tokens.metrics.spinner_style);
+    const count = canvas.spinnerWidgetSegmentCount(tokens);
+    try std.testing.expectEqual(@as(usize, 12), count);
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, spinner, tokens);
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(count, display_list.commandCount());
+    for (display_list.commands[0..count], 0..) |command, segment| {
+        switch (command) {
+            .fill_path => |pill| {
+                try std.testing.expectEqual(canvas.spinnerWidgetSegmentCommandId(7, segment), pill.id);
+                // The pack's dial ink: gray at full strength.
+                try expectFillColor(tokens.controls.spinner.foreground.?, pill.fill);
+                // A stadium: move, edge, two-cubic cap, edge, two-cubic
+                // cap, close.
+                try std.testing.expectEqual(@as(usize, 8), pill.elements.len);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    // Reduced motion: the runtime never arms the loops, so the trail
+    // must be baked — segment 0 (the head, twelve o'clock at value 0)
+    // at full ink, its CLOCKWISE neighbor the oldest (dimmest), and
+    // the counterclockwise neighbor barely faded.
+    const still_tokens = DesignTokens.theme(.{ .pack = .geist, .reduce_motion = true });
+    var still_commands: [16]CanvasCommand = undefined;
+    var still_builder = Builder.init(&still_commands);
+    try emitWidgetTree(&still_builder, spinner, still_tokens);
+    const still_list = still_builder.displayList();
+    try std.testing.expectEqual(count, still_list.commandCount());
+    const tail = still_tokens.metrics.spinner_tail_opacity;
+    const expected_alphas = [3]f32{
+        1,
+        1 - (1 - tail) * (11.0 / 12.0),
+        1 - (1 - tail) * (1.0 / 12.0),
+    };
+    const probe_segments = [3]usize{ 0, 1, 11 };
+    for (probe_segments, expected_alphas) |segment, expected_alpha| {
+        switch (still_list.commands[segment]) {
+            .fill_path => |pill| switch (pill.fill) {
+                .color => |color| try std.testing.expectApproxEqAbs(expected_alpha, color.a, 0.001),
+                else => return error.TestUnexpectedResult,
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
 }
 
 test "avatar initials center on the circle: layout alignment is the ONE centering pass" {

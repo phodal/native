@@ -88,6 +88,21 @@ pub fn designTokens(color_scheme: ColorScheme, contrast: ColorContrast) DesignTo
             // the primary ink under the active label (see the tabs
             // entries in `controlTokens` below).
             .tabs_indicator_thickness = 2,
+            // The pack's activity indicator is the segmented dial, not
+            // the house arc: twelve radial pills (measured at the 20px
+            // default — pill length a quarter of the box, thickness a
+            // tenth, pill centers orbiting at 0.365 of the box), the
+            // trail fading linearly to a 15% floor, one head-lap every
+            // 1.2s. The runtime staggers one opacity loop per pill, so
+            // the bright head steps around the dial while every pill
+            // holds its angle — stepped occupancy, never rotation.
+            .spinner_style = .segmented,
+            .spinner_segment_count = 12,
+            .spinner_segment_length_ratio = 0.25,
+            .spinner_segment_thickness_ratio = 0.1,
+            .spinner_segment_radius_ratio = 0.365,
+            .spinner_tail_opacity = 0.15,
+            .spinner_period_ms = 1200,
         },
     };
 }
@@ -374,6 +389,13 @@ fn controlTokens(color_scheme: ColorScheme, contrast: ColorContrast) ControlToke
                 },
                 .high => null,
             },
+        },
+        // The segmented dial draws in gray-700 #8f8f8f — the scales'
+        // quiet middle, the same hex in both schemes — a deliberately
+        // muted ink (activity is ambient, not a call to action). The
+        // dial's SHAPE lives in the spinner metric tokens above.
+        .spinner = .{
+            .foreground = Color.rgb8(143, 143, 143),
         },
         // Floating and raised surfaces take the 12px corner; the
         // tooltip stays on the control corner (it is a label, not a

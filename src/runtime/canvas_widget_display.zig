@@ -385,9 +385,15 @@ pub fn RuntimeCanvasWidgetDisplay(comptime Runtime: type) type {
 
         /// Keep the engine-armed LOOPING animations in step with the
         /// display list just emitted, without re-emitting it:
-        /// - spinners: a `.wrap` rotation over the arc command (one turn
-        ///   per `spinner_rotation_turn_ms`, linear so the wrap is
-        ///   seamless);
+        /// - arc-register spinners: a `.wrap` rotation over the arc
+        ///   command (one turn per `metrics.spinner_period_ms`, linear
+        ///   so the wrap is seamless);
+        /// - segmented-register spinners: one `.wrap` linear opacity
+        ///   loop PER SEGMENT (full ink down to the token tail floor),
+        ///   each segment's loop phase-shifted by one count-th of the
+        ///   period, so the bright head steps clockwise around the dial
+        ///   while every pill fades in place — the register's motion is
+        ///   stepped occupancy, not rotation;
         /// - skeletons: a `.ping_pong` opacity pulse over the fill
         ///   command (full to `skeleton_pulse_min_opacity` and back, one
         ///   sweep per `skeleton_pulse_sweep_ms` on the standard curve —
@@ -397,7 +403,8 @@ pub fn RuntimeCanvasWidgetDisplay(comptime Runtime: type) type {
         /// pulse back to its start. When a widget unmounts (or hides)
         /// its animation is removed, so a view with no other work parks
         /// instead of pumping frames forever. Reduced motion arms
-        /// nothing: arcs and placeholder blocks render as static poses.
+        /// nothing: arcs, dials, and placeholder blocks render as
+        /// static poses (the segmented emitter bakes its trail then).
         fn reconcileCanvasWidgetLoopAnimations(self: *Runtime, view_index: usize) void {
             const view = &self.views[view_index];
             var desired_ids: [canvas_limits.max_canvas_widget_loop_animations_per_view]canvas.ObjectId = undefined;
@@ -414,27 +421,70 @@ pub fn RuntimeCanvasWidgetDisplay(comptime Runtime: type) type {
                     if (node.frame.normalized().isEmpty()) continue;
                     if (desired_count >= desired_ids.len) break;
                     switch (node.widget.kind) {
-                        .spinner => {
-                            const command_id = canvas.spinnerWidgetArcCommandId(node.widget.id);
-                            const start_ns = existingCanvasRenderAnimationStartNs(view, command_id) orelse canvasRenderAnimationStartNsForView(view);
-                            // The emitters paint at the LAYOUT frame (`node.frame`,
-                            // pixel-snapped inside `spinnerWidgetRotationCenter`),
-                            // so the rotation center matches the arc's geometry.
-                            var laid_out = node.widget;
-                            laid_out.frame = node.frame;
-                            view.replaceCanvasRenderAnimation(.{
-                                .id = command_id,
-                                .start_ns = start_ns,
-                                .duration_ms = spinner_rotation_turn_ms,
-                                .easing = .linear,
-                                .from_rotation = 0,
-                                .to_rotation = 360,
-                                .rotation_center = canvas.spinnerWidgetRotationCenter(laid_out, view.widget_tokens),
-                                .loop = .wrap,
-                            }) catch break;
-                            view.replaceCanvasRenderAnimationDirtyBounds(command_id, node.frame) catch {};
-                            desired_ids[desired_count] = command_id;
-                            desired_count += 1;
+                        .spinner => switch (view.widget_tokens.metrics.spinner_style) {
+                            .arc => {
+                                const command_id = canvas.spinnerWidgetArcCommandId(node.widget.id);
+                                const start_ns = existingCanvasRenderAnimationStartNs(view, command_id) orelse canvasRenderAnimationStartNsForView(view);
+                                // The emitters paint at the LAYOUT frame (`node.frame`,
+                                // pixel-snapped inside `spinnerWidgetRotationCenter`),
+                                // so the rotation center matches the arc's geometry.
+                                var laid_out = node.widget;
+                                laid_out.frame = node.frame;
+                                view.replaceCanvasRenderAnimation(.{
+                                    .id = command_id,
+                                    .start_ns = start_ns,
+                                    .duration_ms = spinnerPeriodMs(view.widget_tokens),
+                                    .easing = .linear,
+                                    .from_rotation = 0,
+                                    .to_rotation = 360,
+                                    .rotation_center = canvas.spinnerWidgetRotationCenter(laid_out, view.widget_tokens),
+                                    .loop = .wrap,
+                                }) catch break;
+                                view.replaceCanvasRenderAnimationDirtyBounds(command_id, node.frame) catch {};
+                                desired_ids[desired_count] = command_id;
+                                desired_count += 1;
+                            },
+                            .segmented => {
+                                const count = canvas.spinnerWidgetSegmentCount(view.widget_tokens);
+                                if (desired_count + count > desired_ids.len) break;
+                                const period_ms = spinnerPeriodMs(view.widget_tokens);
+                                const period_ns = @as(u64, period_ms) * std.time.ns_per_ms;
+                                const step_ns = period_ns / @as(u64, @intCast(count));
+                                // One shared anchor keeps every segment's loop
+                                // on the same clock; each segment then starts
+                                // one step later than its counterclockwise
+                                // neighbor, so the freshly-restarted (fully
+                                // bright) segment advances clockwise. A FRESH
+                                // anchor backs up a whole period (saturating)
+                                // so no segment starts in the future — a
+                                // future start would hold at full ink and
+                                // stall the trail for its first cycle. An
+                                // existing anchor is reused untouched (it was
+                                // already backed up when first armed), so a
+                                // mid-loop refresh never shifts the phase.
+                                const anchor = existingCanvasRenderAnimationStartNs(view, canvas.spinnerWidgetSegmentCommandId(node.widget.id, 0)) orelse
+                                    (canvasRenderAnimationStartNsForView(view) -| period_ns);
+                                var armed = true;
+                                for (0..count) |segment| {
+                                    const command_id = canvas.spinnerWidgetSegmentCommandId(node.widget.id, segment);
+                                    view.replaceCanvasRenderAnimation(.{
+                                        .id = command_id,
+                                        .start_ns = anchor + step_ns * @as(u64, @intCast(segment)),
+                                        .duration_ms = period_ms,
+                                        .easing = .linear,
+                                        .from_opacity = 1,
+                                        .to_opacity = std.math.clamp(view.widget_tokens.metrics.spinner_tail_opacity, 0, 1),
+                                        .loop = .wrap,
+                                    }) catch {
+                                        armed = false;
+                                        break;
+                                    };
+                                    view.replaceCanvasRenderAnimationDirtyBounds(command_id, node.frame) catch {};
+                                    desired_ids[desired_count] = command_id;
+                                    desired_count += 1;
+                                }
+                                if (!armed) break;
+                            },
                         },
                         .skeleton => {
                             const command_id = canvas.skeletonWidgetFillCommandId(node.widget.id);
@@ -586,8 +636,13 @@ fn hashAccessibilityTextRange(hasher: *std.hash.Wyhash, range: ?platform.WidgetA
     }
 }
 
-/// One full spinner revolution — linear, so the wrap seam is invisible.
-const spinner_rotation_turn_ms: u32 = 1000;
+/// One full spinner cycle — the theme's `metrics.spinner_period_ms`
+/// (a turn of the arc register, one head-lap of the segmented dial),
+/// floored at 1ms so a zeroed token cannot divide the segment stagger
+/// by zero or arm an instantly-complete loop.
+fn spinnerPeriodMs(tokens: canvas.DesignTokens) u32 {
+    return @max(1, tokens.metrics.spinner_period_ms);
+}
 /// One skeleton pulse sweep (full opacity down to the floor); the
 /// ping-pong makes the round trip a 2s period — the reference
 /// placeholder pulse. The curve follows the theme's motion easing.

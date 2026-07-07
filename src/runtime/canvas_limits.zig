@@ -46,7 +46,13 @@ pub const max_canvas_text_bytes_per_view: usize = 32768;
 pub const max_canvas_retained_packet_commands_per_view: usize = max_canvas_commands_per_view;
 pub const max_canvas_diff_changes_per_view: usize = max_canvas_commands_per_view * 2 + 1;
 pub const max_canvas_render_animations_per_view: usize = max_canvas_commands_per_view;
-pub const max_canvas_render_animation_dirty_bounds_per_view: usize = 8;
+// Sized to the widget loop-animation budget below plus caret headroom:
+// every armed loop registers its command's bounds here so damage stays
+// tight, and a segmented spinner alone registers one entry per segment.
+// (Damage stays CORRECT past the cap — the general override diff in
+// canvas_frame.zig recomputes changed-command bounds from the commands
+// themselves — this registry just keeps the fast path covering them.)
+pub const max_canvas_render_animation_dirty_bounds_per_view: usize = 72;
 pub const max_canvas_render_overrides_per_view: usize = max_canvas_commands_per_view;
 pub const max_canvas_pipelines_per_view: usize = 8;
 pub const max_canvas_pipeline_cache_actions_per_view: usize = max_canvas_pipelines_per_view * 2;
@@ -222,13 +228,17 @@ pub const max_canvas_widget_anchored_per_view: usize = 16;
 /// anyway).
 pub const max_canvas_widget_autofocus_per_view: usize = 16;
 
-/// Widgets carrying an engine-armed LOOPING render animation per view
-/// (spinner rotations and skeleton pulses). Each armed widget is one
-/// render animation slot plus one dirty-bounds entry, sampled every
-/// frame while visible — a view showing more than 16 simultaneous
-/// indicators/placeholders is a design smell, so the extras render
-/// static instead of degrading the frame budget.
-pub const max_canvas_widget_loop_animations_per_view: usize = 16;
+/// COMMANDS carrying an engine-armed LOOPING render animation per view
+/// (spinner rotations, per-segment spinner opacity loops, skeleton
+/// pulses). Each armed command is one render animation slot plus one
+/// dirty-bounds entry, sampled every frame while visible. An arc
+/// spinner or skeleton arms one loop, but a segmented-register spinner
+/// arms one loop PER SEGMENT (up to 15) — 64 covers a handful of
+/// simultaneous indicators in either register; showing more at once is
+/// a design smell, so the extras render static instead of degrading
+/// the frame budget. Memory is one ObjectId per slot (64 x 8 B x 32
+/// view slots = 16 KiB fixed address space).
+pub const max_canvas_widget_loop_animations_per_view: usize = 64;
 
 /// Concurrent runtime-driven LAYOUT tweens per view (split fractions
 /// animating toward declared targets). Layout tweens are gesture-scale

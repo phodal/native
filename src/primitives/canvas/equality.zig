@@ -119,7 +119,7 @@ pub fn fillPathsEqual(a: FillPath, b: FillPath) bool {
 }
 
 pub fn strokePathsEqual(a: StrokePath, b: StrokePath) bool {
-    return a.id == b.id and pathElementsEqual(a.elements, b.elements) and strokesEqual(a.stroke, b.stroke);
+    return a.id == b.id and a.cap == b.cap and pathElementsEqual(a.elements, b.elements) and strokesEqual(a.stroke, b.stroke);
 }
 
 pub fn drawImagesEqual(a: DrawImage, b: DrawImage) bool {

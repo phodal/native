@@ -387,6 +387,8 @@ Bounds (taught one past): 256 bytes, 64 terms, 16 nesting levels per expression.
 
 Anything stateful or beyond the grammar is a Zig model function you bind to (`each="visible"`, `{summaryLine}`).
 
+Where the line sits between inline arithmetic and a model fn: inline expression arithmetic is sanctioned for ONE-OFF presentation-level derivation — `{percent(done / total)}` on the single readout that shows it is exactly what expressions are for. The moment a derivation is REUSED in a second binding, deserves a NAME, or carries meaning the model owns (a threshold, a rule, a policy), it belongs in a named model function: `{completionRate}` reads at the binding site, tests in Zig, and changes in one place.
+
 ## Binding resolution rules
 
 A path like `{h.streak}` resolves left to right, starting from the model or a `for` variable:

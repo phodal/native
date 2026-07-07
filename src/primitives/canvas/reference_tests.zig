@@ -807,48 +807,59 @@ test "reference renderer fills closed paths" {
     try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 3, 3);
 }
 
-test "reference renderer strokes paths" {
-    const elements = [_]PathElement{
-        .{ .verb = .move_to, .points = .{ geometry.PointF.init(0.5, 1.5), geometry.PointF.zero(), geometry.PointF.zero() } },
-        .{ .verb = .line_to, .points = .{ geometry.PointF.init(2.5, 1.5), geometry.PointF.zero(), geometry.PointF.zero() } },
+test "reference renderer strokes paths: butt caps end at the segment, round caps extend it" {
+    // One horizontal unit-width segment, rendered once per cap shape.
+    // The end pixels (0,1) and (2,1) are where the caps live: the butt
+    // cap stops at the endpoint (the segment covers exactly half of each
+    // end pixel — 128 after coverage rounding), while the round cap
+    // bulges a half-width semicircle past it (75% coverage per the
+    // anti-aliased vector core). Interior and off-stroke pixels are
+    // cap-independent.
+    const cases = [_]struct { cap: canvas.LineCap, end_coverage: u8 }{
+        .{ .cap = .butt, .end_coverage = 128 },
+        .{ .cap = .round, .end_coverage = 191 },
     };
-    const commands = [_]CanvasCommand{.{ .stroke_path = .{
-        .id = 1,
-        .elements = &elements,
-        .stroke = .{ .fill = .{ .color = Color.rgb8(255, 0, 0) }, .width = 1 },
-    } }};
+    for (cases) |case| {
+        const elements = [_]PathElement{
+            .{ .verb = .move_to, .points = .{ geometry.PointF.init(0.5, 1.5), geometry.PointF.zero(), geometry.PointF.zero() } },
+            .{ .verb = .line_to, .points = .{ geometry.PointF.init(2.5, 1.5), geometry.PointF.zero(), geometry.PointF.zero() } },
+        };
+        const commands = [_]CanvasCommand{.{ .stroke_path = .{
+            .id = 1,
+            .elements = &elements,
+            .stroke = .{ .fill = .{ .color = Color.rgb8(255, 0, 0) }, .width = 1 },
+            .cap = case.cap,
+        } }};
 
-    var render_commands: [1]RenderCommand = undefined;
-    var render_batches: [1]RenderBatch = undefined;
-    var resources: [0]RenderResource = .{};
-    var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
-    var resource_cache_actions: [0]RenderResourceCacheAction = .{};
-    var glyphs: [0]GlyphAtlasEntry = .{};
-    var changes: [0]DiffChange = .{};
-    const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
-        .surface_size = geometry.SizeF.init(4, 3),
-    }, .{
-        .render_commands = &render_commands,
-        .render_batches = &render_batches,
-        .resources = &resources,
-        .resource_cache_entries = &resource_cache_entries,
-        .resource_cache_actions = &resource_cache_actions,
-        .glyph_atlas_entries = &glyphs,
-        .changes = &changes,
-    });
+        var render_commands: [1]RenderCommand = undefined;
+        var render_batches: [1]RenderBatch = undefined;
+        var resources: [0]RenderResource = .{};
+        var resource_cache_entries: [0]RenderResourceCacheEntry = .{};
+        var resource_cache_actions: [0]RenderResourceCacheAction = .{};
+        var glyphs: [0]GlyphAtlasEntry = .{};
+        var changes: [0]DiffChange = .{};
+        const frame = try (DisplayList{ .commands = &commands }).framePlan(null, .{
+            .surface_size = geometry.SizeF.init(4, 3),
+        }, .{
+            .render_commands = &render_commands,
+            .render_batches = &render_batches,
+            .resources = &resources,
+            .resource_cache_entries = &resource_cache_entries,
+            .resource_cache_actions = &resource_cache_actions,
+            .glyph_atlas_entries = &glyphs,
+            .changes = &changes,
+        });
 
-    var pixels: [4 * 3 * 4]u8 = undefined;
-    const surface = try ReferenceRenderSurface.init(4, 3, &pixels);
-    try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
+        var pixels: [4 * 3 * 4]u8 = undefined;
+        const surface = try ReferenceRenderSurface.init(4, 3, &pixels);
+        try surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0));
 
-    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 0);
-    // The round end cap only partially covers the pixel left of the
-    // segment start; the anti-aliased vector core reports 75% coverage
-    // there (the historical point-sampled renderer filled it solid).
-    try expectPixelRgba8(.{ 191, 0, 0, 255 }, surface, 0, 1);
-    try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
-    try expectPixelRgba8(.{ 191, 0, 0, 255 }, surface, 2, 1);
-    try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 3, 1);
+        try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 1, 0);
+        try expectPixelRgba8(.{ case.end_coverage, 0, 0, 255 }, surface, 0, 1);
+        try expectPixelRgba8(.{ 255, 0, 0, 255 }, surface, 1, 1);
+        try expectPixelRgba8(.{ case.end_coverage, 0, 0, 255 }, surface, 2, 1);
+        try expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 3, 1);
+    }
 }
 
 test "reference renderer draws soft shadows" {

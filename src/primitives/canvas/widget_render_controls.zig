@@ -351,6 +351,10 @@ pub fn emitVectorIcon(builder: *Builder, widget_id: ObjectId, first_slot: Object
                     .id = widgetPartId(widget_id, first_slot + 1 + index * 2),
                     .elements = elements,
                     .stroke = .{ .fill = colorFill(stroke_color), .width = shape.style.stroke_width },
+                    // The authored cap, not a fixed choice: the stroke
+                    // icon dialect declares round caps per shape, and
+                    // honoring the source keeps a butt-cap icon honest.
+                    .cap = shape.style.linecap,
                 });
             }
         }

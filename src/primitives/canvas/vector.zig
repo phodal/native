@@ -45,8 +45,10 @@ pub const Error = error{
 /// How a filled path decides interiorness.
 pub const FillRule = enum { nonzero, even_odd };
 
-/// Stroke end-cap shape.
-pub const LineCap = enum { butt, round };
+/// Stroke end-cap shape — the wire model's type, re-exported so the
+/// stroke rasterizer, the parsed icon style, and the `stroke_path`
+/// command's cap channel all share one enum (no mapping layer to drift).
+pub const LineCap = drawing_model.LineCap;
 
 /// Stroke join shape. `miter` falls back to a bevel past `miter_limit`.
 pub const LineJoin = enum { miter, round };

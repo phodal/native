@@ -390,6 +390,10 @@ test "icon widgets render built-in vector icons as tinted path commands" {
             // zero per-frame geometry copies, static lifetime.
             const registered = canvas.icons.find("check").?;
             try std.testing.expectEqual(registered.elements.ptr, stroke.elements.ptr);
+            // The authored linecap rides the command: the built-in set
+            // declares round caps, so the emitted stroke carries them
+            // instead of the wire default (butt).
+            try std.testing.expectEqual(canvas.LineCap.round, stroke.cap);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -2221,6 +2225,10 @@ test "built-in component primitive widgets render distinct house chrome" {
             // A 288-degree sweep needs four <=90-degree cubic segments
             // after the initial move.
             try std.testing.expectEqual(@as(usize, 5), arc.elements.len);
+            // The measured reference arc ends in semicircles: the arc
+            // register opts into round caps rather than inheriting the
+            // wire default (butt).
+            try std.testing.expectEqual(canvas.LineCap.round, arc.cap);
         },
         else => return error.TestUnexpectedResult,
     }

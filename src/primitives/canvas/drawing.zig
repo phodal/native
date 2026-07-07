@@ -179,10 +179,26 @@ pub const FillPath = struct {
     fill: Fill,
 };
 
+/// Stroke end-cap shape for open subpaths. `butt` ends the stroke
+/// exactly at the endpoint (the SVG default and what the packet hosts
+/// draw when no cap is specified); `round` extends it with a
+/// half-stroke-width semicircle — the stroke-icon dialect and the house
+/// spinner arc are authored for round caps. Closed subpaths have no
+/// ends, so the cap never affects them.
+pub const LineCap = enum {
+    butt,
+    round,
+};
+
 pub const StrokePath = struct {
     id: ObjectId = 0,
     elements: []const PathElement = &.{},
     stroke: Stroke,
+    /// End-cap shape for the path's open subpaths. Lives on the command
+    /// (not on `Stroke`) because caps are a property of path stroking:
+    /// rect strokes are closed contours and `draw_line` keeps its
+    /// historical semantics, so a cap field there would be ignored.
+    cap: LineCap = .butt,
 };
 
 pub const ImageFit = enum {

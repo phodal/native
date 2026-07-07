@@ -1551,6 +1551,11 @@ fn emitSpinnerArc(builder: *Builder, widget: Widget, visual: ControlVisualTokens
             .fill = colorFill(ink),
             .width = stroke_width,
         },
+        // The measured reference arc ends in semicircles, not squared-off
+        // butt ends: the register reads as a drawn stroke chasing its
+        // tail, so the caps are part of the shape, not a rasterizer
+        // default.
+        .cap = .round,
     });
 }
 

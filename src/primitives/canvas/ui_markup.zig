@@ -3571,6 +3571,12 @@ pub const ImportPathResult = union(enum) {
 /// messages. Comptime-callable; the returned path slices `buffer`.
 pub fn resolveImportPath(root_dir: []const u8, importer_path: []const u8, src: []const u8, buffer: []u8) ImportPathResult {
     if (importSrcShapeError(src)) |message| return .{ .message = message };
+    // Tokenizing drops the leading "/" of an absolute importer path, so
+    // remember it and restore it when the path is rebuilt below. Without
+    // this, checking a view by absolute path rebuilds imports as relative
+    // strings, and the escape check against the absolute markup root
+    // rejects every import (and the loader would read the wrong file).
+    const absolute = importer_path.len > 0 and importer_path[0] == '/';
     var segments: [max_import_path_segments][]const u8 = undefined;
     var count: usize = 0;
     var dir_it = std.mem.tokenizeScalar(u8, dirnamePath(importer_path), '/');
@@ -3592,6 +3598,11 @@ pub fn resolveImportPath(root_dir: []const u8, importer_path: []const u8, src: [
         count += 1;
     }
     var len: usize = 0;
+    if (absolute) {
+        if (buffer.len == 0) return .{ .message = import_src_too_long_message };
+        buffer[0] = '/';
+        len = 1;
+    }
     for (segments[0..count], 0..) |segment, index| {
         const extra = segment.len + @intFromBool(index > 0);
         if (len + extra > buffer.len) return .{ .message = import_src_too_long_message };

@@ -124,6 +124,13 @@ pub fn writeCommandJson(command: CanvasCommand, writer: anytype) !void {
             try writePathJson(value.elements, writer);
             try writer.writeAll(",\"stroke\":");
             try writeStrokeJson(value.stroke, writer);
+            // The cap key appears only for the non-default shape: butt is
+            // implied by absence, so existing snapshots stay byte-stable
+            // and readers without cap handling keep their old meaning.
+            if (value.cap != .butt) {
+                try writer.writeAll(",\"cap\":");
+                try json.writeString(writer, @tagName(value.cap));
+            }
         },
         .draw_image => |value| {
             try writer.print(",\"id\":{d},\"image\":{d},\"dst\":", .{ value.id, value.image_id });

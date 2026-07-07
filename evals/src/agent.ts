@@ -18,6 +18,11 @@ const ALLOWED_TOOLS = [
   "Bash(ls *)",
   "Bash(cat *)",
   "Bash(mkdir *)",
+  // File moves and copies are routine scaffolding work (renaming a view,
+  // copying an example as a starting point); without them agents burn
+  // turns waiting on permission prompts that will never be answered.
+  "Bash(cp *)",
+  "Bash(mv *)",
   "Bash(rm -rf .zig-cache*)",
   "Bash(rm -rf zig-out*)",
 ].join(",");

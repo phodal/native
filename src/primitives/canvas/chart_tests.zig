@@ -723,8 +723,13 @@ test "chart golden: line + bar + band render byte-identically in light and dark"
 // labeled register — muted y ticks (1, 0.5, 0) on the gridline lattice
 // and deterministically thinned x category labels (q1, q3) under the
 // bars; the first three tiles' geometry is unchanged.
-const golden_light_signature: u64 = 15930251867392191551;
-const golden_dark_signature: u64 = 12695102772465040625;
+// Regenerated for the stroke_path cap channel (2026-07-07): line-series
+// strokes now end with butt caps (the wire default — a stroke that
+// declares no linecap) instead of the renderer's former always-round
+// ends; only the line tile's endpoint pixels moved — bars, band, and
+// labels are byte-identical.
+const golden_light_signature: u64 = 11760269401975515075;
+const golden_dark_signature: u64 = 1706071444071293822;
 
 fn goldenDumpRequested() bool {
     if (comptime !@import("builtin").link_libc) return false;

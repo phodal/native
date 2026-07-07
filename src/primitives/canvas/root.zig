@@ -91,6 +91,7 @@ pub const GradientStop = drawing_model.GradientStop;
 pub const LinearGradient = drawing_model.LinearGradient;
 pub const Fill = drawing_model.Fill;
 pub const Stroke = drawing_model.Stroke;
+pub const LineCap = drawing_model.LineCap;
 pub const Clip = drawing_model.Clip;
 pub const FillRect = drawing_model.FillRect;
 pub const StrokeRect = drawing_model.StrokeRect;

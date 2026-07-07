@@ -164,7 +164,14 @@ Default to `.web_engine = "system"` for small apps and native footprint. Use `.w
 
 ### Package an app
 
-Keep package metadata in `app.zon`, build the frontend assets, build the native binary, then package:
+Zero-config apps package WITHOUT ejecting — `native package` works directly on the zero-config build (`native eject` is only for owning the build files, never a packaging prerequisite):
+
+```bash
+native build
+native package --target macos
+```
+
+Apps that own their build (ejected or scaffolded `--full`) wire the same step into the build graph: keep package metadata in `app.zon`, build the frontend assets, build the native binary, then package:
 
 ```bash
 zig build package

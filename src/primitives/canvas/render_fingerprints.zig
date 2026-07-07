@@ -191,6 +191,9 @@ fn resourceHashCanvasCommand(hash: u64, command: anytype) u64 {
             next = resourceHashOptionalObjectId(next, nonZeroObjectId(value.id));
             next = resourceHashPath(next, value.elements);
             next = resourceHashStroke(next, value.stroke);
+            // The cap changes rendered pixels at open subpath ends, so a
+            // cap flip must invalidate any cached render keyed off this.
+            next = resourceHashEnum(next, @intFromEnum(value.cap));
         },
         .draw_image => |value| {
             next = resourceHashOptionalObjectId(next, nonZeroObjectId(value.id));

@@ -371,9 +371,13 @@ pub const ReferenceRenderSurface = struct {
     }
 
     fn strokePath(self: ReferenceRenderSurface, command: RenderCommand, value: StrokePath, draw_bounds: geometry.RectF) Error!void {
-        // Anti-aliased stroke-to-outline via the shared vector core with
-        // round caps and joins, matching the historical distance-field
-        // semantics of this command.
+        // Anti-aliased stroke-to-outline via the shared vector core. End
+        // caps come from the command's cap channel: butt is the default
+        // (matching what hosts draw for an unadorned stroke), and
+        // emitters that want round ends — the stroke-icon dialect, the
+        // house spinner arc — opt in per command. Joins stay round: the
+        // historical distance-field semantics of this command rounded
+        // every join, and no emitter has asked for another shape.
         const stroke_width = nonNegative(value.stroke.width) * referenceTransformScale(command.transform);
         if (stroke_width <= 0) return;
         const pixel_rect = referencePixelRect(draw_bounds, self.width, self.height) orelse return;
@@ -386,7 +390,7 @@ pub const ReferenceRenderSurface = struct {
         vector.strokePath(
             value.elements,
             command.transform,
-            .{ .width = stroke_width, .cap = .round, .join = .round },
+            .{ .width = stroke_width, .cap = value.cap, .join = .round },
             vector.default_tolerance,
             referenceVectorClip(pixel_rect),
             &sink,

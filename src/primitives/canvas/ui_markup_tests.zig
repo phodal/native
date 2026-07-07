@@ -1160,6 +1160,34 @@ test "import path escapes, absolute paths, and bad extensions are teaching error
     try testing.expectEqualStrings(markup.import_src_escape_message, escaped.message);
 }
 
+test "an absolute root path resolves imports the same as a relative one" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Checking a view by absolute path (as `native markup check /abs/view.native`
+    // does) must behave exactly like the relative form: joined import paths
+    // keep the leading "/", so they stay under the absolute markup root and
+    // load from the right place. Regression: the join used to drop the "/",
+    // making every import of an absolutely-addressed view "escape" the root.
+    var buffer: [markup.max_import_path_len]u8 = undefined;
+    const resolved = markup.resolveImportPath("/app/src", "/app/src/view.native", "components/card.native", &buffer);
+    try testing.expectEqualStrings("/app/src/components/card.native", resolved.path);
+
+    // The full resolver, rooted at an absolute path, resolves the closure.
+    const set = [_]markup.SourceFile{
+        .{ .path = "/app/src/view.native", .source = "<import src=\"components/card.native\"/>\n<column><card/></column>" },
+        .{ .path = "/app/src/components/card.native", .source = "<template name=\"card\"><text>hi</text></template>" },
+    };
+    var diagnostic: markup.MarkupErrorInfo = .{};
+    const document = try resolveSet(arena, &set, "/app/src/view.native", &diagnostic);
+    try testing.expectEqual(@as(usize, 1), document.templates.len);
+
+    // An import that genuinely climbs out of the absolute root still fails.
+    const escaped = markup.resolveImportPath("/app/src", "/app/src/view.native", "../other.native", &buffer);
+    try testing.expectEqualStrings(markup.import_src_escape_message, escaped.message);
+}
+
 test ".native is the one markup extension" {
     try testing.expect(markup.hasMarkupExtension("view.native"));
     try testing.expect(!markup.hasMarkupExtension("view.html"));

@@ -78,7 +78,7 @@ Validate `src/**.native` markup and `app.zon` without building. With a fresh `zi
 native eject [dir]
 ```
 
-Write an owned `build.zig`/`build.zig.zon` into the app (once); the verbs then drive your files via `zig build`.
+Write an owned `build.zig`/`build.zig.zon` into the app (once); the verbs then drive your files via `zig build`. Ejecting is only for owning the build files — it is never a prerequisite: zero-config apps build, test, and [package](/packaging) directly (`native package` works on the zero-config build as-is).
 
 ### `native eject component`
 

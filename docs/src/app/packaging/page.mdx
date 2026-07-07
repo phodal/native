@@ -11,7 +11,7 @@ native build
 native package --target macos
 ```
 
-`native package` picks up the manifest at `app.zon` and the binary at `zig-out/bin/<name>` automatically; pass `--manifest`, `--binary`, or the other flags below for more control. Apps that own their build ([ejected](/cli) or scaffolded with `--full`) also get a `zig build package` step that wires the same thing into the build graph.
+`native package` picks up the manifest at `app.zon` and the binary at `zig-out/bin/<name>` automatically; pass `--manifest`, `--binary`, or the other flags below for more control. Zero-config apps package without ejecting: the two commands above are the complete path from source to distributable, and `native eject` exists only for apps that want to own their build files. Apps that do own their build ([ejected](/cli) or scaffolded with `--full`) also get a `zig build package` step that wires the same thing into the build graph.
 
 ## Build options
 

@@ -13,31 +13,29 @@ const defaultSemanticActions = event_model.defaultSemanticActions;
 const defaultFocusable = event_model.defaultFocusable;
 const snapTextRange = text_model.snapTextRange;
 
+/// The engine's cursor register follows NATIVE platform convention, not
+/// the web's: the pointing hand is a HYPERLINK affordance, so it appears
+/// only over link-role targets (link spans in text, or any widget given
+/// `role = .link`). Every ordinary control — buttons, toggles, checkboxes,
+/// menu items, tabs, list rows, sliders — keeps the arrow, exactly like
+/// the platform's own controls do.
 pub fn cursorForWidgetHit(hit: ?WidgetHit) WidgetCursor {
     const target = hit orelse return .arrow;
     if (target.role == .link and !target.state.disabled) return .pointing_hand;
     return cursorForWidgetTarget(target.kind, target.state);
 }
 
+/// The kind-level half of the register: I-beam over editable text (a
+/// click places the caret, the cursor advertises it), resize arrows over
+/// the divider affordances (`resizable`'s grip edge and `split_divider`),
+/// arrow over everything else — including sliders, which keep the arrow
+/// at rest AND during a drag on every native platform. The pointing hand
+/// never comes from a kind; it is role-driven (`cursorForWidgetHit`).
 pub fn cursorForWidgetTarget(kind: WidgetKind, state: WidgetState) WidgetCursor {
     if (state.disabled) return .arrow;
     return switch (kind) {
         .input, .text_field, .search_field, .combobox, .textarea => .text,
-        .button,
-        .toggle_button,
-        .accordion,
-        .icon_button,
-        .select,
-        .menu_item,
-        .list_item,
-        .data_cell,
-        .segmented_control,
-        .checkbox,
-        .radio,
-        .switch_control,
-        .toggle,
-        => .pointing_hand,
-        .slider, .resizable, .split_divider => .resize_horizontal,
+        .resizable, .split_divider => .resize_horizontal,
         else => .arrow,
     };
 }

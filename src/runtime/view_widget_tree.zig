@@ -319,6 +319,10 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.widget_revision += 1;
         }
 
+        /// Cursor for a retained widget id, mirroring the canvas layer's
+        /// `cursorForWidgetHit`: the pointing hand is role-driven (links
+        /// only — the native register keeps controls on the arrow), and
+        /// everything else resolves through the kind mapping.
         pub fn canvasWidgetCursorForId(self: *const RuntimeView, id: canvas.ObjectId) platform.Cursor {
             const index = self.canvasWidgetNodeIndexById(id) orelse return .arrow;
             const node = self.widget_layout_nodes[index];

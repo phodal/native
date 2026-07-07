@@ -795,7 +795,9 @@ test "runtime refreshes hovered canvas widget after scroll clipping" {
         .y = 12,
     } });
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
-    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.runtime.views[0].canvas_widget_cursor);
+    // Buttons show the native arrow; the hover id above is the state
+    // this test actually pins across the scroll.
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
 
     var snapshot = harness.runtime.automationSnapshot("Widgets");
     try std.testing.expect(snapshot.widgets[1].hovered);
@@ -816,7 +818,7 @@ test "runtime refreshes hovered canvas widget after scroll clipping" {
     try std.testing.expectEqualDeep(geometry.RectF.init(0, -40, 160, 32), retained.findById(2).?.frame);
     try std.testing.expectEqualDeep(geometry.RectF.init(0, 8, 160, 32), retained.findById(3).?.frame);
     try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_hovered_id);
-    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.runtime.views[0].canvas_widget_cursor);
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
     try std.testing.expect(harness.runtime.invalidated);
     try std.testing.expectEqual(@as(usize, 1), harness.runtime.pendingDirtyRegions().len);
     try std.testing.expectEqualDeep(geometry.RectF.init(10, 20, 160, 40), harness.runtime.pendingDirtyRegions()[0]);
@@ -1021,6 +1023,8 @@ test "runtime reconciles canvas widget render state after keyboard scroll clippi
     try harness.runtime.focusView(1, "canvas");
     harness.runtime.views[0].canvas_widget_focused_id = 1;
     harness.runtime.views[0].canvas_widget_hovered_id = 2;
+    // Seed a non-arrow cursor (only a link hover produces this in the
+    // wild) so the reset back to arrow below is observable.
     harness.runtime.views[0].canvas_widget_cursor = .pointing_hand;
     _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
 

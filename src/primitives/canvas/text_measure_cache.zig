@@ -49,6 +49,7 @@
 //! never hold it across another fetch.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const canvas = @import("root.zig");
 const text_metrics = @import("text_metrics.zig");
 
@@ -80,14 +81,27 @@ pub const max_batched_advance_run_bytes: usize = 32768;
 /// Process-wide invalidation stamp for everything keyed on measured
 /// text: cached advances here and retained wrap results downstream.
 /// Starts at 1 so a zero-initialized key can never match.
-var text_measure_generation = std.atomic.Value(u64).init(1);
+///
+/// The stamp is atomic so a bump on the runtime loop thread is seen by
+/// every thread's threadlocal cache — except on wasm32, which has no
+/// 64-bit atomics to compile and no second thread to synchronize with
+/// (the docs live preview runs single-threaded by construction), so it
+/// uses a plain counter behind the same accessors.
+const generation_needs_atomic = !builtin.target.cpu.arch.isWasm();
+var text_measure_generation: if (generation_needs_atomic) std.atomic.Value(u64) else u64 =
+    if (generation_needs_atomic) std.atomic.Value(u64).init(1) else 1;
 
 pub fn textMeasureGeneration() u64 {
-    return text_measure_generation.load(.monotonic);
+    if (generation_needs_atomic) return text_measure_generation.load(.monotonic);
+    return text_measure_generation;
 }
 
 pub fn bumpTextMeasureGeneration() void {
-    _ = text_measure_generation.fetchAdd(1, .monotonic);
+    if (generation_needs_atomic) {
+        _ = text_measure_generation.fetchAdd(1, .monotonic);
+    } else {
+        text_measure_generation += 1;
+    }
 }
 
 /// Cache key. `hash` covers the text bytes; the rest pins the exact

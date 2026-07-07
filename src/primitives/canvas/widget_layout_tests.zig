@@ -842,9 +842,12 @@ test "widget layout resolves cursor intent from hit targets" {
 
     var nodes: [6]WidgetLayoutNode = undefined;
     const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 160, 180), &nodes);
-    try std.testing.expectEqual(WidgetCursor.pointing_hand, layout.cursorForHit(layout.hitTest(geometry.PointF.init(16, 16))));
+    // The native register: buttons AND sliders show the arrow (the hand
+    // is reserved for hyperlinks), editable text shows the I-beam, and
+    // only resize affordances show resize arrows.
+    try std.testing.expectEqual(WidgetCursor.arrow, layout.cursorForHit(layout.hitTest(geometry.PointF.init(16, 16))));
     try std.testing.expectEqual(WidgetCursor.text, layout.cursorForHit(layout.hitTest(geometry.PointF.init(16, 56))));
-    try std.testing.expectEqual(WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(geometry.PointF.init(16, 96))));
+    try std.testing.expectEqual(WidgetCursor.arrow, layout.cursorForHit(layout.hitTest(geometry.PointF.init(16, 96))));
     try std.testing.expectEqual(WidgetCursor.resize_horizontal, layout.cursorForHit(layout.hitTest(geometry.PointF.init(120, 140))));
     try std.testing.expectEqual(WidgetCursor.arrow, layout.cursorForHit(layout.hitTest(geometry.PointF.init(150, 170))));
     try std.testing.expectEqual(WidgetCursor.arrow, cursorForWidgetTarget(.button, .{ .disabled = true }));

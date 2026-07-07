@@ -122,6 +122,8 @@ test "runtime dismisses nearest canvas floating surface with escape" {
     harness.runtime.views[0].canvas_widget_focused_id = 3;
     harness.runtime.views[0].canvas_widget_hovered_id = 3;
     harness.runtime.views[0].canvas_widget_pressed_id = 3;
+    // Seed a non-arrow cursor (only a link hover produces this in the
+    // wild) so the reset back to arrow below is observable.
     harness.runtime.views[0].canvas_widget_cursor = .pointing_hand;
     _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
     try std.testing.expect((try harness.runtime.canvasDisplayList(1, "canvas")).findCommandById(testCanvasWidgetPartId(2, 2)) != null);
@@ -363,6 +365,8 @@ test "runtime dismisses focused canvas floating surface from outside pointer dow
     try harness.runtime.focusView(1, "canvas");
     harness.runtime.views[0].canvas_widget_focused_id = 3;
     harness.runtime.views[0].canvas_widget_hovered_id = 3;
+    // Seed a non-arrow cursor (only a link hover produces this in the
+    // wild) so the settle back to arrow below is observable.
     harness.runtime.views[0].canvas_widget_cursor = .pointing_hand;
     _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
 
@@ -393,7 +397,9 @@ test "runtime dismisses focused canvas floating surface from outside pointer dow
     try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_widget_hovered_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_widget_pressed_id);
-    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.runtime.views[0].canvas_widget_cursor);
+    // The button outside the popover hovers with the native arrow — the
+    // seeded link-hand from above settles back to the control register.
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
     try std.testing.expect(harness.runtime.invalidated);
 
     for (runtimeViewWidgetSemantics(&harness.runtime.views[0])) |node| {
@@ -656,7 +662,8 @@ test "runtime clears canvas widget interaction state when layout replacement dis
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_pressed_id);
-    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.runtime.views[0].canvas_widget_cursor);
+    // Native register: a pressed button keeps the arrow cursor.
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
 
     const disabled_children = [_]canvas.Widget{.{
         .id = 2,

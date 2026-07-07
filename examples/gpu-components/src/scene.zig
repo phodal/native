@@ -948,9 +948,15 @@ pub fn buildComponentsWidgetLayoutWithStateAndSize(nodes: []canvas.WidgetLayoutN
         .frame = sidebarResizeLineFrame(sidebar_width, content_height_available),
         .style = .{ .stroke_width = canvas_sidebar_resize_line_width },
     });
+    // The invisible grab strip along the sidebar's edge. It is a
+    // split_divider, not a slider: the native cursor register keeps
+    // sliders on the arrow, while a resizable EDGE advertises itself
+    // with the resize cursor — and this strip is an edge (the app reads
+    // raw pointer moves in resizeSidebar; no slider value mechanics are
+    // involved).
     try appendComponentWidget(&root_widgets, &root_widget_count, .{
         .id = canvas_sidebar_resize_handle_id,
-        .kind = .slider,
+        .kind = .split_divider,
         .frame = sidebarResizeHandleFrame(sidebar_width, content_height_available),
         .opacity = 0,
         .style = .{ .background = rgba(0, 0, 0, 0), .foreground = rgba(0, 0, 0, 0), .border = rgba(0, 0, 0, 0), .radius = 0, .stroke_width = 0 },

@@ -479,10 +479,11 @@ export fn preview_text_input_active(self: ?*Preview) u32 {
     return if (view.canEditCanvasWidgetText(view.canvas_widget_focused_id)) 1 else 0;
 }
 
-/// The engine's cursor channel for the pointer's current hover target
-/// (I-beam over text fields, pointer over pressable controls, resize
-/// over sliders/dividers), so the page can mirror it onto the canvas's
-/// CSS cursor. 0 default, 1 pointer, 2 text, 3 col-resize.
+/// The engine's cursor channel for the pointer's current hover target,
+/// following the native register (arrow over controls, hand only over
+/// links, I-beam over text fields, resize over dividers), so the page
+/// can mirror it onto the canvas's CSS cursor. 0 default, 1 pointer,
+/// 2 text, 3 col-resize.
 export fn preview_cursor(self: ?*Preview) u32 {
     const p = self orelse return 0;
     return switch (p.runtime.views[0].canvas_widget_cursor) {

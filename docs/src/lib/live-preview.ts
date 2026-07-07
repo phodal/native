@@ -153,8 +153,12 @@ export class LivePreview {
 
   /**
    * The engine's cursor for the pointer's current hover target, mapped
-   * to a CSS cursor keyword: I-beam over text entry, pointer over
-   * pressable controls, col-resize over sliders and split dividers.
+   * to a CSS cursor keyword. The engine follows the native register:
+   * arrow over controls (buttons, toggles, rows — the platform
+   * convention), pointer ONLY over true hyperlinks, I-beam over text
+   * entry, col-resize over split dividers and resizable edges. The
+   * mirror is a straight enum-to-keyword map — it must never re-add
+   * `pointer` for controls on the CSS side.
    */
   cursor(): string {
     if (this.destroyed) return "default";

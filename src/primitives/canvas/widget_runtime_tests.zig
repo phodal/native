@@ -2851,13 +2851,14 @@ test "hover target resolves composite row children to the row" {
     const link_frame = layout.findById(7).?.frame.normalized();
 
     // The raw hit over the title line is the text child; hover resolves
-    // to the row, so the wash and pointer cursor cover the whole row.
+    // to the row, so the wash covers the whole row. The cursor stays the
+    // native arrow — rows are controls, and the hand belongs to links.
     const title_hit = layout.hitTest(title_frame.center()).?;
     try std.testing.expectEqual(@as(ObjectId, 4), title_hit.id);
     const title_hover = layout.hoverTargetForHit(title_hit).?;
     try std.testing.expectEqual(@as(ObjectId, 2), title_hover.id);
     try std.testing.expectEqual(WidgetKind.list_item, title_hover.kind);
-    try std.testing.expectEqual(WidgetCursor.pointing_hand, layout.cursorForHit(title_hover));
+    try std.testing.expectEqual(WidgetCursor.arrow, layout.cursorForHit(title_hover));
 
     // The snippet line, the gap between the lines, and the row's own
     // padding corner all belong to the row too.

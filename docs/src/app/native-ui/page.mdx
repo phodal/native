@@ -432,7 +432,7 @@ const spans = [_]canvas.TextSpan{
 ui.paragraph(.{ .on_link = Ui.linkMsg(.open_url) }, &spans)
 ```
 
-Wrapping and measurement are span-aware (the platform text provider measures every run with the font it draws with), stacked paragraphs reserve their real wrapped height, and link spans are first-class: they carry `role=link` semantics in automation snapshots, show a pointer cursor, and clicking one dispatches your `Msg` with the link payload.
+Wrapping and measurement are span-aware (the platform text provider measures every run with the font it draws with), stacked paragraphs reserve their real wrapped height, and link spans are first-class: they carry `role=link` semantics in automation snapshots, show the pointing-hand cursor (the only place the engine uses it — controls keep the platform arrow, following native convention rather than the web's), and clicking one dispatches your `Msg` with the link payload.
 
 Markdown builds on the same model. `native_sdk.markdown` maps a GitHub-flavored subset — headings, inline styles, links (including bare `http(s)://` URLs, which autolink with trailing punctuation trimmed), bullet/ordered/task lists, fenced code blocks, blockquotes, rules, pipe tables, and `<details>` collapsibles — onto ordinary widgets:
 

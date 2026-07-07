@@ -89,47 +89,64 @@ test "runtime tracks retained canvas widget cursor intent" {
     const children = [_]canvas.Widget{
         .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 12, 96, 32), .text = "Run" },
         .{ .id = 3, .kind = .text_field, .frame = geometry.RectF.init(10, 52, 140, 32), .text = "Query" },
-        .{ .id = 4, .kind = .slider, .frame = geometry.RectF.init(10, 96, 140, 32), .value = 0.5 },
+        .{ .id = 4, .kind = .slider, .frame = geometry.RectF.init(10, 96, 140, 24), .value = 0.5 },
+        .{ .id = 5, .kind = .split_divider, .frame = geometry.RectF.init(10, 128, 140, 16) },
     };
-    var nodes: [5]canvas.WidgetLayoutNode = undefined;
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
     const layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &children }, geometry.RectF.init(0, 0, 240, 160), &nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
     var snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
     try std.testing.expectEqual(@as(usize, 0), harness.null_platform.view_cursor_count);
 
+    // Buttons follow the NATIVE cursor register: the arrow, exactly like
+    // the platform's own controls. Hovering one changes nothing on the
+    // cursor channel — no platform write happens — because the pointing
+    // hand is a hyperlink affordance, not a control affordance.
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 20, .y = 24 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
-    try std.testing.expectEqual(platform.Cursor.pointing_hand, testViewByLabel(snapshot.views, "canvas").?.cursor);
-    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.view_cursor_count);
-    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.null_platform.view_cursor);
-    try std.testing.expectEqual(@as(platform.WindowId, 1), harness.null_platform.view_cursor_window_id);
-    try std.testing.expectEqualStrings("canvas", harness.null_platform.view_cursor_label_storage[0..harness.null_platform.view_cursor_label_len]);
+    try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.view_cursor_count);
 
+    // Editable text keeps the I-beam — the first hover that actually
+    // moves the channel, so the platform write (with window and label)
+    // is observable here.
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 20, .y = 64 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.text, testViewByLabel(snapshot.views, "canvas").?.cursor);
-    try std.testing.expectEqual(@as(usize, 2), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.view_cursor_count);
     try std.testing.expectEqual(platform.Cursor.text, harness.null_platform.view_cursor);
+    try std.testing.expectEqual(@as(platform.WindowId, 1), harness.null_platform.view_cursor_window_id);
+    try std.testing.expectEqualStrings("canvas", harness.null_platform.view_cursor_label_storage[0..harness.null_platform.view_cursor_label_len]);
 
     const disabled_children = [_]canvas.Widget{
         .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 12, 96, 32), .text = "Run" },
         .{ .id = 3, .kind = .text_field, .frame = geometry.RectF.init(10, 52, 140, 32), .text = "Query", .state = .{ .disabled = true } },
-        .{ .id = 4, .kind = .slider, .frame = geometry.RectF.init(10, 96, 140, 32), .value = 0.5 },
+        .{ .id = 4, .kind = .slider, .frame = geometry.RectF.init(10, 96, 140, 24), .value = 0.5 },
+        .{ .id = 5, .kind = .split_divider, .frame = geometry.RectF.init(10, 128, 140, 16) },
     };
-    var disabled_nodes: [5]canvas.WidgetLayoutNode = undefined;
+    var disabled_nodes: [6]canvas.WidgetLayoutNode = undefined;
     const disabled_layout = try canvas.layoutWidgetTree(.{ .id = 1, .kind = .panel, .children = &disabled_children }, geometry.RectF.init(0, 0, 240, 160), &disabled_nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", disabled_layout);
     snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
-    try std.testing.expectEqual(@as(usize, 3), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(@as(usize, 2), harness.null_platform.view_cursor_count);
     try std.testing.expectEqual(platform.Cursor.arrow, harness.null_platform.view_cursor);
 
+    // Sliders keep the arrow too — at rest AND during a drag — matching
+    // native sliders on every platform. No cursor write fires.
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 20, .y = 108 } });
+    snapshot = harness.runtime.automationSnapshot("Cursor");
+    try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
+    try std.testing.expectEqual(@as(usize, 2), harness.null_platform.view_cursor_count);
+
+    // Split dividers are the resize affordance — that part of the
+    // register is unchanged.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 20, .y = 134 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
     const canvas_view = testViewByLabel(snapshot.views, "canvas").?;
     try std.testing.expectEqual(platform.Cursor.resize_horizontal, canvas_view.cursor);
-    try std.testing.expectEqual(@as(usize, 4), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(@as(usize, 3), harness.null_platform.view_cursor_count);
     try std.testing.expectEqual(platform.Cursor.resize_horizontal, harness.null_platform.view_cursor);
 
     var view_json_buffer: [4096]u8 = undefined;
@@ -139,7 +156,7 @@ test "runtime tracks retained canvas widget cursor intent" {
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_move, .x = 220, .y = 148 } });
     snapshot = harness.runtime.automationSnapshot("Cursor");
     try std.testing.expectEqual(platform.Cursor.arrow, testViewByLabel(snapshot.views, "canvas").?.cursor);
-    try std.testing.expectEqual(@as(usize, 5), harness.null_platform.view_cursor_count);
+    try std.testing.expectEqual(@as(usize, 4), harness.null_platform.view_cursor_count);
     try std.testing.expectEqual(platform.Cursor.arrow, harness.null_platform.view_cursor);
 }
 
@@ -200,7 +217,9 @@ test "composite list row hovers as one surface: wash, cursor, and pressed wash c
             .y = probe.y,
         } });
         try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
-        try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.null_platform.view_cursor);
+        // The hover wash is the row's affordance; the cursor stays the
+        // native arrow (list rows are controls, not hyperlinks).
+        try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
     }
 
     // A press over the snippet lights the row's pressed wash (the render
@@ -222,7 +241,9 @@ test "composite list row hovers as one surface: wash, cursor, and pressed wash c
         .y = snippet_frame.center().y,
     } });
 
-    // Off the row: hover clears and the cursor returns to the default.
+    // Off the row: hover clears and the cursor stays the arrow it never
+    // left (the channel is read from the runtime — the platform write
+    // only fires on change, and a row hover never changes it).
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = "canvas",
@@ -231,7 +252,7 @@ test "composite list row hovers as one surface: wash, cursor, and pressed wash c
         .y = row_frame.maxY() + 20,
     } });
     try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_hovered_id);
-    try std.testing.expectEqual(platform.Cursor.arrow, harness.null_platform.view_cursor);
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
 }
 
 test "runtime dispatches routed canvas widget pointer events" {
@@ -663,7 +684,9 @@ test "runtime cancels captured canvas widget pointers without activation" {
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_pressed_id);
-    try std.testing.expectEqual(platform.Cursor.pointing_hand, harness.runtime.views[0].canvas_widget_cursor);
+    // A pressed button still shows the native arrow — the cursor channel
+    // never leaves arrow for controls, only for links/text/dividers.
+    try std.testing.expectEqual(platform.Cursor.arrow, harness.runtime.views[0].canvas_widget_cursor);
 
     harness.runtime.invalidated = false;
     harness.runtime.dirty_region_count = 0;

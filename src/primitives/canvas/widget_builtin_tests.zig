@@ -1334,8 +1334,9 @@ test "built-in accordion renders house disclosure chrome and toggle semantics" {
 
     var nodes: [1]WidgetLayoutNode = undefined;
     const layout = try layoutWidgetTree(accordion, accordion.frame, &nodes);
-    try std.testing.expectEqual(WidgetCursor.pointing_hand, layout.cursorForHit(layout.hitTest(geometry.PointF.init(12, 12))));
-    try std.testing.expectEqual(WidgetCursor.pointing_hand, cursorForWidgetTarget(.accordion, .{}));
+    // Accordion headers are controls: native arrow, never the link hand.
+    try std.testing.expectEqual(WidgetCursor.arrow, layout.cursorForHit(layout.hitTest(geometry.PointF.init(12, 12))));
+    try std.testing.expectEqual(WidgetCursor.arrow, cursorForWidgetTarget(.accordion, .{}));
     try std.testing.expectEqual(@as(ObjectId, 45), layout.focusTargetById(45).?.id);
 
     var semantics_buffer: [1]WidgetSemanticsNode = undefined;

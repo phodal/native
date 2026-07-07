@@ -94,12 +94,41 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
             try self.options.platform.services.configureSecurityPolicy(self.options.security);
             try self.options.platform.services.configureMenus(self.options.menus);
             try self.options.platform.services.configureShortcuts(self.options.shortcuts);
-            if (self.options.automation != null) {
-                try self.options.platform.services.configureAutomationFramePolling(true);
+            // Automation liveness: the drain (`consumeAutomationCommand`,
+            // in `frame` below) runs at most once per frame_requested
+            // turn, and an idle app produces no frames — so a queued
+            // command must WAKE the loop the way user input does. The
+            // arrival watcher polls the dropbox slot on its own thread
+            // and asks the platform for one coalesced frame tick through
+            // its thread-safe `request_frame_fn` whenever a command is
+            // pending. Consumption itself stays on the frame boundary,
+            // so command order, one-command-per-frame, and session
+            // recording/replay (commands nest inside recorded
+            // frame_requested events) are unchanged; only the frame's
+            // ARRIVAL time moves. No automation server (any non-dev
+            // build) means no thread and no polls at all.
+            var command_watcher: automation.Watcher = undefined;
+            var command_watcher_running = false;
+            if (self.options.automation) |server| {
+                if (self.options.platform.services.request_frame_fn) |request_fn| {
+                    command_watcher_running = command_watcher.start(server, .{
+                        .context = self.options.platform.services.context,
+                        .request_fn = request_fn,
+                    });
+                    if (!command_watcher_running) {
+                        log(self, "automation.watcher_failed", "automation command watcher thread did not start; commands drain on the next unrelated frame", &.{});
+                    }
+                } else {
+                    // A platform without the cross-thread frame request
+                    // keeps the old behavior (commands drain on whatever
+                    // frame arrives next); say so once instead of wedging
+                    // silently.
+                    log(self, "automation.watcher_unsupported", "platform has no cross-thread frame request; automation commands drain on the next unrelated frame", &.{});
+                }
             }
-            defer if (self.options.automation != null) {
-                self.options.platform.services.configureAutomationFramePolling(false) catch {};
-            };
+            // Stopped (joined) before the platform loop's resources go
+            // away, so the watcher can never call into a dead host.
+            defer if (command_watcher_running) command_watcher.stop();
 
             var context: RunContext = .{ .runtime = self, .app = app };
             try self.options.platform.run(handlePlatformEvent, &context);

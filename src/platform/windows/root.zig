@@ -95,6 +95,7 @@ extern fn native_sdk_windows_destroy(host: *WindowsHost) void;
 extern fn native_sdk_windows_run(host: *WindowsHost, callback: WindowsCallback, context: ?*anyopaque) void;
 extern fn native_sdk_windows_stop(host: *WindowsHost) void;
 extern fn native_sdk_windows_wake(host: *WindowsHost) void;
+extern fn native_sdk_windows_request_frame(host: *WindowsHost) void;
 extern fn native_sdk_windows_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn native_sdk_windows_load_webview(host: *WindowsHost, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
 extern fn native_sdk_windows_load_window_webview(host: *WindowsHost, window_id: u64, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
@@ -281,6 +282,7 @@ pub const WindowsPlatform = struct {
                 .start_timer_fn = startTimer,
                 .cancel_timer_fn = cancelTimer,
                 .wake_fn = wake,
+                .request_frame_fn = requestFrame,
                 .decode_image_fn = decodeImage,
             },
             .app_info = self.app_info,
@@ -574,6 +576,15 @@ fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name:
 fn wake(context: ?*anyopaque) anyerror!void {
     const self: *WindowsPlatform = @ptrCast(@alignCast(context.?));
     native_sdk_windows_wake(self.host);
+}
+
+/// Thread-safe like `wake`: `PostMessage` into the message loop, whose
+/// window procedure emits one `.frame` event on the loop thread. The
+/// automation arrival watcher calls this when a command lands so
+/// consumption never depends on the host's own frame pump.
+fn requestFrame(context: ?*anyopaque) anyerror!void {
+    const self: *WindowsPlatform = @ptrCast(@alignCast(context.?));
+    native_sdk_windows_request_frame(self.host);
 }
 
 /// WIC-backed image decoding (PNG, JPEG, ... — every codec the OS

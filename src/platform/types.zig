@@ -1799,18 +1799,30 @@ pub const PlatformServices = struct {
     configure_security_policy_fn: ?*const fn (context: ?*anyopaque, policy: security.Policy) anyerror!void = null,
     configure_menus_fn: ?*const fn (context: ?*anyopaque, menus: []const Menu) anyerror!void = null,
     configure_shortcuts_fn: ?*const fn (context: ?*anyopaque, shortcuts: []const Shortcut) anyerror!void = null,
-    configure_automation_frame_polling_fn: ?*const fn (context: ?*anyopaque, enabled: bool) anyerror!void = null,
     emit_window_event_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, name: []const u8, detail_json: []const u8) anyerror!void = null,
     request_gpu_surface_frame_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8) anyerror!void = null,
     start_timer_fn: ?*const fn (context: ?*anyopaque, id: u64, interval_ns: u64, repeats: bool) anyerror!void = null,
     cancel_timer_fn: ?*const fn (context: ?*anyopaque, id: u64) anyerror!void = null,
     /// Nudge the platform event loop from ANY thread: the platform must
     /// deliver a `.wake` event on its loop thread as soon as possible.
-    /// This is the only `PlatformServices` entry that may be called
-    /// off-thread; every implementation must be thread-safe (macOS:
-    /// main-queue dispatch, GTK: `g_idle_add`, Win32: `PostMessage`,
-    /// null platform: an atomic counter tests drain explicitly).
+    /// One of exactly two `PlatformServices` entries that may be called
+    /// off-thread (the other is `request_frame_fn`); every implementation
+    /// must be thread-safe (macOS: main-queue dispatch, GTK: `g_idle_add`,
+    /// Win32: `PostMessage`, null platform: an atomic counter tests drain
+    /// explicitly).
     wake_fn: ?*const fn (context: ?*anyopaque) anyerror!void = null,
+    /// Ask the platform loop, from ANY thread, to deliver ONE
+    /// `frame_requested` event on its loop thread soon — the same event a
+    /// resize or an input-driven frame produces, so everything that rides
+    /// the frame boundary (the automation command drain, the snapshot
+    /// republish, session recording) sees an ordinary frame. Requests
+    /// coalesce: asking while one is already queued or a frame tick is
+    /// already armed is a no-op. This is the automation arrival watcher's
+    /// wake path, and like `wake_fn` every implementation must be
+    /// thread-safe (macOS: main-queue dispatch, GTK: `g_idle_add`, Win32:
+    /// `PostMessage`, null platform: an atomic counter the scripted run
+    /// loop reads).
+    request_frame_fn: ?*const fn (context: ?*anyopaque) anyerror!void = null,
     present_gpu_surface_pixels_fn: ?*const fn (context: ?*anyopaque, pixels: GpuSurfacePixels) anyerror!void = null,
     present_gpu_surface_packet_fn: ?*const fn (context: ?*anyopaque, packet: GpuSurfacePacket) anyerror!void = null,
     /// Compact binary variant of the packet presenter: same packet
@@ -2154,11 +2166,6 @@ pub const PlatformServices = struct {
         return configure_fn(self.context, shortcuts);
     }
 
-    pub fn configureAutomationFramePolling(self: PlatformServices, enabled: bool) anyerror!void {
-        const configure_fn = self.configure_automation_frame_polling_fn orelse return;
-        return configure_fn(self.context, enabled);
-    }
-
     pub fn emitWindowEvent(self: PlatformServices, window_id: WindowId, name: []const u8, detail_json: []const u8) anyerror!void {
         const emit_fn = self.emit_window_event_fn orelse return error.UnsupportedService;
         return emit_fn(self.context, window_id, name, detail_json);
@@ -2190,6 +2197,15 @@ pub const PlatformServices = struct {
     pub fn wake(self: PlatformServices) anyerror!void {
         const wake_fn = self.wake_fn orelse return error.UnsupportedService;
         return wake_fn(self.context);
+    }
+
+    /// Ask the platform loop to deliver one `frame_requested` event on
+    /// its own thread. Safe to call from any thread; a missing
+    /// implementation is an error so callers never assume a frame is
+    /// coming when it is not.
+    pub fn requestFrame(self: PlatformServices) anyerror!void {
+        const request_fn = self.request_frame_fn orelse return error.UnsupportedService;
+        return request_fn(self.context);
     }
 
     pub fn presentGpuSurfacePixels(self: PlatformServices, pixels: GpuSurfacePixels) anyerror!void {

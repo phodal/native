@@ -294,7 +294,6 @@ void native_sdk_appkit_emit_window_event(native_sdk_appkit_host_t *host, uint64_
 void native_sdk_appkit_set_security_policy(native_sdk_appkit_host_t *host, const char *allowed_origins, size_t allowed_origins_len, const char *external_urls, size_t external_urls_len, int external_action);
 void native_sdk_appkit_set_menus(native_sdk_appkit_host_t *host, const char *const *menu_titles, const size_t *menu_title_lens, size_t menu_count, const uint32_t *item_menu_indices, const char *const *item_labels, const size_t *item_label_lens, const char *const *item_commands, const size_t *item_command_lens, const char *const *item_keys, const size_t *item_key_lens, const uint32_t *item_modifiers, const int *item_separators, const int *item_enabled, const int *item_checked, size_t item_count);
 void native_sdk_appkit_set_shortcuts(native_sdk_appkit_host_t *host, const char *const *ids, const size_t *id_lens, const char *const *keys, const size_t *key_lens, const uint32_t *modifiers, size_t count);
-void native_sdk_appkit_set_automation_frame_polling(native_sdk_appkit_host_t *host, int enabled);
 int native_sdk_appkit_create_window(native_sdk_appkit_host_t *host, uint64_t window_id, const char *window_title, size_t window_title_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, int show_policy);
 // Content min-size floor for a created window (NSWindow contentMinSize):
 // the user's resize stops at the floor. Values <= 0 leave that axis at
@@ -368,6 +367,13 @@ void native_sdk_appkit_cancel_timer(native_sdk_appkit_host_t *host, uint64_t tim
 /* Thread-safe: nudges the main run loop to emit a WAKE event. May be
  * called from any thread (worker threads streaming effect results). */
 void native_sdk_appkit_wake(native_sdk_appkit_host_t *host);
+/* Thread-safe: asks the main run loop to emit ONE coalesced FRAME event.
+ * May be called from any thread; the automation arrival watcher uses it
+ * so a command landing in the dropbox wakes an idle app's frame loop the
+ * way user input does. Timer-free by design: the event is posted through
+ * the main queue, so it is delivered promptly even when the app is
+ * backgrounded and its NSTimers are being coalesced. */
+void native_sdk_appkit_request_frame(native_sdk_appkit_host_t *host);
 int native_sdk_appkit_update_widget_accessibility(native_sdk_appkit_host_t *host, uint64_t window_id, const char *label, size_t label_len, const native_sdk_appkit_widget_accessibility_node_t *nodes, size_t node_count);
 size_t native_sdk_appkit_clipboard_read(native_sdk_appkit_host_t *host, char *buffer, size_t buffer_len);
 double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char *text, size_t text_len);

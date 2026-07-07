@@ -122,7 +122,7 @@ extern fn native_sdk_appkit_emit_window_event(host: *AppKitHost, window_id: u64,
 extern fn native_sdk_appkit_set_security_policy(host: *AppKitHost, allowed_origins: [*]const u8, allowed_origins_len: usize, external_urls: [*]const u8, external_urls_len: usize, external_action: c_int) void;
 extern fn native_sdk_appkit_set_menus(host: *AppKitHost, menu_titles: [*]const [*]const u8, menu_title_lens: [*]const usize, menu_count: usize, item_menu_indices: [*]const u32, item_labels: [*]const [*]const u8, item_label_lens: [*]const usize, item_commands: [*]const [*]const u8, item_command_lens: [*]const usize, item_keys: [*]const [*]const u8, item_key_lens: [*]const usize, item_modifiers: [*]const u32, item_separators: [*]const c_int, item_enabled: [*]const c_int, item_checked: [*]const c_int, item_count: usize) void;
 extern fn native_sdk_appkit_set_shortcuts(host: *AppKitHost, ids: [*]const [*]const u8, id_lens: [*]const usize, keys: [*]const [*]const u8, key_lens: [*]const usize, modifiers: [*]const u32, count: usize) void;
-extern fn native_sdk_appkit_set_automation_frame_polling(host: *AppKitHost, enabled: c_int) void;
+extern fn native_sdk_appkit_request_frame(host: *AppKitHost) void;
 extern fn native_sdk_appkit_create_window(host: *AppKitHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, resizable: c_int, titlebar_style: c_int, show_policy: c_int) c_int;
 extern fn native_sdk_appkit_set_window_content_min_size(host: *AppKitHost, window_id: u64, min_width: f64, min_height: f64) c_int;
 extern fn native_sdk_appkit_focus_window(host: *AppKitHost, window_id: u64) c_int;
@@ -492,11 +492,11 @@ pub const MacPlatform = struct {
                 .configure_security_policy_fn = configureSecurityPolicy,
                 .configure_menus_fn = configureMenus,
                 .configure_shortcuts_fn = configureShortcuts,
-                .configure_automation_frame_polling_fn = configureAutomationFramePolling,
                 .emit_window_event_fn = emitWindowEvent,
                 .start_timer_fn = startTimer,
                 .cancel_timer_fn = cancelTimer,
                 .wake_fn = wake,
+                .request_frame_fn = requestFrame,
                 .request_gpu_surface_frame_fn = requestGpuSurfaceFrame,
                 .set_gpu_surface_scroll_drivers_fn = setGpuSurfaceScrollDrivers,
                 .show_context_menu_fn = showContextMenu,
@@ -845,11 +845,6 @@ fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name:
     native_sdk_appkit_emit_window_event(self.host, window_id, name.ptr, name.len, detail_json.ptr, detail_json.len);
 }
 
-fn configureAutomationFramePolling(context: ?*anyopaque, enabled: bool) anyerror!void {
-    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
-    native_sdk_appkit_set_automation_frame_polling(self.host, if (enabled) 1 else 0);
-}
-
 fn titlebarStyleInt(style: platform_mod.WindowTitlebarStyle) c_int {
     return switch (style) {
         .standard => 0,
@@ -1061,10 +1056,20 @@ fn cancelTimer(context: ?*anyopaque, id: u64) anyerror!void {
 }
 
 /// Thread-safe: dispatches onto the main queue, which emits `.wake` on
-/// the AppKit run loop. The one service worker threads may call.
+/// the AppKit run loop. One of the two services worker threads may call.
 fn wake(context: ?*anyopaque) anyerror!void {
     const self: *MacPlatform = @ptrCast(@alignCast(context.?));
     native_sdk_appkit_wake(self.host);
+}
+
+/// Thread-safe like `wake`: dispatches onto the main queue, which emits
+/// one coalesced `frame` event on the AppKit run loop. The automation
+/// arrival watcher calls this when a command lands so an idle app runs
+/// the frame that drains it — no timers involved, so the wake works even
+/// when the app is backgrounded and its timers are being coalesced.
+fn requestFrame(context: ?*anyopaque) anyerror!void {
+    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
+    native_sdk_appkit_request_frame(self.host);
 }
 
 fn requestGpuSurfaceFrame(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8) anyerror!void {

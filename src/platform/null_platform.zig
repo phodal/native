@@ -374,6 +374,11 @@ pub const NullPlatform = struct {
     /// embed host drain it on their own thread via `takeWake` and then
     /// dispatch the `.wake` platform event themselves.
     wake_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    /// Pending cross-thread frame requests (`request_frame_fn`), counted
+    /// atomically like `wake_count`: the automation arrival watcher calls
+    /// it from its own thread, and a scripted run loop (or test) drains
+    /// it via `takeFrameRequest` into `.frame_requested` dispatches.
+    frame_request_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     view_cursor_window_id: WindowId = 0,
     view_cursor_label_storage: [max_view_label_bytes]u8 = undefined,
     view_cursor_label_len: usize = 0,
@@ -482,6 +487,7 @@ pub const NullPlatform = struct {
                 .start_timer_fn = startTimer,
                 .cancel_timer_fn = cancelTimer,
                 .wake_fn = wakeService,
+                .request_frame_fn = requestFrameService,
                 .request_gpu_surface_frame_fn = requestGpuSurfaceFrame,
                 .present_gpu_surface_pixels_fn = presentGpuSurfacePixels,
                 .present_gpu_surface_packet_fn = presentGpuSurfacePacket,
@@ -1099,6 +1105,11 @@ pub const NullPlatform = struct {
         _ = self.wake_count.fetchAdd(1, .release);
     }
 
+    fn requestFrameService(context: ?*anyopaque) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        _ = self.frame_request_count.fetchAdd(1, .release);
+    }
+
     /// Deterministic decode seam for tests (see `image_decode`): parses
     /// the strict PNG subset the canvas writer emits. Off by default so
     /// the null platform models codec-less hosts.
@@ -1131,6 +1142,25 @@ pub const NullPlatform = struct {
 
     pub fn pendingWakeCount(self: *const NullPlatform) usize {
         return self.wake_count.load(.acquire);
+    }
+
+    /// Consume one pending cross-thread frame request, returning the
+    /// `.frame_requested` event a live loop would deliver (or null when
+    /// none are pending) — `takeWake`'s twin for `request_frame_fn`.
+    pub fn takeFrameRequest(self: *NullPlatform) ?Event {
+        var current = self.frame_request_count.load(.acquire);
+        while (current > 0) {
+            if (self.frame_request_count.cmpxchgWeak(current, current - 1, .acq_rel, .acquire)) |actual| {
+                current = actual;
+            } else {
+                return .frame_requested;
+            }
+        }
+        return null;
+    }
+
+    pub fn pendingFrameRequestCount(self: *const NullPlatform) usize {
+        return self.frame_request_count.load(.acquire);
     }
 
     /// Test helper: synthesize the platform event a live timer would deliver.

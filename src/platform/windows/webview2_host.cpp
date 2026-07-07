@@ -73,6 +73,11 @@ constexpr UINT kNotificationCallbackMessage = WM_APP + 42;
  * native_sdk_windows_wake; the window procedure emits kWake on the
  * message loop thread. */
 constexpr UINT kWakeMessage = WM_APP + 43;
+/* Posted from any thread via native_sdk_windows_request_frame; the
+ * window procedure emits ONE kFrame on the message loop thread. The
+ * automation arrival watcher uses it so a queued command wakes an idle
+ * frame loop without depending on the 16 ms frame pump. */
+constexpr UINT kRequestFrameMessage = WM_APP + 44;
 constexpr const char *kAssetVirtualOrigin = "https://native-sdk-app.localhost";
 
 constexpr int kViewWebView = 0;
@@ -2500,6 +2505,14 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
                 if (host->callback) host->callback(host->callback_context, &wake);
             }
             return 0;
+        case kRequestFrameMessage:
+            if (host) {
+                WindowsEvent frame = {};
+                frame.kind = kFrame;
+                frame.window_id = 1;
+                if (host->callback) host->callback(host->callback_context, &frame);
+            }
+            return 0;
         case kNotificationCallbackMessage:
             if (host && host->tray_active) {
                 UINT tray_event = LOWORD(lparam);
@@ -2792,6 +2805,19 @@ void native_sdk_windows_wake(Host *host) {
     HWND hwnd = parentWindow(host);
     if (!hwnd) return;
     PostMessageW(hwnd, kWakeMessage, 0, 0);
+}
+
+/* Thread-safe frame request: posts kRequestFrameMessage into the message
+ * loop, which emits one kFrame event on the loop thread — the automation
+ * arrival watcher's wake, guarded exactly like native_sdk_windows_wake. */
+void native_sdk_windows_request_frame(Host *host) {
+    if (!host) return;
+    std::shared_ptr<HostLifetime> lifetime = host->lifetime;
+    std::lock_guard<std::recursive_mutex> guard(lifetime->mutex);
+    if (!lifetime->alive || !host->running) return;
+    HWND hwnd = parentWindow(host);
+    if (!hwnd) return;
+    PostMessageW(hwnd, kRequestFrameMessage, 0, 0);
 }
 
 /* Platform image decoder: WIC (Windows Imaging Component) handles PNG,

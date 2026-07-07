@@ -20,7 +20,6 @@
 static const NSUInteger NativeSdkMaxChildWebViews = 16;
 static const NSUInteger NativeSdkMaxNativeViews = 32;
 static const NSInteger NativeSdkBridgeFrameKeepaliveFrames = 600;
-static const NSTimeInterval NativeSdkAutomationFramePollInterval = 0.05;
 static const uint64_t NativeSdkNanosecondsPerSecond = 1000000000ull;
 static const uint32_t NativeSdkShortcutModifierPrimary = 1u << 0;
 static const uint32_t NativeSdkShortcutModifierCommand = 1u << 1;
@@ -602,7 +601,12 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, strong) NSMutableSet<NSString *> *nativeViewExplicitTextKeys;
 @property(nonatomic, strong) NSMutableSet<NSString *> *bridgeEnabledChildWebViewKeys;
 @property(nonatomic, strong) NSTimer *timer;
-@property(nonatomic, strong) NSTimer *automationFrameTimer;
+/* Coalescing flag for cross-thread frame requests: set (atomically) by
+ * requestFrameFromAnyThread before it posts to the main queue, cleared
+ * by the posted block before it emits — so a burst of requests between
+ * loop turns delivers ONE frame event, and a request arriving after the
+ * block starts still gets its own turn. */
+@property(atomic, assign) BOOL crossThreadFramePending;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSTimer *> *appTimers;
 @property(nonatomic, strong) NSString *appName;
 /* The human-facing app name (app.zon display_name, falling back through
@@ -726,8 +730,7 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)emitWindowFrame:(BOOL)open;
 - (void)emitWindowFrameForWindowId:(uint64_t)windowId open:(BOOL)open;
 - (void)scheduleFrame;
-- (void)setAutomationFramePolling:(BOOL)enabled;
-- (void)emitAutomationFramePoll;
+- (void)requestFrameFromAnyThread;
 - (void)startAppTimerWithId:(uint64_t)timerId intervalNs:(uint64_t)intervalNs repeats:(BOOL)repeats;
 - (void)cancelAppTimerWithId:(uint64_t)timerId;
 - (void)appTimerFired:(NSTimer *)timer;
@@ -6000,8 +6003,6 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 }
 
 - (void)dealloc {
-    [self.automationFrameTimer invalidate];
-    self.automationFrameTimer = nil;
     [self invalidateAppTimers];
     [self stopAppearanceObservers];
     if (self.shortcutEventMonitor) {
@@ -7648,8 +7649,6 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
     }
     [self.timer invalidate];
     self.timer = nil;
-    [self.automationFrameTimer invalidate];
-    self.automationFrameTimer = nil;
     [self invalidateAppTimers];
     if (self.shortcutEventMonitor) {
         [NSEvent removeMonitor:self.shortcutEventMonitor];
@@ -7817,24 +7816,25 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
     self.timer = frame_timer;
 }
 
-- (void)setAutomationFramePolling:(BOOL)enabled {
-    if (!enabled) {
-        [self.automationFrameTimer invalidate];
-        self.automationFrameTimer = nil;
-        return;
-    }
-    if (self.automationFrameTimer) return;
-    NSTimer *poll_timer = [NSTimer timerWithTimeInterval:NativeSdkAutomationFramePollInterval
-                                                  target:self
-                                                selector:@selector(emitAutomationFramePoll)
-                                                userInfo:nil
-                                                 repeats:YES];
-    [[NSRunLoop mainRunLoop] addTimer:poll_timer forMode:NSRunLoopCommonModes];
-    self.automationFrameTimer = poll_timer;
-}
-
-- (void)emitAutomationFramePoll {
-    [self scheduleFrame];
+/* Called from any thread: marshal onto the main queue and emit ONE FRAME
+ * event there. This is the automation arrival watcher's wake — a command
+ * landing in the dropbox produces the frame that drains it, instead of
+ * the app waiting for an unrelated frame source. Deliberately timer-free
+ * (unlike scheduleFrame's 1/60 s one-shot): a queued main-queue block is
+ * delivered promptly even when the app is backgrounded/occluded and the
+ * OS is coalescing its timers, which is exactly the state a driver-run
+ * app idles in. */
+- (void)requestFrameFromAnyThread {
+    if (self.crossThreadFramePending) return;
+    self.crossThreadFramePending = YES;
+    __weak NativeSdkAppKitHost *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NativeSdkAppKitHost *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.crossThreadFramePending = NO;
+        if (strongSelf.didShutdown) return;
+        [strongSelf emitEvent:(native_sdk_appkit_event_t){ .kind = NATIVE_SDK_APPKIT_EVENT_FRAME }];
+    });
 }
 
 /* Called from any thread: marshal onto the main queue and emit the WAKE
@@ -8427,9 +8427,9 @@ void native_sdk_appkit_run(native_sdk_appkit_host_t *host, native_sdk_appkit_eve
     [object runWithCallback:callback context:context];
 }
 
-void native_sdk_appkit_set_automation_frame_polling(native_sdk_appkit_host_t *host, int enabled) {
+void native_sdk_appkit_request_frame(native_sdk_appkit_host_t *host) {
     NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
-    [object setAutomationFramePolling:(enabled != 0)];
+    [object requestFrameFromAnyThread];
 }
 
 void native_sdk_appkit_start_timer(native_sdk_appkit_host_t *host, uint64_t timer_id, uint64_t interval_ns, int repeats) {

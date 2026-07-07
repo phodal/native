@@ -2340,6 +2340,26 @@ void native_sdk_gtk_wake(native_sdk_gtk_host_t *host) {
     g_idle_add(native_sdk_emit_wake_idle, host);
 }
 
+/* Runs on the GLib main loop: emit one FRAME event there, so a
+ * cross-thread frame request turns into an ordinary frame turn. */
+static gboolean native_sdk_emit_frame_idle(gpointer data) {
+    native_sdk_gtk_host_t *host = data;
+    if (host && !host->did_shutdown) {
+        native_sdk_emit(host, (native_sdk_gtk_event_t){ .kind = NATIVE_SDK_GTK_EVENT_FRAME });
+    }
+    return G_SOURCE_REMOVE;
+}
+
+void native_sdk_gtk_request_frame(native_sdk_gtk_host_t *host) {
+    if (!host) return;
+    /* The automation arrival watcher's wake. Today the GTK host also
+     * pumps FRAME continuously from frame_timer, so this only advances a
+     * command by up to one tick — but the watcher must not DEPEND on
+     * that pump: when frame emission becomes demand-driven this stays
+     * the liveness guarantee for commands landing while the app idles. */
+    g_idle_add(native_sdk_emit_frame_idle, host);
+}
+
 /* Platform image decoder: gdk-pixbuf handles PNG, JPEG, and every other
  * codec its loaders ship — the framework bundles none. Decoded rows are
  * repacked tightly (gdk-pixbuf rowstride may pad) as straight-alpha RGBA8,

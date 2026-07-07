@@ -87,12 +87,33 @@ pub const Server = struct {
         var path_buffer: [256]u8 = undefined;
         const command_path = self.path("command.txt", &path_buffer);
         const bytes = readPath(self.io, command_path, buffer) catch return null;
-        if (bytes.len == buffer.len) return error.CommandTooLarge;
         const line = std.mem.trim(u8, bytes, " \n\r\t");
         if (line.len == 0 or std.mem.eql(u8, line, "done")) return null;
-        const command = protocol.Command.parse(line) catch return null;
+        // EVERY non-empty line is consumed (acked to `done`), even one
+        // that cannot be dispatched. Leaving an oversized or malformed
+        // line in place would strand the single-entry slot forever: the
+        // driver's next command times out on a busy slot, and the
+        // arrival watcher keeps waking the loop for a line the drain can
+        // never retire. Ack first, then report the failure as an error
+        // so the runtime records it where snapshots surface it.
         try writePath(self.io, command_path, "done\n");
-        return command;
+        if (bytes.len == buffer.len) return error.CommandTooLarge;
+        return try protocol.Command.parse(line);
+    }
+
+    /// True when the dropbox slot holds an unconsumed command line —
+    /// non-empty and not the `done` ack. The same pending test
+    /// `takeCommand` starts from, WITHOUT consuming: the arrival watcher
+    /// polls this from its own thread and nudges the platform loop, and
+    /// the drain on the loop thread stays the only consumer, so command
+    /// order and the one-command-per-frame cadence are untouched.
+    pub fn hasPendingCommand(self: Server) bool {
+        if (!has_filesystem) return false;
+        var buffer: [protocol.max_command_bytes]u8 = undefined;
+        var path_buffer: [256]u8 = undefined;
+        const bytes = readPath(self.io, self.path("command.txt", &path_buffer), &buffer) catch return false;
+        const line = std.mem.trim(u8, bytes, " \n\r\t");
+        return line.len != 0 and !std.mem.eql(u8, line, "done");
     }
 
     fn path(self: Server, name: []const u8, buffer: []u8) []const u8 {
@@ -248,4 +269,56 @@ test "server consumes automation command files" {
     const tray_action = (try server.takeCommand(&command_buffer)).?;
     try std.testing.expectEqual(protocol.Action.tray_action, tray_action.action);
     try std.testing.expectEqualStrings("11", tray_action.value);
+}
+
+test "server acks undispatchable command lines instead of stranding the slot" {
+    const directory = ".zig-cache/test-webview-automation-bad-command";
+    try resetTestDirectory(std.testing.io, directory);
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, directory) catch {};
+
+    const server = Server.init(std.testing.io, directory, "Test");
+    var path_buffer: [256]u8 = undefined;
+    const command_path = server.path("command.txt", &path_buffer);
+    var command_buffer: [256]u8 = undefined;
+    var done_buffer: [16]u8 = undefined;
+
+    // A malformed line is consumed with a loud error, never left behind
+    // to block the single-entry slot (and to wake the loop forever).
+    try writePath(std.testing.io, command_path, "no-such-verb whatever\n");
+    try std.testing.expectError(error.InvalidCommand, server.takeCommand(&command_buffer));
+    try std.testing.expectEqualStrings("done\n", try readPath(std.testing.io, command_path, &done_buffer));
+    try std.testing.expect(try server.takeCommand(&command_buffer) == null);
+
+    // Same for a line larger than the caller's buffer.
+    const oversized = "widget-key canvas " ++ "x" ** 256 ++ "\n";
+    try writePath(std.testing.io, command_path, oversized);
+    try std.testing.expectError(error.CommandTooLarge, server.takeCommand(&command_buffer));
+    try std.testing.expectEqualStrings("done\n", try readPath(std.testing.io, command_path, &done_buffer));
+}
+
+test "server reports pending commands without consuming them" {
+    const directory = ".zig-cache/test-webview-automation-pending";
+    try resetTestDirectory(std.testing.io, directory);
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, directory) catch {};
+
+    const server = Server.init(std.testing.io, directory, "Test");
+    var path_buffer: [256]u8 = undefined;
+    const command_path = server.path("command.txt", &path_buffer);
+
+    // Missing file, empty slot, and the `done` ack all read as idle.
+    try std.testing.expect(!server.hasPendingCommand());
+    try writePath(std.testing.io, command_path, "\n");
+    try std.testing.expect(!server.hasPendingCommand());
+    try writePath(std.testing.io, command_path, "done\n");
+    try std.testing.expect(!server.hasPendingCommand());
+
+    // A queued line is pending — and STAYS pending across probes; only
+    // takeCommand (the loop-thread drain) consumes it.
+    try writePath(std.testing.io, command_path, "widget-click canvas 7\n");
+    try std.testing.expect(server.hasPendingCommand());
+    try std.testing.expect(server.hasPendingCommand());
+    var command_buffer: [256]u8 = undefined;
+    const command = (try server.takeCommand(&command_buffer)).?;
+    try std.testing.expectEqual(protocol.Action.widget_click, command.action);
+    try std.testing.expect(!server.hasPendingCommand());
 }

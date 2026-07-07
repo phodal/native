@@ -134,6 +134,10 @@ void native_sdk_gtk_stop(native_sdk_gtk_host_t *host);
 /* Thread-safe: schedules a WAKE event on the GLib main loop via
  * g_idle_add. May be called from any thread (effect worker threads). */
 void native_sdk_gtk_wake(native_sdk_gtk_host_t *host);
+/* Thread-safe: schedules ONE FRAME event on the GLib main loop via
+ * g_idle_add. May be called from any thread; the automation arrival
+ * watcher uses it so a queued command wakes an idle frame loop. */
+void native_sdk_gtk_request_frame(native_sdk_gtk_host_t *host);
 /* Decode encoded image bytes (PNG, JPEG, ... — whatever gdk-pixbuf
  * loaders are installed) into tightly packed, row-major, straight-alpha
  * RGBA8 written into `pixels`. Returns 1 on success (with `out_width`/

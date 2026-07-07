@@ -93,6 +93,7 @@ extern fn native_sdk_gtk_destroy(host: *GtkHost) void;
 extern fn native_sdk_gtk_run(host: *GtkHost, callback: GtkCallback, context: ?*anyopaque) void;
 extern fn native_sdk_gtk_stop(host: *GtkHost) void;
 extern fn native_sdk_gtk_wake(host: *GtkHost) void;
+extern fn native_sdk_gtk_request_frame(host: *GtkHost) void;
 extern fn native_sdk_gtk_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn native_sdk_gtk_load_webview(host: *GtkHost, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
 extern fn native_sdk_gtk_load_window_webview(host: *GtkHost, window_id: u64, source: [*]const u8, source_len: usize, source_kind: c_int, asset_root: [*]const u8, asset_root_len: usize, asset_entry: [*]const u8, asset_entry_len: usize, asset_origin: [*]const u8, asset_origin_len: usize, spa_fallback: c_int) void;
@@ -278,6 +279,7 @@ pub const LinuxPlatform = struct {
                 .start_timer_fn = startTimer,
                 .cancel_timer_fn = cancelTimer,
                 .wake_fn = wake,
+                .request_frame_fn = requestFrame,
                 .decode_image_fn = decodeImage,
             },
             .app_info = self.app_info,
@@ -571,10 +573,19 @@ fn emitWindowEvent(context: ?*anyopaque, window_id: platform_mod.WindowId, name:
 }
 
 /// Thread-safe: schedules an idle source on the GLib main loop, which
-/// emits `.wake` there. The one service worker threads may call.
+/// emits `.wake` there. One of the two services worker threads may call.
 fn wake(context: ?*anyopaque) anyerror!void {
     const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
     native_sdk_gtk_wake(self.host);
+}
+
+/// Thread-safe like `wake`: schedules an idle source on the GLib main
+/// loop, which emits one `.frame` event there. The automation arrival
+/// watcher calls this when a command lands so consumption never depends
+/// on the host's own frame pump.
+fn requestFrame(context: ?*anyopaque) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    native_sdk_gtk_request_frame(self.host);
 }
 
 /// gdk-pixbuf-backed image decoding (PNG, JPEG, ... — whatever loaders

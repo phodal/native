@@ -2252,13 +2252,13 @@ void native_sdk_appkit_wake(native_sdk_appkit_host_t *host) {
     [object wakeFromAnyThread];
 }
 
-void native_sdk_appkit_set_automation_frame_polling(native_sdk_appkit_host_t *host, int enabled) {
-    // The AppKit host pauses FRAME events when idle and uses this poll to
-    // keep automation captures fresh. The Chromium host pumps FRAME
-    // unconditionally at 60Hz from its message-loop timer (see emitFrame),
-    // so there is no retained-frame pause to poll around.
+void native_sdk_appkit_request_frame(native_sdk_appkit_host_t *host) {
+    // The AppKit host pauses FRAME events when idle, so a cross-thread
+    // frame request is how the automation arrival watcher wakes it. The
+    // Chromium host pumps FRAME unconditionally at 60Hz from its
+    // message-loop timer (see emitFrame), so the next tick is never more
+    // than ~16 ms away and a request has nothing to add.
     (void)host;
-    (void)enabled;
 }
 
 /* GPU-surface compositing (pixel/packet presents, image store, scroll

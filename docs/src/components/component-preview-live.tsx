@@ -12,32 +12,47 @@ import { LivePreview, PointerKind, loadPreviewEngine } from "@/lib/live-preview"
  * Layers, honestly ordered:
  * - The theme-aware webp pair is the SSR / no-JS / instant layer (same
  *   markup as before the wasm existed).
- * - Entering the viewport warms the shared wasm module; hovering,
- *   clicking, or focusing the tile creates the scene instance and swaps
- *   in a canvas that follows the site theme (one canvas replaces the
- *   light/dark image pair).
+ * - Approaching the viewport warms the shared wasm module; ENTERING the
+ *   viewport activates the tile (creates the scene instance and swaps
+ *   in a canvas that follows the site theme), so time-driven previews
+ *   (spinner, skeleton) animate without waiting for a pointer. Leaving
+ *   the viewport releases the instance again — live cost tracks what
+ *   the reader can actually see.
  * - The rAF loop runs only while the tile is visible AND something
  *   recently changed; `render` returns whether the engine's retained
- *   display list repainted, so an idle preview costs nothing.
+ *   display list repainted, so an idle preview costs nothing. Looping
+ *   animations keep repainting, so their tiles simply never idle-park
+ *   while on screen — parking happens when they scroll away.
  *
  * Keyboard: the canvas is focusable (click or Tab); keys route into the
  * engine's roving widget focus. Escape returns focus to the page.
  */
 
-/** How many live engine instances to keep at once (LRU). */
-const max_live_instances = 4;
+/**
+ * Backstop cap on simultaneous live instances (LRU). Activation is
+ * viewport-driven, so the working set is normally "tiles on screen";
+ * the cap only guards pathological layouts (a huge grid of tiny tiles)
+ * from unbounded wasm memory. Each instance is a fixed-capacity engine
+ * runtime, single-digit megabytes.
+ */
+const max_live_instances = 12;
 /** Park the rAF loop after this much time without a repaint or input. */
 const idle_park_ms = 600;
 
-const liveRegistry: { id: number; release: () => void }[] = [];
+const liveRegistry: { id: number; visible: () => boolean; release: () => void }[] = [];
 let nextLiveId = 1;
 
-function registerLive(release: () => void): number {
+function registerLive(visible: () => boolean, release: () => void): number {
   const id = nextLiveId++;
-  liveRegistry.push({ id, release });
+  liveRegistry.push({ id, visible, release });
   while (liveRegistry.length > max_live_instances) {
-    const oldest = liveRegistry.shift();
-    oldest?.release();
+    // Evict the oldest OFF-SCREEN instance first — visibility drives
+    // activation, so releasing a visible tile would freeze something
+    // the reader is looking at. Only when every live tile is on screen
+    // does plain LRU apply.
+    const index = liveRegistry.findIndex((entry) => !entry.visible());
+    const evicted = liveRegistry.splice(index >= 0 ? index : 0, 1)[0];
+    evicted?.release();
   }
   return id;
 }
@@ -193,45 +208,71 @@ export function ComponentPreviewLive({
     if (previewRef.current) return;
     void loadPreviewEngine().then((engine) => {
       if (!engine || previewRef.current || !containerRef.current) return;
+      // The tile may have scrolled away while the module downloaded;
+      // only keyboard engagement (the container holds focus) still
+      // justifies going live off-screen.
+      if (!visibleRef.current && document.activeElement !== containerRef.current) return;
       const preview = engine.create(name, isDarkRef.current);
       if (!preview) return;
       previewRef.current = preview;
-      liveIdRef.current = registerLive(deactivate);
+      liveIdRef.current = registerLive(() => visibleRef.current, deactivate);
       setLive(true);
       wake();
     });
   }, [deactivate, name, wake]);
 
-  // Warm the shared wasm module when the tile approaches the viewport;
-  // pause/resume the live loop as it leaves and re-enters.
+  // Two rings around the viewport drive the tile's lifecycle:
+  // - The outer ring (generous margin) warms the shared wasm module so
+  //   the download races the scroll.
+  // - The inner ring activates the tile as it becomes visible — no
+  //   pointer required, which is what lets always-animating previews
+  //   (spinner, skeleton) run on sight — and releases the instance
+  //   once it leaves, so a long components page never accumulates live
+  //   engines it isn't showing.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const observer = new IntersectionObserver(
+    const warm = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) void loadPreviewEngine();
+        }
+      },
+      { rootMargin: "600px" },
+    );
+    const active = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           visibleRef.current = entry.isIntersecting;
           if (entry.isIntersecting) {
-            void loadPreviewEngine();
             if (previewRef.current) wake();
+            else activate();
           } else {
             stopLoop();
+            // Keep a keyboard-engaged tile alive even when scrolled
+            // away: dropping it would yank focus back to the page.
+            const focused = document.activeElement;
+            if (focused !== container && (!canvasRef.current || focused !== canvasRef.current)) {
+              deactivate();
+            }
           }
         }
       },
-      { rootMargin: "200px" },
+      { rootMargin: "64px" },
     );
-    observer.observe(container);
+    warm.observe(container);
+    active.observe(container);
     const onVisibility = () => {
       if (document.hidden) stopLoop();
       else if (previewRef.current && visibleRef.current) wake();
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      observer.disconnect();
+      warm.disconnect();
+      active.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [stopLoop, wake]);
+  }, [activate, deactivate, stopLoop, wake]);
 
   // Hand keyboard focus from the static tile to the live canvas so an
   // Enter/Tab activation flows straight into the engine's widget focus.
@@ -324,9 +365,12 @@ export function ComponentPreviewLive({
   return (
     <div
       ref={containerRef}
-      // Focusable while static so keyboard-only readers can upgrade the
-      // tile too; once live the canvas itself is the tab stop. Inert
-      // until hydration so no-JS readers never meet a dead button.
+      // Visibility normally activates the tile, but the container stays
+      // focusable while static so keyboard-only readers (and any tile
+      // the observer hasn't reached yet) can upgrade it directly; once
+      // live the canvas itself is the tab stop. Inert until hydration
+      // so no-JS readers never meet a dead button. Pointer-enter stays
+      // as a belt-and-suspenders activation path.
       tabIndex={interactive && !live ? 0 : -1}
       role={interactive ? "button" : undefined}
       aria-label={interactive && !live ? `Load interactive preview: ${alt}` : undefined}
@@ -361,7 +405,11 @@ export function ComponentPreviewLive({
           onPointerDown={(event) => {
             pointerDownRef.current = true;
             event.currentTarget.setPointerCapture(event.pointerId);
-            event.currentTarget.focus();
+            // preventScroll: a partially-visible tile must not scroll
+            // itself into view MID-CLICK — the page would shift between
+            // pointer-down and pointer-up and the press would land on
+            // the wrong widget (or a drag would jump).
+            event.currentTarget.focus({ preventScroll: true });
             sendPointer(PointerKind.down, event);
             event.preventDefault();
           }}
@@ -416,14 +464,12 @@ export function ComponentPreviewLive({
           }}
         />
       ) : null}
-      {interactive ? (
+      {interactive && live ? (
         <span
           aria-hidden
-          className={`pointer-events-none absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4 text-gray-900 transition-opacity ${
-            live ? "opacity-100" : "opacity-0 group-hover/live:opacity-70"
-          }`}
+          className="pointer-events-none absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-full border border-gray-alpha-400 bg-background-100/90 px-2 py-0.5 text-[11px] leading-4 text-gray-900"
         >
-          {live ? "WASM Preview" : "Hover to interact"}
+          WASM Preview
         </span>
       ) : null}
     </div>

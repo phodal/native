@@ -73,6 +73,11 @@ const Preview = struct {
     height: f32 = 0,
     dark: bool = false,
     frame_index: u64 = 0,
+    /// Last pointer position, kept so drag events can carry the
+    /// per-event delta desktop platforms supply natively — the engine's
+    /// delta consumers (the resizable's edge drag) read
+    /// `input_event.delta_x`, never re-deriving it from positions.
+    last_pointer: ?geometry.PointF = null,
     /// Revision of the view's retained display list at the last render,
     /// so `preview_render` can report "clean" without touching pixels.
     rendered_revision: u64 = std.math.maxInt(u64),
@@ -107,6 +112,18 @@ fn previewEventFn(context: *anyopaque, runtime: *native_sdk.Runtime, event: nati
     const tree = &(self.tree orelse return);
     const msg: ?preview_scenes.Msg = switch (event) {
         .canvas_widget_pointer => |pointer_event| blk: {
+            // A pointer gesture that performed a text edit (the text
+            // field's built-in clear button): the runtime already
+            // applied it, and the model hears it through `on_input` so
+            // a source-owned buffer (the combobox query) follows.
+            if (pointer_event.edit) |edit| {
+                if (pointer_event.target) |edit_target| {
+                    if (tree.msgForTextEdit(edit_target.id, edit)) |edit_msg| {
+                        preview_scenes.update(&self.model, edit_msg);
+                        rebuildScene(self) catch {};
+                    }
+                }
+            }
             const target = pointer_event.press_target orelse break :blk null;
             break :blk tree.msgForPointer(target.id, pointer_event.pointer.phase);
         },
@@ -203,6 +220,7 @@ export fn preview_create(name_ptr: ?[*]const u8, name_len: usize, dark: u32) ?*P
     self.height = scene.height;
     self.dark = dark != 0;
     self.frame_index = 0;
+    self.last_pointer = null;
     self.rendered_revision = std.math.maxInt(u64);
     self.rendered_scale_bits = 0;
     self.rendered_animating = false;
@@ -305,6 +323,23 @@ export fn preview_pointer(self: ?*Preview, kind: u32, x: f32, y: f32) void {
         4 => .pointer_cancel,
         else => return,
     };
+    // Drags carry the position delta since the previous pointer event,
+    // matching the desktop platforms' native events: the engine's delta
+    // consumers (the resizable's edge drag) read `delta_x` directly and
+    // never re-derive it from positions.
+    const point = geometry.PointF.init(x, y);
+    var delta_x: f32 = 0;
+    var delta_y: f32 = 0;
+    if (input_kind == .pointer_drag) {
+        if (p.last_pointer) |last| {
+            delta_x = point.x - last.x;
+            delta_y = point.y - last.y;
+        }
+    }
+    p.last_pointer = switch (input_kind) {
+        .pointer_down, .pointer_drag, .pointer_move => point,
+        else => null,
+    };
     dispatch(p, .{
         .label = view_label,
         .kind = input_kind,
@@ -312,6 +347,8 @@ export fn preview_pointer(self: ?*Preview, kind: u32, x: f32, y: f32) void {
         .pointer_id = 1,
         .x = x,
         .y = y,
+        .delta_x = delta_x,
+        .delta_y = delta_y,
         .pressure = if (input_kind == .pointer_down or input_kind == .pointer_drag) 1 else 0,
     });
 }

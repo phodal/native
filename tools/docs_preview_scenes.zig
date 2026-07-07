@@ -30,22 +30,30 @@ pub const Msg = union(enum) {
     toggle_flag: u8,
     /// Select one of the model's indexed options (tab triggers).
     select_index: u8,
-    /// Open or close the model's single open surface (dialog).
+    /// Open or close the model's single open surface (dialog, menus).
     set_open: bool,
     /// Toggle the open surface (the select trigger).
     toggle_open,
     /// Pick option `i` AND close the open surface (select menu items).
     choose: u8,
+    /// Apply one text edit to the model's query buffer (the combobox's
+    /// `on_input`); suggestions open while the query has text.
+    query_edit: canvas.TextInputEvent,
+    /// Take suggestion `i` as the query text and close the suggestions
+    /// (combobox suggestion rows).
+    pick_suggestion: u8,
 };
 
 /// The mini-model every model-driven scene shares: a few boolean slots,
-/// one selected index, one open flag. Deliberately tiny — scenes are
-/// demos, and the seam exists so the live previews respond through the
-/// same update/rebuild loop a real app runs, not to model real apps.
+/// one selected index, one open flag, one small text query. Deliberately
+/// tiny — scenes are demos, and the seam exists so the live previews
+/// respond through the same update/rebuild loop a real app runs, not to
+/// model real apps.
 pub const SceneModel = struct {
     flags: [4]bool = .{ false, false, false, false },
     index: u8 = 0,
     open: bool = false,
+    query: canvas.TextBuffer(48) = .{},
 };
 
 pub fn update(model: *SceneModel, msg: Msg) void {
@@ -59,6 +67,14 @@ pub fn update(model: *SceneModel, msg: Msg) void {
         .toggle_open => model.open = !model.open,
         .choose => |index| {
             model.index = index;
+            model.open = false;
+        },
+        .query_edit => |edit| {
+            model.query.apply(edit);
+            model.open = model.query.text().len > 0;
+        },
+        .pick_suggestion => |index| {
+            model.query.set(combobox_options[@min(index, combobox_options.len - 1)]);
             model.open = false;
         },
     }
@@ -120,8 +136,10 @@ pub const scenes = [_]Scene{
     .{ .name = "textarea", .height = 220, .build = stateless(buildTextarea) },
     .{ .name = "input-group", .height = 340, .build = stateless(buildInputGroup) },
     .{ .name = "select", .height = 280, .build = buildSelect },
-    .{ .name = "combobox", .height = 160, .build = stateless(buildCombobox) },
-    .{ .name = "dropdown-menu", .height = 300, .build = stateless(buildDropdownMenu) },
+    // Tall enough for the suggestions dropdown the live preview opens
+    // beneath the field as you type.
+    .{ .name = "combobox", .height = 300, .build = buildCombobox },
+    .{ .name = "dropdown-menu", .height = 300, .build = buildDropdownMenu },
     .{ .name = "checkbox", .height = 180, .build = stateless(buildCheckbox) },
     .{ .name = "radio-group", .height = 180, .build = stateless(buildRadioGroup) },
     .{ .name = "switch", .height = 160, .build = stateless(buildSwitch) },
@@ -417,25 +435,76 @@ fn buildSelect(ui: *Ui, model: *const SceneModel) Node {
     });
 }
 
-fn buildCombobox(ui: *Ui) Node {
-    return tile(ui, .{
-        ui.el(.combobox, .{ .width = 240, .placeholder = "Search frameworks…" }, .{}),
+const combobox_options = [_][]const u8{ "Apple", "Banana", "Blueberry", "Grapes", "Pineapple" };
+
+/// Model-driven combobox: the widget is a real text field with a menu
+/// affordance and NO built-in options — the app owns the text through
+/// `on_input` and composes the suggestions itself (the select's
+/// anchored-dropdown pattern with the option list filtered as you
+/// type). Picking a suggestion writes it into the query and closes.
+fn buildCombobox(ui: *Ui, model: *const SceneModel) Node {
+    const query = model.query.text();
+    const field = ui.el(.combobox, .{
+        .placeholder = "Search fruit…",
+        .text = query,
+        .on_input = Ui.inputMsg(.query_edit),
+    }, .{});
+    var match_indices: [combobox_options.len]u8 = undefined;
+    var match_count: usize = 0;
+    for (combobox_options, 0..) |option, index| {
+        if (std.ascii.indexOfIgnoreCase(option, query) != null) {
+            match_indices[match_count] = @intCast(index);
+            match_count += 1;
+        }
+    }
+    const entry = if (model.open and match_count > 0) blk: {
+        const rows = ui.arena.alloc(Node, match_count) catch break :blk ui.stack(.{}, .{field});
+        for (rows, match_indices[0..match_count]) |*row, option_index| {
+            row.* = ui.el(.menu_item, .{
+                .text = combobox_options[option_index],
+                .on_press = .{ .pick_suggestion = option_index },
+            }, .{});
+        }
+        break :blk ui.stack(.{}, .{
+            field,
+            ui.el(.dropdown_menu, .{
+                .anchor = .below,
+                .anchor_alignment = .stretch,
+                .on_dismiss = .{ .set_open = false },
+            }, .{rows}),
+        });
+    } else ui.stack(.{}, .{field});
+    // Top-aligned (not centered) so the suggestions always have room to
+    // open beneath the field within the tile.
+    return ui.column(.{ .padding = 32, .cross = .center, .grow = 1 }, .{
+        ui.column(.{ .width = 240 }, .{entry}),
     });
 }
 
-fn buildDropdownMenu(ui: *Ui) Node {
-    return ui.column(.{ .padding = 32, .cross = .center, .grow = 1 }, .{
+/// Model-driven ACTIONS menu: closed until the trigger opens it, and an
+/// item press fires the action and closes through the model — no item
+/// ever carries a committed selection (menus act; the select commits).
+/// Escape / click-outside dismiss through `on_dismiss`, same as select.
+fn buildDropdownMenu(ui: *Ui, model: *const SceneModel) Node {
+    const trigger = ui.button(.{ .variant = .outline, .icon = "chevron-down", .on_press = .toggle_open }, "Actions");
+    const menu = if (model.open)
         ui.stack(.{}, .{
-            ui.button(.{ .variant = .outline, .icon = "chevron-down" }, "Actions"),
-            ui.el(.dropdown_menu, .{ .anchor = .below, .min_width = 200 }, .{
-                ui.el(.menu_item, .{ .text = "Duplicate", .icon = "copy" }, .{}),
-                ui.el(.menu_item, .{ .text = "Rename", .icon = "edit" }, .{}),
-                ui.el(.menu_item, .{ .text = "Download", .icon = "download" }, .{}),
+            trigger,
+            ui.el(.dropdown_menu, .{
+                .anchor = .below,
+                .min_width = 200,
+                .on_dismiss = .{ .set_open = false },
+            }, .{
+                ui.el(.menu_item, .{ .text = "Duplicate", .icon = "copy", .on_press = .{ .set_open = false } }, .{}),
+                ui.el(.menu_item, .{ .text = "Rename", .icon = "edit", .on_press = .{ .set_open = false } }, .{}),
+                ui.el(.menu_item, .{ .text = "Download", .icon = "download", .on_press = .{ .set_open = false } }, .{}),
                 ui.separator(.{}),
-                ui.el(.menu_item, .{ .text = "Delete", .icon = "trash" }, .{}),
+                ui.el(.menu_item, .{ .text = "Delete", .icon = "trash", .on_press = .{ .set_open = false } }, .{}),
             }),
-        }),
-    });
+        })
+    else
+        ui.stack(.{}, .{trigger});
+    return ui.column(.{ .padding = 32, .cross = .center, .grow = 1 }, .{menu});
 }
 
 fn buildCheckbox(ui: *Ui) Node {
@@ -986,16 +1055,20 @@ fn buildSpacer(ui: *Ui) Node {
     });
 }
 
+/// The resizable is an ENGINE-OWNED self-width panel: dragging anywhere
+/// on it moves its own right edge (the grip marks the affordance) and
+/// the model never hears about it. It resizes only itself — siblings do
+/// not reflow with the drag — so the honest demo gives it open room to
+/// grow into rather than a neighbor pretending to follow. Two
+/// coordinated panes that reflow together are the split's job.
 fn buildResizable(ui: *Ui) Node {
     return tileStart(ui, .{
         ui.row(.{ .height = 150 }, .{
             ui.el(.resizable, .{ .width = 180 }, .{
-                ui.column(.{ .padding = 12 }, .{
+                ui.column(.{ .padding = 12, .gap = 4 }, .{
                     ui.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "Sidebar"),
+                    ui.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "Drag the right edge"),
                 }),
-            }),
-            ui.panel(.{ .grow = 1, .padding = 12 }, .{
-                ui.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "Content"),
             }),
         }),
     });
@@ -1105,7 +1178,7 @@ fn buildCheckboxHero(ui: *Ui) Node {
 
 fn buildComboboxHero(ui: *Ui) Node {
     return heroTile(ui, .{
-        ui.el(.combobox, .{ .width = 260, .placeholder = "Search frameworks…" }, .{}),
+        ui.el(.combobox, .{ .width = 260, .placeholder = "Search fruit…" }, .{}),
     });
 }
 
@@ -1233,13 +1306,11 @@ fn buildRadioHero(ui: *Ui) Node {
 fn buildResizableHero(ui: *Ui) Node {
     return heroTileStart(ui, .{
         ui.row(.{ .height = 130 }, .{
-            ui.el(.resizable, .{ .width = 120 }, .{
-                ui.column(.{ .padding = 12 }, .{
+            ui.el(.resizable, .{ .width = 180 }, .{
+                ui.column(.{ .padding = 12, .gap = 4 }, .{
                     ui.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "Sidebar"),
+                    ui.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "Drag the right edge"),
                 }),
-            }),
-            ui.panel(.{ .grow = 1, .padding = 12 }, .{
-                ui.text(.{ .style_tokens = .{ .foreground = .text_muted } }, "Content"),
             }),
         }),
     });

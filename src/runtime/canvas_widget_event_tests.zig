@@ -1163,10 +1163,14 @@ test "runtime dispatches automation canvas widget actions" {
     try dispatchAutomationWidgetAction(&harness.runtime, app, .{ .view_label = "canvas", .id = 6, .action = .select });
     try std.testing.expectEqual(@as(?f32, 1), runtimeViewWidgetSemantics(&harness.runtime.views[0])[5].value);
 
+    // A lone menu item in an ACTIONS group (no sibling declares a
+    // committed row): the select action focuses it but mints no
+    // selection — only picker groups with a declared committed row
+    // move one.
     try dispatchAutomationWidgetAction(&harness.runtime, app, .{ .view_label = "canvas", .id = 12, .action = .select });
     const selected_layout = try harness.runtime.canvasWidgetLayout(1, "canvas");
-    try std.testing.expect(selected_layout.findById(12).?.widget.state.selected);
-    try std.testing.expectEqual(@as(f32, 1), selected_layout.findById(12).?.widget.value);
+    try std.testing.expect(!selected_layout.findById(12).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), selected_layout.findById(12).?.widget.value);
 
     try dispatchAutomationWidgetAction(&harness.runtime, app, .{ .view_label = "canvas", .id = 7, .action = .increment });
     var scrolled_layout = try harness.runtime.canvasWidgetLayout(1, "canvas");

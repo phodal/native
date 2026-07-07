@@ -1227,7 +1227,10 @@ test "gpu components app registers component lab on first gpu frame" {
     snapshot = harness.runtime.automationSnapshot("Components");
     const selected_menu_item = componentSnapshotWidget(snapshot, 142).?;
     try std.testing.expect(selected_menu_item.focused);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), selected_menu_item.value.?, 0.001);
+    // This menu is an ACTIONS menu (no row declares `selected`), so the
+    // select action focuses the row but mints no committed selection —
+    // only picker groups with a declared committed row move it.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), selected_menu_item.value.?, 0.001);
 
     resetComponentDirty(&harness.runtime);
     var section_action_buffer: [80]u8 = undefined;
@@ -1574,9 +1577,11 @@ test "gpu components pointer clicks update retained controls" {
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 142);
     snapshot = harness.runtime.automationSnapshot("Components");
-    try std.testing.expectApproxEqAbs(@as(f32, 1), componentSnapshotWidget(snapshot, 142).?.value.?, 0.001);
+    // An actions-menu row (its group declares no committed selection)
+    // fires on click but never comes back checkmarked.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), componentSnapshotWidget(snapshot, 142).?.value.?, 0.001);
     try std.testing.expect(harness.runtime.invalidated);
-    try expectComponentStatusContains(&harness.runtime, "Clicked menu_item #142: selected.");
+    try expectComponentStatusContains(&harness.runtime, "Clicked menu_item #142.");
 
     resetComponentDirty(&harness.runtime);
     try dispatchComponentPointerClick(&harness.runtime, app_handle, 104);

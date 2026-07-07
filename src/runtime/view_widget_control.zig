@@ -295,6 +295,15 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
                 .list_item, .menu_item, .data_cell, .segmented_control, .radio => {},
                 else => if (!tree_row) return null,
             }
+            // Menu rows split into two registers by what their group
+            // DECLARES: a select-style picker marks its committed option
+            // `selected`, so activation MOVES that selection (and the
+            // checkmark with it); an actions menu declares no committed
+            // row, so activation fires the item and mints NO selection —
+            // a "Duplicate" row must never come back checked. The group's
+            // declared row is the whole distinction; there is no separate
+            // menu mode flag.
+            if (selected and widget.kind == .menu_item and !canvasWidgetMenuGroupHasCommittedRow(self, index)) return null;
 
             var dirty: ?geometry.RectF = null;
             var changed = false;
@@ -337,6 +346,20 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
             try self.refreshCanvasWidgetSemantics();
             self.widget_revision += 1;
             return dirty orelse self.widget_layout_nodes[index].frame;
+        }
+
+        /// Whether the menu group containing `index` currently has a
+        /// committed (selected) row — the item itself or any sibling
+        /// menu_item under the same parent. Sibling scope matches the
+        /// selection-clearing scope, so the two rules always agree on
+        /// what "the group" is.
+        fn canvasWidgetMenuGroupHasCommittedRow(self: *const RuntimeView, index: usize) bool {
+            const parent_index = self.widget_layout_nodes[index].parent_index;
+            for (self.widget_layout_nodes[0..self.widget_layout_node_count]) |*node| {
+                if (node.parent_index != parent_index or node.widget.kind != .menu_item) continue;
+                if (canvasWidgetSelectableSelected(node.widget)) return true;
+            }
+            return false;
         }
 
         pub fn setCanvasWidgetValue(self: *RuntimeView, index: usize, value: f32) anyerror!?geometry.RectF {

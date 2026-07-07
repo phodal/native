@@ -1696,6 +1696,105 @@ test "runtime clears sibling canvas selections in retained groups" {
     try std.testing.expect(snapshot.widgets[7].selected);
 }
 
+// The two menu registers share one widget kind and split on what the
+// GROUP declares: a picker marks its committed option `selected`, so
+// activation moves that selection (checkmark follows); an actions menu
+// declares no committed row, so activation fires the item and mints no
+// selection — "Duplicate" must never come back checked after use.
+test "runtime distinguishes actions menus from picker menus by the declared committed row" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-menu-registers", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 340, 160),
+    });
+
+    const action_items = [_]canvas.Widget{
+        .{ .id = 2, .kind = .menu_item, .frame = geometry.RectF.init(0, 0, 0, 30), .text = "Duplicate" },
+        .{ .id = 3, .kind = .menu_item, .frame = geometry.RectF.init(0, 36, 0, 30), .text = "Delete" },
+    };
+    const picker_items = [_]canvas.Widget{
+        .{ .id = 5, .kind = .menu_item, .frame = geometry.RectF.init(0, 0, 0, 30), .text = "Production", .state = .{ .selected = true } },
+        .{ .id = 6, .kind = .menu_item, .frame = geometry.RectF.init(0, 36, 0, 30), .text = "Staging" },
+    };
+    const surfaces = [_]canvas.Widget{
+        .{ .id = 1, .kind = .menu_surface, .frame = geometry.RectF.init(10, 10, 140, 76), .children = &action_items },
+        .{ .id = 4, .kind = .menu_surface, .frame = geometry.RectF.init(180, 10, 140, 76), .children = &picker_items },
+    };
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &surfaces }, geometry.RectF.init(0, 0, 340, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // Pointer click on the actions row: fires (press dispatch is
+    // upstream of this assertion) but stays unselected.
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    const duplicate_frame = retained.findById(2).?.frame;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = duplicate_frame.x + duplicate_frame.width / 2,
+        .y = duplicate_frame.y + duplicate_frame.height / 2,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = duplicate_frame.x + duplicate_frame.width / 2,
+        .y = duplicate_frame.y + duplicate_frame.height / 2,
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(2).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(2).?.widget.value);
+
+    // Keyboard activation on the other actions row: same register,
+    // same outcome.
+    harness.runtime.views[0].canvas_widget_focused_id = 3;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "enter",
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(3).?.widget.state.selected);
+
+    // The picker group DOES have a committed row, so activating the
+    // other option moves the selection (and clears the sibling).
+    const staging_frame = retained.findById(6).?.frame;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = staging_frame.x + staging_frame.width / 2,
+        .y = staging_frame.y + staging_frame.height / 2,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_up,
+        .x = staging_frame.x + staging_frame.width / 2,
+        .y = staging_frame.y + staging_frame.height / 2,
+    } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!retained.findById(5).?.widget.state.selected);
+    try std.testing.expect(retained.findById(6).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 1), retained.findById(6).?.widget.value);
+}
+
 test "runtime applies keyboard values to focused canvas controls" {
     const TestApp = struct {
         fn app(self: *@This()) App {
@@ -1998,9 +2097,12 @@ test "runtime dispatches canvas widget commands from pointer and keyboard activa
     } });
     try std.testing.expectEqual(@as(u32, 3), app_state.command_count);
     try std.testing.expectEqualStrings("widget.archive", app_state.last_name);
+    // This lone menu item belongs to an ACTIONS menu (no row in its
+    // group declares `selected`), so activation fires the command and
+    // mints no selection — the row must not come back checkmarked.
     var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
-    try std.testing.expect(retained.findById(4).?.widget.state.selected);
-    try std.testing.expectEqual(@as(f32, 1), retained.findById(4).?.widget.value);
+    try std.testing.expect(!retained.findById(4).?.widget.state.selected);
+    try std.testing.expectEqual(@as(f32, 0), retained.findById(4).?.widget.value);
 
     harness.runtime.views[0].canvas_widget_focused_id = 4;
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
@@ -2012,7 +2114,7 @@ test "runtime dispatches canvas widget commands from pointer and keyboard activa
     try std.testing.expectEqual(@as(u32, 4), app_state.command_count);
     try std.testing.expectEqualStrings("widget.archive", app_state.last_name);
     retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
-    try std.testing.expect(retained.findById(4).?.widget.state.selected);
+    try std.testing.expect(!retained.findById(4).?.widget.state.selected);
 
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,

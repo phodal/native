@@ -540,47 +540,130 @@ test "buttons draw an inline vector icon and label as one widget with one tint" 
 }
 
 test "disabled filled buttons mute their border with the fill" {
-    // A disabled primary/destructive button washes its fill to half
-    // strength; the border must wash with it, in the SAME hue — a
-    // full-strength accent edge over the washed fill read as a focus
-    // ring on every idle disabled button (the "Comment button wearing
-    // an outline at rest" regression), and the old neutral-gray border
-    // made the faded fill look like a live secondary control.
+    // A disabled primary button washes its fill to half strength; the
+    // border must wash with it, in the SAME hue — a full-strength
+    // accent edge over the washed fill read as a focus ring on every
+    // idle disabled button (the "Comment button wearing an outline at
+    // rest" regression), and the old neutral-gray border made the
+    // faded fill look like a live secondary control. Destructive is
+    // the quiet borderless chip, so its edge stays at width 0 in both
+    // states — nothing to wash.
     const tokens = DesignTokens{};
-    const variants = [_]struct { variant: canvas.WidgetVariant, enabled_border: Color }{
-        .{ .variant = .primary, .enabled_border = tokens.colors.accent },
-        .{ .variant = .destructive, .enabled_border = tokens.colors.destructive },
+    const button = Widget{
+        .id = 71,
+        .kind = WidgetKind.button,
+        .frame = geometry.RectF.init(0, 0, 120, 34),
+        .text = "Comment",
+        .variant = .primary,
     };
-    for (variants) |case| {
-        const button = Widget{
-            .id = 71,
-            .kind = WidgetKind.button,
-            .frame = geometry.RectF.init(0, 0, 120, 34),
-            .text = "Comment",
-            .variant = case.variant,
-        };
-        var commands: [8]CanvasCommand = undefined;
-        var builder = Builder.init(&commands);
-        try emitWidgetTree(&builder, button, tokens);
-        switch (builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
-            .stroke_rect => |stroke| try expectFillColor(case.enabled_border, stroke.stroke.fill),
-            else => return error.TestUnexpectedResult,
-        }
-
-        var disabled = button;
-        disabled.state.disabled = true;
-        var disabled_commands: [8]CanvasCommand = undefined;
-        var disabled_builder = Builder.init(&disabled_commands);
-        try emitWidgetTree(&disabled_builder, disabled, tokens);
-        const washed_border = Color.rgba(case.enabled_border.r, case.enabled_border.g, case.enabled_border.b, 0.5 * case.enabled_border.a);
-        switch (disabled_builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
-            .stroke_rect => |stroke| try expectFillColor(washed_border, stroke.stroke.fill),
-            else => return error.TestUnexpectedResult,
-        }
-
-        // No focus ring on the idle disabled control either.
-        try std.testing.expect(disabled_builder.displayList().findCommandById(widgetPartId(71, 3)) == null);
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, button, tokens);
+    switch (builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
+        .stroke_rect => |stroke| try expectFillColor(tokens.colors.accent, stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
     }
+
+    var disabled = button;
+    disabled.state.disabled = true;
+    var disabled_commands: [8]CanvasCommand = undefined;
+    var disabled_builder = Builder.init(&disabled_commands);
+    try emitWidgetTree(&disabled_builder, disabled, tokens);
+    const washed_border = Color.rgba(tokens.colors.accent.r, tokens.colors.accent.g, tokens.colors.accent.b, 0.5 * tokens.colors.accent.a);
+    switch (disabled_builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
+        .stroke_rect => |stroke| try expectFillColor(washed_border, stroke.stroke.fill),
+        else => return error.TestUnexpectedResult,
+    }
+
+    // No focus ring on the idle disabled control either.
+    try std.testing.expect(disabled_builder.displayList().findCommandById(widgetPartId(71, 3)) == null);
+
+    var chip = button;
+    chip.variant = .destructive;
+    var chip_commands: [8]CanvasCommand = undefined;
+    var chip_builder = Builder.init(&chip_commands);
+    try emitWidgetTree(&chip_builder, chip, tokens);
+    switch (chip_builder.displayList().findCommandById(widgetPartId(71, 2)).?.command) {
+        .stroke_rect => |stroke| try std.testing.expectEqual(@as(f32, 0), stroke.stroke.width),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+/// The flush-group segment assertions, shared by the tree-walk and
+/// layout-walk halves of the test below so the two emission paths are
+/// pinned to the SAME bar: leading corners on the first segment,
+/// squared middles, trailing corners on the last, and a border-band
+/// clip (part slot 0) on every non-first segment — the seam-collapse
+/// mechanism — while the first segment keeps its full unclipped border.
+fn expectFlushButtonGroupSegments(display_list: anytype) !void {
+    switch (display_list.findCommandById(widgetPartId(2, 1)).?.command) {
+        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius{ .top_left = 10, .bottom_left = 10 }, fill.radius),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(3, 1)).?.command) {
+        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius{}, fill.radius),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.findCommandById(widgetPartId(4, 1)).?.command) {
+        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius{ .top_right = 10, .bottom_right = 10 }, fill.radius),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(display_list.findCommandById(widgetPartId(2, 0)) == null);
+    switch (display_list.findCommandById(widgetPartId(3, 0)).?.command) {
+        .push_clip => |clip| {
+            // The clip's left edge sits half a stroke inside the
+            // segment frame, excluding exactly the 1px border band the
+            // left neighbor already painted.
+            try std.testing.expectEqual(@as(f32, 80.5), clip.rect.x);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(display_list.findCommandById(widgetPartId(4, 0)) != null);
+}
+
+test "flush button groups collapse corners and interior seams in both render walks" {
+    const tokens = DesignTokens{};
+    const segments = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 80, 32), .text = "Cut", .variant = .outline },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(80, 0, 80, 32), .text = "Copy", .variant = .outline },
+        .{ .id = 4, .kind = .button, .frame = geometry.RectF.init(160, 0, 80, 32), .text = "Paste", .variant = .outline },
+    };
+    const group = Widget{
+        .id = 1,
+        .kind = .button_group,
+        .frame = geometry.RectF.init(0, 0, 240, 32),
+        .children = &segments,
+    };
+
+    // Tree walk.
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, group, tokens);
+    try expectFlushButtonGroupSegments(builder.displayList());
+
+    // Layout walk — the segment stamp must land identically here or a
+    // live app and a static docs scene would render different bars.
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(group, group.frame, &nodes);
+    var layout_commands: [16]CanvasCommand = undefined;
+    var layout_builder = Builder.init(&layout_commands);
+    try layout.emitDisplayList(&layout_builder, tokens);
+    try expectFlushButtonGroupSegments(layout_builder.displayList());
+
+    // A spaced group (gap > 0) is separate buttons by request: full
+    // corners, full borders, no seam clips.
+    var spaced = group;
+    spaced.layout = .{ .gap = 8 };
+    var spaced_commands: [16]CanvasCommand = undefined;
+    var spaced_builder = Builder.init(&spaced_commands);
+    try emitWidgetTree(&spaced_builder, spaced, tokens);
+    const spaced_list = spaced_builder.displayList();
+    switch (spaced_list.findCommandById(widgetPartId(2, 1)).?.command) {
+        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(10), fill.radius),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(spaced_list.findCommandById(widgetPartId(3, 0)) == null);
+    try std.testing.expect(spaced_list.findCommandById(widgetPartId(4, 0)) == null);
 }
 
 test "list and menu items draw a leading vector icon with the label shifted right" {
@@ -1755,19 +1838,15 @@ test "built-in component widgets expose house semantics and render tokens" {
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, .{});
 
-    // Shadow + fill + border + label: the filled button casts the
-    // whisper shadow beneath its chrome.
+    // Fill + border + label: the button register is flat, so the fill
+    // leads its chrome directly.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
     switch (display_list.commands[0]) {
-        .shadow => {},
-        else => return error.TestUnexpectedResult,
-    }
-    switch (display_list.commands[1]) {
         .fill_rounded_rect => |fill| try expectFillColor(ColorTokens.light().accent, fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[2]) {
         .draw_text => |text| try std.testing.expectEqualDeep(ColorTokens.light().accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -2345,7 +2424,9 @@ test "design token overrides flow into widget display lists" {
             .focus_ring = Color.rgb8(180, 120, 255),
         },
         .stroke = .{ .focus = 4 },
-        .radius = .{ .md = 5 },
+        // Default-size buttons draw the lg radius rung, so that is the
+        // override that must flow through to the chrome.
+        .radius = .{ .lg = 5 },
     });
     const button = Widget{
         .id = 42,
@@ -2358,25 +2439,24 @@ test "design token overrides flow into widget display lists" {
     var commands: [5]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, tokens);
-    // Shadow + fill + border + focus ring + label: the selected default
-    // button rests on an opaque fill, so it casts the whisper shadow.
+    // Fill + border + focus ring + label — the button register is flat.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| {
             try expectFillColor(tokens.colors.accent, fill.fill);
             try std.testing.expectEqualDeep(Radius.all(5), fill.radius);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[2]) {
         .stroke_rect => |stroke| {
             try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill);
             try std.testing.expectEqual(@as(f32, 4), stroke.stroke.width);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[4]) {
+    switch (display_list.commands[3]) {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -2408,27 +2488,23 @@ test "themed design tokens flow into widget display lists" {
     var commands: [5]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, tokens);
-    // Shadow + fill + border + focus ring + label.
+    // Fill + border + focus ring + label — the button register is flat.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
 
     switch (display_list.commands[0]) {
-        .shadow => {},
-        else => return error.TestUnexpectedResult,
-    }
-    switch (display_list.commands[1]) {
         .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[1]) {
         .stroke_rect => |stroke| try expectFillColor(tokens.colors.border, stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[2]) {
         .stroke_rect => |stroke| try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[4]) {
+    switch (display_list.commands[3]) {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }

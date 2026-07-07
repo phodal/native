@@ -133,25 +133,16 @@ fn pixelSnapTextPoint(tokens: DesignTokens, point: geometry.PointF) geometry.Poi
 
 pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = buttonControlVisualTokens(widget, tokens);
-    const radius = buttonControlRadius(widget, visual, tokens);
+    const radius = groupSegmentRadius(buttonControlRadius(widget, visual, tokens), widget.group_segment);
     const text_size = widgetButtonTextSize(widget, tokens);
     const text_inset = widgetButtonInset(widget, tokens);
-    try emitButtonShadow(builder, widget, tokens, radius);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
         .fill = buttonFill(widget, tokens),
     });
-    try builder.strokeRect(.{
-        .id = widgetPartId(widget.id, 2),
-        .rect = widget.frame,
-        .radius = radius,
-        .stroke = .{
-            .fill = buttonBorderFill(widget, tokens),
-            .width = buttonStrokeWidth(widget, tokens),
-        },
-    });
+    try emitButtonBorder(builder, widget, tokens, radius);
     if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 3, widget.frame, radius);
     const content_color = buttonTextColorForWidget(widget, tokens);
     const icon = if (widget.icon.len > 0) icon_model.resolve(widget.icon) else null;
@@ -227,23 +218,14 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
 
 pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = buttonControlVisualTokens(widget, tokens);
-    const radius = buttonControlRadius(widget, visual, tokens);
-    try emitButtonShadow(builder, widget, tokens, radius);
+    const radius = groupSegmentRadius(buttonControlRadius(widget, visual, tokens), widget.group_segment);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
         .fill = buttonFill(widget, tokens),
     });
-    try builder.strokeRect(.{
-        .id = widgetPartId(widget.id, 2),
-        .rect = widget.frame,
-        .radius = radius,
-        .stroke = .{
-            .fill = buttonBorderFill(widget, tokens),
-            .width = buttonStrokeWidth(widget, tokens),
-        },
-    });
+    try emitButtonBorder(builder, widget, tokens, radius);
     if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 15, widget.frame, radius);
     // Real vector icons: `widget.icon` first, then an icon-name `text`
     // (so `el(.icon_button, .{ .text = "play" })` upgrades from glyph to
@@ -278,41 +260,54 @@ pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTok
     }
 }
 
-/// The whisper shadow under filled buttons: the xs shadow step at half
-/// the house shadow ink, drawn beneath the fill so a solid control
-/// settles onto the page instead of floating on it. Only an opaque
-/// rest fill casts one — the quiet variants' transparent bodies have
-/// nothing to occlude the light. The toggle family stays flat (a
-/// pressed-state chip is page furniture, not a raised command), and a
-/// disabled button drops its shadow with the rest of its strength.
-fn emitButtonShadow(builder: *Builder, widget: Widget, tokens: DesignTokens, radius: Radius) Error!void {
-    if (widget.state.disabled) return;
-    if (widget.kind == .toggle_button or widget.kind == .toggle) return;
-    const rest_fill = widget_render_style.buttonFillColor(restStateButton(widget), tokens);
-    if (rest_fill.a < 1) return;
-    const shadow_token = tokens.shadow.xs;
-    if (shadow_token.y == 0 and shadow_token.blur == 0 and shadow_token.spread == 0) return;
-    try builder.shadow(.{
-        .id = widgetPartId(widget.id, 0),
-        .rect = widget.frame,
-        .radius = radius,
-        .offset = .{ .dx = 0, .dy = shadow_token.y },
-        .blur = shadow_token.blur,
-        .spread = shadow_token.spread,
-        .color = widget_render_style.colorWithAlpha(tokens.colors.shadow, 0.5 * tokens.colors.shadow.a),
-    });
+/// The button's corner radius shaped by its flush-group position: the
+/// first segment keeps only its leading pair, the last only its
+/// trailing pair, middles square off, and an ungrouped button keeps
+/// all four. This is what makes a flush group read as ONE bar with one
+/// corner language instead of three chips pressed together.
+fn groupSegmentRadius(radius: Radius, segment: widget_model.WidgetGroupSegment) Radius {
+    return switch (segment) {
+        .none => radius,
+        .first => .{ .top_left = radius.top_left, .bottom_left = radius.bottom_left },
+        .middle => .{},
+        .last => .{ .top_right = radius.top_right, .bottom_right = radius.bottom_right },
+    };
 }
 
-/// The widget with interaction feedback cleared, so the shadow decision
-/// reads the rest fill (hover's translucent wash must not flicker the
-/// shadow off mid-interaction). `selected` survives as identity state,
-/// matching the disabled wash's rest resolution.
-fn restStateButton(widget: Widget) Widget {
-    var rest = widget;
-    rest.state.pressed = false;
-    rest.state.hovered = false;
-    rest.state.focused = false;
-    return rest;
+/// A button's border stroke, honoring the flush-group seam rule: every
+/// non-first segment CLIPS AWAY its left border band so each interior
+/// boundary is painted by exactly one stroke (the left neighbor's right
+/// edge). Overlapping the two would double-composite the translucent
+/// dark-scheme hairline into a brighter seam. The clip starts half a
+/// stroke inside the frame — the stroke straddles the edge — and
+/// extends a full stroke beyond the other three sides so their outer
+/// halves survive; the clipped top-left/bottom-left stubs sit exactly
+/// under the neighbor's stroke band, so no gap can open. Slot 0 was
+/// freed by the retired button shadow.
+fn emitButtonBorder(builder: *Builder, widget: Widget, tokens: DesignTokens, radius: Radius) Error!void {
+    const stroke_width = buttonStrokeWidth(widget, tokens);
+    const drop_left_border = widget.group_segment == .middle or widget.group_segment == .last;
+    if (drop_left_border) {
+        try builder.pushClip(.{
+            .id = widgetPartId(widget.id, 0),
+            .rect = geometry.RectF.init(
+                widget.frame.x + stroke_width * 0.5,
+                widget.frame.y - stroke_width,
+                @max(0, widget.frame.width + stroke_width * 0.5),
+                widget.frame.height + stroke_width * 2,
+            ),
+        });
+    }
+    try builder.strokeRect(.{
+        .id = widgetPartId(widget.id, 2),
+        .rect = widget.frame,
+        .radius = radius,
+        .stroke = .{
+            .fill = buttonBorderFill(widget, tokens),
+            .width = stroke_width,
+        },
+    });
+    if (drop_left_border) try builder.popClip();
 }
 
 /// Draw a parsed vector icon fitted (contain, centered) into `rect`: a

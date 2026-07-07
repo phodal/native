@@ -796,10 +796,10 @@ test "widget icons expose image and button semantics" {
     var button_builder = Builder.init(&button_commands);
     try emitWidgetTree(&button_builder, children[1], tokens);
     const button_display_list = button_builder.displayList();
-    // Focus no longer restyles the border: shadow, fill, border, offset
-    // focus ring, then the glyph.
-    try std.testing.expectEqual(@as(usize, 5), button_display_list.commandCount());
-    switch (button_display_list.commands[3]) {
+    // Focus no longer restyles the border: fill, border, offset focus
+    // ring, then the glyph (the button register is flat — no shadow).
+    try std.testing.expectEqual(@as(usize, 4), button_display_list.commandCount());
+    switch (button_display_list.commands[2]) {
         .stroke_rect => |stroke| {
             try std.testing.expectEqual(@as(f32, 4), stroke.stroke.width);
             try expectFillColor(tokens.colors.focus_ring, stroke.stroke.fill);
@@ -809,7 +809,7 @@ test "widget icons expose image and button semantics" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (button_display_list.commands[4]) {
+    switch (button_display_list.commands[3]) {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(3, 3)), text.id);
             try std.testing.expectEqualStrings("+", text.text);
@@ -1697,14 +1697,14 @@ test "widget popover emits overlay chrome and routes child events" {
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
     const display_list = builder.displayList();
-    // Popover shadow + fill + border, then the child button's own
-    // whisper shadow + fill + border + label.
-    try std.testing.expectEqual(@as(usize, 7), display_list.commandCount());
+    // Popover shadow + fill + border, then the flat child button's
+    // fill + border + label.
+    try std.testing.expectEqual(@as(usize, 6), display_list.commandCount());
     try std.testing.expect(display_list.commands[0] == .shadow);
     try std.testing.expectEqual(@as(?ObjectId, widgetPartId(1, 2)), display_list.commands[1].objectId());
     try std.testing.expect(display_list.commands[1] == .fill_rounded_rect);
-    try std.testing.expect(display_list.commands[3] == .shadow);
-    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[4].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[3].objectId());
+    try std.testing.expect(display_list.commands[3] == .fill_rounded_rect);
 
     try std.testing.expectEqual(@as(ObjectId, 2), layout.hitTest(geometry.PointF.init(40, 44)).?.id);
     const blank_hit = layout.hitTest(geometry.PointF.init(190, 130)).?;

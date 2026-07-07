@@ -181,7 +181,7 @@ fn emitWidgetLayoutAnchored(builder: *Builder, layout: anytype, tokens: DesignTo
     for (layout.nodes, 0..) |node, index| {
         if (!widget_tree.widgetIsAnchored(node.widget)) continue;
         if (widget_tree.isWidgetHiddenInAncestors(layout, index)) continue;
-        try emitWidgetLayoutNode(builder, layout, index, tokens, state);
+        try emitWidgetLayoutNode(builder, layout, index, tokens, state, .none);
     }
 }
 
@@ -206,7 +206,8 @@ fn emitWidgetDepthContent(builder: *Builder, widget: Widget, tokens: DesignToken
     const paint_widget = widgetWithFrame(widget, pixelSnapGeometryRect(tokens, widget.frame));
     try emitWidgetBackdropBlur(builder, paint_widget, tokens);
     switch (paint_widget.kind) {
-        .stack, .row, .column, .grid, .list, .breadcrumb, .button_group, .pagination, .radio_group, .toggle_group, .split, .tree => try emitWidgetClippedChildren(builder, paint_widget, tokens, depth),
+        .stack, .row, .column, .grid, .list, .breadcrumb, .pagination, .radio_group, .toggle_group, .split, .tree => try emitWidgetClippedChildren(builder, paint_widget, tokens, depth),
+        .button_group => try emitButtonGroupWidget(builder, paint_widget, tokens, depth),
         .table, .data_grid => {
             try emitWidgetClippedChildren(builder, paint_widget, tokens, depth);
             try emitTableRowSeparators(builder, paint_widget.children, tokens);
@@ -334,6 +335,59 @@ fn emitWidgetChildren(builder: *Builder, children: []const Widget, tokens: Desig
     }
 }
 
+/// Whether a button group's segments attach: only a gap-0 (the default)
+/// group collapses corners and seams — an author who spaces the group
+/// out has asked for separate buttons, and rounding off their inner
+/// corners then would be dishonest chrome.
+fn buttonGroupIsFlush(widget: Widget) bool {
+    return widget.layout.gap <= 0;
+}
+
+/// A group child's position among the group's VISIBLE children, in
+/// layout (slice) order — paint order may reorder emission by layer,
+/// but which corner a segment keeps is a where-does-it-sit question,
+/// never a when-does-it-paint question. Hidden children vacate their
+/// position so the bar re-caps itself around them.
+fn buttonGroupChildSegment(children: []const Widget, child_index: usize) widget_model.WidgetGroupSegment {
+    var visible_total: usize = 0;
+    var ordinal: usize = 0;
+    for (children, 0..) |child, index| {
+        if (child.semantics.hidden) continue;
+        if (index == child_index) ordinal = visible_total;
+        visible_total += 1;
+    }
+    return buttonGroupSegmentAt(ordinal, visible_total);
+}
+
+fn buttonGroupSegmentAt(ordinal: usize, visible_total: usize) widget_model.WidgetGroupSegment {
+    // A lone segment is just a button: full corners, full border.
+    if (visible_total <= 1) return .none;
+    if (ordinal == 0) return .first;
+    if (ordinal == visible_total - 1) return .last;
+    return .middle;
+}
+
+/// The tree walk's button-group emission: `emitWidgetClippedChildren`
+/// with the flush-group segment stamp applied to each child copy on the
+/// way down, so the button emitters can shape corners and collapse the
+/// shared seams. The layout walk applies the same stamp in
+/// `emitWidgetLayoutChildren` — the two walks must agree or a docs
+/// scene and a live app would render different bars.
+fn emitButtonGroupWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
+    if (!buttonGroupIsFlush(widget)) return emitWidgetClippedChildren(builder, widget, tokens, depth);
+    if (widget.layout.clip_content) try builder.pushClip(widgetContentClip(widget, tokens));
+    var emitted: usize = 0;
+    var previous: ?WidgetPaintOrder = null;
+    while (emitted < widget.children.len) : (emitted += 1) {
+        const child_index = nextWidgetPaintChild(widget.children, tokens, previous) orelse break;
+        var child = widget.children[child_index];
+        child.group_segment = buttonGroupChildSegment(widget.children, child_index);
+        try emitWidgetDepth(builder, child, tokens, depth + 1);
+        previous = .{ .layer = widgetPaintLayer(child, tokens), .index = child_index };
+    }
+    if (widget.layout.clip_content) try builder.popClip();
+}
+
 fn emitWidgetLayoutChildren(
     builder: *Builder,
     layout: anytype,
@@ -342,6 +396,13 @@ fn emitWidgetLayoutChildren(
     state: WidgetRenderState,
 ) Error!void {
     const child_count = widgetLayoutDirectChildCount(layout, parent_index);
+    // The layout walk's flush button-group stamp (the tree walk's twin
+    // lives in `emitButtonGroupWidget`): children of a gap-0 group get
+    // their segment position on the way down.
+    const group_index: ?usize = if (parent_index) |index| blk: {
+        const parent = layout.nodes[index].widget;
+        break :blk if (parent.kind == .button_group and buttonGroupIsFlush(parent)) index else null;
+    } else null;
     var emitted: usize = 0;
     var previous: ?WidgetPaintOrder = null;
     while (emitted < child_count) : (emitted += 1) {
@@ -349,10 +410,29 @@ fn emitWidgetLayoutChildren(
         // Anchored floating children paint in the late z-pass
         // (`emitWidgetLayoutAnchored`), never in tree position.
         if (!widget_tree.widgetIsAnchored(layout.nodes[child_index].widget)) {
-            try emitWidgetLayoutNode(builder, layout, child_index, tokens, state);
+            const segment = if (group_index) |index|
+                layoutButtonGroupSegment(layout, index, child_index)
+            else
+                widget_model.WidgetGroupSegment.none;
+            try emitWidgetLayoutNode(builder, layout, child_index, tokens, state, segment);
         }
         previous = .{ .layer = widgetPaintLayer(layout.nodes[child_index].widget, tokens), .index = child_index };
     }
+}
+
+/// A layout node's position among its button group's visible direct
+/// children, in node (layout) order — the layout-walk twin of
+/// `buttonGroupChildSegment`.
+fn layoutButtonGroupSegment(layout: anytype, group_index: usize, child_index: usize) widget_model.WidgetGroupSegment {
+    var visible_total: usize = 0;
+    var ordinal: usize = 0;
+    for (layout.nodes, 0..) |node, index| {
+        if (node.parent_index != group_index) continue;
+        if (node.widget.semantics.hidden) continue;
+        if (index == child_index) ordinal = visible_total;
+        visible_total += 1;
+    }
+    return buttonGroupSegmentAt(ordinal, visible_total);
 }
 
 fn emitWidgetLayoutNode(
@@ -361,11 +441,13 @@ fn emitWidgetLayoutNode(
     node_index: usize,
     tokens: DesignTokens,
     state: WidgetRenderState,
+    segment: widget_model.WidgetGroupSegment,
 ) Error!void {
     const node = layout.nodes[node_index];
     if (node.widget.semantics.hidden) return;
 
-    const widget = widgetWithRenderState(widgetWithFrame(node.widget, node.frame), state);
+    var widget = widgetWithRenderState(widgetWithFrame(node.widget, node.frame), state);
+    widget.group_segment = segment;
     const opacity = widgetOpacity(widget);
     if (opacity <= 0) return;
     const wrap_opacity = opacity < 1;

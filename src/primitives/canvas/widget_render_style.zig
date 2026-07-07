@@ -126,13 +126,18 @@ pub fn controlRadius(widget: Widget, visual: ControlVisualTokens, fallback: f32)
     return Radius.all(nonNegative(widgetSizedRadiusValue(widget, visual.radius orelse fallback)));
 }
 
-/// Button corners hold ONE radius across the size ladder (unlike
-/// `controlRadius`, which steps with the size): a sm button with a
-/// tighter corner reads as a chip and a lg one with a rounder corner
-/// reads as a card — sizes change the box, never the corner language.
+/// Button corners: 10 (the lg radius token) at the default and lg
+/// rungs, 8 (the md token) at sm — one deliberate step down for the
+/// compact rung so its corner arc stays proportional to the 28px box,
+/// never the full size-stepped scale of `controlRadius` (a lg button
+/// with a 12px corner starts reading as a card).
 pub fn buttonControlRadius(widget: Widget, visual: ControlVisualTokens, tokens: DesignTokens) Radius {
     if (widget.style.radius) |radius| return Radius.all(nonNegative(radius));
-    return Radius.all(nonNegative(visual.radius orelse tokens.radius.md));
+    const fallback = switch (widget.size) {
+        .sm => tokens.radius.md,
+        .default, .icon, .heading, .display, .lg => tokens.radius.lg,
+    };
+    return Radius.all(nonNegative(visual.radius orelse fallback));
 }
 
 pub fn widgetSizedRadiusValue(widget: Widget, fallback: f32) f32 {
@@ -182,13 +187,19 @@ pub fn buttonFillColor(widget: Widget, tokens: DesignTokens) Color {
             widgetBackgroundColor(widget, visual.hover_background orelse tokens.colors.surface_subtle)
         else
             widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface),
-        // Filled variants speak one wash channel: rest at full strength,
-        // hover at 90%, pressed one step past hover at 80% — the wash
-        // lightens on light surfaces and deepens on dark ones without a
-        // second color per scheme. A persistent `selected` keeps the
-        // rest fill: an on-state is identity, not feedback.
+        // The filled variant speaks one wash channel: rest at full
+        // strength, hover at 90%, pressed one step past hover at 80% —
+        // the wash lightens on light surfaces and deepens on dark ones
+        // without a second color per scheme. A persistent `selected`
+        // keeps the rest fill: an on-state is identity, not feedback.
         .primary => widgetAccentColor(widget, filledStateBackground(visual, tokens.colors.accent, pressed, selected, hovered)),
-        .destructive => widgetAccentColor(widget, filledStateBackground(visual, tokens.colors.destructive, pressed, selected, hovered)),
+        // Destructive is the QUIET red chip, not a filled alarm block:
+        // a translucent destructive wash under destructive-red text.
+        // The per-scheme wash strengths live in the themed control
+        // tables (`ControlTokens.theme`); the fallback ladder here IS
+        // the light recipe, so a bare untheme'd `DesignTokens{}` (whose
+        // color defaults are the light palette) renders identically.
+        .destructive => widgetAccentColor(widget, destructiveChipBackground(visual, tokens, pressed, selected, hovered)),
         .secondary => widgetBackgroundColor(widget, buttonStateBackground(visual, pressed or selected, hovered, if (pressed or selected) tokens.colors.surface_pressed else hoverWash(tokens.colors.surface_subtle, false, hovered, 0.8))),
         // The quiet variants step through the neutral washes: hover and
         // a toggle's on-state sit on the muted wash, a press deepens one
@@ -208,6 +219,20 @@ fn filledStateBackground(visual: ControlVisualTokens, base: Color, pressed: bool
     if (selected) return visual.active_background orelse visual.hover_background orelse visual.background orelse base;
     if (hovered) return visual.hover_background orelse visual.background orelse colorWithAlpha(base, 0.9 * base.a);
     return visual.background orelse base;
+}
+
+/// The destructive chip's state ladder over the translucent red wash,
+/// honoring themed control tokens first. The fallbacks are the LIGHT
+/// wash strengths (rest 10%, hover 15%, pressed one step past hover at
+/// 20% — feedback DEEPENS the wash, opposite of the filled variant's
+/// alpha cuts, because a translucent chip signals under the pointer by
+/// gaining ink). A persistent `selected` keeps the rest wash: identity,
+/// not feedback.
+fn destructiveChipBackground(visual: ControlVisualTokens, tokens: DesignTokens, pressed: bool, selected: bool, hovered: bool) Color {
+    if (pressed) return visual.active_background orelse visual.hover_background orelse colorWithAlpha(tokens.colors.destructive, 0.20);
+    if (selected) return visual.background orelse colorWithAlpha(tokens.colors.destructive, 0.10);
+    if (hovered) return visual.hover_background orelse colorWithAlpha(tokens.colors.destructive, 0.15);
+    return visual.background orelse colorWithAlpha(tokens.colors.destructive, 0.10);
 }
 
 /// The quiet (outline/ghost) state ladder: transparent at rest, the
@@ -266,7 +291,10 @@ pub fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
             widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
         .primary => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text),
         .secondary, .outline, .ghost => widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text),
-        .destructive => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.destructive_text),
+        // Ink IN the destructive red on the quiet wash — the chip's
+        // whole identity — never knockout text (that is the filled
+        // block's pairing, and the chip has no filled block).
+        .destructive => widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.destructive),
     };
 }
 
@@ -279,7 +307,9 @@ pub fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
         const visual = buttonControlVisualTokens(widget, tokens);
         break :blk switch (widget.variant) {
             .primary => widgetAccentColor(widget, visual.border orelse tokens.colors.accent),
-            .destructive => widgetAccentColor(widget, visual.border orelse tokens.colors.destructive),
+            // The destructive chip and ghost are borderless shapes: the
+            // chip's edge is where its wash ends, nothing more.
+            .destructive => widgetAccentColor(widget, visual.border orelse transparentColor()),
             .ghost => widgetBorderColor(widget, visual.border orelse transparentColor()),
             else => widgetBorderColor(widget, visual.border orelse tokens.colors.border),
         };
@@ -481,7 +511,8 @@ pub fn buttonStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     const visual = buttonControlVisualTokens(widget, tokens);
     if (visual.stroke_width) |width| return nonNegative(width);
     return switch (widget.variant) {
-        .ghost => 0,
+        // Ghost has no box; the destructive chip's edge is its wash.
+        .ghost, .destructive => 0,
         else => tokens.stroke.regular,
     };
 }

@@ -414,11 +414,11 @@ test "widget layout resolves row sizing and emits laid out commands" {
     var commands: [12]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
-    // The button leads with its whisper shadow, shifting later commands
-    // one slot.
+    // Panel chrome (shadow/fill/border), the flat button (fill/border/
+    // label), the progress track+value fills, then the text run.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 10), display_list.commandCount());
-    switch (display_list.commands[8]) {
+    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
+    switch (display_list.commands[7]) {
         .fill_rounded_rect => |fill| try expectRect(geometry.RectF.init(100, 12, 60, 8), fill.rect),
         else => return error.TestUnexpectedResult,
     }
@@ -447,9 +447,10 @@ test "widget layout uses intrinsic sizes for unframed controls" {
     try std.testing.expect(search_size.width > button_size.width);
     try expectLayoutFrame(layout, 2, geometry.RectF.init(0, (64 - button_size.height) * 0.5, button_size.width, button_size.height));
     try expectLayoutFrame(layout, 3, geometry.RectF.init(button_size.width + 8, (64 - search_size.height) * 0.5, search_size.width, search_size.height));
-    // Accumulate x the way the row layout does (previous x + width + gap)
-    // so the comparison stays bit-exact under f32 association.
-    try expectLayoutFrame(layout, 4, geometry.RectF.init((button_size.width + 8) + search_size.width + 8, (64 - icon_size.height) * 0.5, icon_size.width, icon_size.height));
+    // Accumulate x the way the row layout does — each step adds
+    // `width + gap` as ONE term — so the comparison stays bit-exact
+    // under f32 association.
+    try expectLayoutFrame(layout, 4, geometry.RectF.init((button_size.width + 8) + (search_size.width + 8), (64 - icon_size.height) * 0.5, icon_size.width, icon_size.height));
 
     var custom_nodes: [4]WidgetLayoutNode = undefined;
     const custom_tokens = DesignTokens{ .typography = .{ .button_size = 18 } };
@@ -821,9 +822,9 @@ test "widget grid layout places children in deterministic cells" {
     var commands: [10]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
-    // Each button contributes 4 commands (whisper shadow first); the
+    // Each flat button contributes 3 commands (fill/border/label); the
     // two text cells stay at 1.
-    try std.testing.expectEqual(@as(usize, 10), builder.displayList().commandCount());
+    try std.testing.expectEqual(@as(usize, 8), builder.displayList().commandCount());
 }
 
 test "widget virtualized grid lays out visible cells by row" {
@@ -1121,16 +1122,16 @@ test "widget scroll view offsets children and clips display list" {
     const tokens: DesignTokens = .{};
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, tokens);
-    // Three visible buttons at 4 commands each (whisper shadow first)
-    // inside the clip pair, then the scrollbar track and thumb.
+    // Three visible flat buttons at 3 commands each inside the clip
+    // pair, then the scrollbar track and thumb.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 16), display_list.commandCount());
+    try std.testing.expectEqual(@as(usize, 13), display_list.commandCount());
     switch (display_list.commands[0]) {
         .push_clip => |clip| try expectRect(geometry.RectF.init(0, 0, 120, 60), clip.rect),
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(display_list.commands[13] == .pop_clip);
-    switch (display_list.commands[14]) {
+    try std.testing.expect(display_list.commands[10] == .pop_clip);
+    switch (display_list.commands[11]) {
         .fill_rounded_rect => |track| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(1, 2)), track.id);
             try expectRect(geometry.RectF.init(114, 3, 3, 54), track.rect);
@@ -1138,7 +1139,7 @@ test "widget scroll view offsets children and clips display list" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[15]) {
+    switch (display_list.commands[12]) {
         .fill_rounded_rect => |thumb| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(1, 3)), thumb.id);
             try std.testing.expectApproxEqAbs(@as(f32, 12.642), thumb.rect.y, 0.001);

@@ -9,13 +9,17 @@ const Widget = widget_model.Widget;
 
 const default_widget_row_extent: f32 = 28;
 
-/// Button labels hold ONE size across the whole control ladder: sm and
-/// lg buttons change chrome (height, inset, gap), never the glyphs — a
-/// stepped label would make a small button read as a small caption
-/// instead of the same command in a tighter box.
+/// Button labels hold the base size at default and lg — a bigger button
+/// earns more chrome (height, inset), not bigger glyphs — but sm steps
+/// the label down 1.2px (14 -> 12.8 on the default scale): the compact
+/// rung is a genuinely smaller control, and a full-size label inside a
+/// 28px box crowds its own padding. The fractional step is deliberate —
+/// it is the measured compact label size, not a rounded approximation.
 pub fn widgetButtonTextSize(widget: Widget, tokens: DesignTokens) f32 {
-    _ = widget;
-    return tokens.typography.button_size;
+    return switch (widget.size) {
+        .sm => @max(8, tokens.typography.button_size - 1.2),
+        .default, .icon, .heading, .display, .lg => tokens.typography.button_size,
+    };
 }
 
 pub fn widgetBodyTextSize(widget: Widget, tokens: DesignTokens) f32 {
@@ -96,16 +100,18 @@ pub fn widgetTextSpanLayoutOptions(widget: Widget, tokens: DesignTokens, max_wid
 }
 
 /// The ONE control height register — buttons, inputs, and select
-/// triggers all sit on the whole-pixel 32/36/40 ladder (sm/default/lg)
-/// instead of the multiplicative size scale (which lands on 31.5/40.5):
-/// heights on the 4px grid keep a mixed toolbar row at exactly one
-/// height and pixel-snap cleanly at every scale factor. The `icon`
-/// size is the default square.
+/// triggers all sit on the whole-pixel 28/32/36 ladder (sm/default/lg)
+/// instead of the multiplicative size scale (which lands on fractional
+/// heights): heights on the 4px grid keep a mixed toolbar row at exactly
+/// one height and pixel-snap cleanly at every scale factor. Every kind
+/// on the register moves together — a 32px button beside a 36px input
+/// would break the one-toolbar-row invariant this ladder exists for.
+/// The `icon` size is the default square.
 pub fn widgetControlHeight(widget: Widget, tokens: DesignTokens) f32 {
     const base: f32 = switch (widget.size) {
-        .sm => 32,
-        .default, .icon, .heading, .display => 36,
-        .lg => 40,
+        .sm => 28,
+        .default, .icon, .heading, .display => 32,
+        .lg => 36,
     };
     return densityValue(tokens, base);
 }
@@ -118,16 +124,13 @@ pub fn widgetButtonIconExtent(widget: Widget, tokens: DesignTokens) f32 {
     return widgetButtonTextSize(widget, tokens) + 2;
 }
 
-/// Gap between a button's inline icon and its label: 8 at the default
-/// and lg steps, 6 at sm. lg does NOT widen the gap — a bigger button
-/// earns more air at its edges (the inset ladder), not between an icon
-/// and the label it belongs to.
+/// Gap between a button's inline icon and its label: 6 at EVERY step.
+/// The gap is intra-content spacing — the glyph and the label are one
+/// phrase — so it never widens with the size ladder; a bigger button
+/// earns more air at its edges (the inset), not inside its own label.
 pub fn widgetButtonIconGap(widget: Widget, tokens: DesignTokens) f32 {
-    const base: f32 = switch (widget.size) {
-        .sm => 6,
-        .default, .icon, .heading, .display, .lg => 8,
-    };
-    return densityValue(tokens, base);
+    _ = widget;
+    return densityValue(tokens, 6);
 }
 
 /// Extent of a vector icon inside a badge (`widget.icon`): sized just
@@ -158,23 +161,16 @@ pub fn widgetDefaultRowHeight(widget: Widget, tokens: DesignTokens) f32 {
     return widgetSizedDensityValue(widget, tokens, default_widget_row_extent);
 }
 
-/// A button's horizontal inset. The ladder breathes wider than the
-/// generic control inset — 12/16/24 for sm/default/lg — because a
-/// command earns air around its label; lg jumps disproportionately (a
-/// large call-to-action is mostly presence). An inline icon pulls the
-/// inset in one step (10/12/16): the glyph already carries visual
-/// weight at the edge, so the icon+label block stays optically
-/// centered instead of floating in doubled padding. `icon`-sized
-/// buttons center their glyph in the square and need no inset.
+/// A button's horizontal inset: ONE 10px register across the whole
+/// sm/default/lg ladder. The sizes already speak through height, radius,
+/// and (at sm) the label step, so the padding stays put — a wider inset
+/// ladder made buttons read as differently PROPORTIONED controls instead
+/// of the same control at three rungs, and 10px is what the compact
+/// control heights (28/32/36) can honestly afford. `icon`-sized buttons
+/// center their glyph in the square and need no inset.
 pub fn widgetButtonInset(widget: Widget, tokens: DesignTokens) f32 {
     if (widget.size == .icon) return 0;
-    const with_icon = widget.icon.len > 0 and widget.text.len > 0;
-    const base: f32 = switch (widget.size) {
-        .sm => if (with_icon) 10 else 12,
-        .default, .icon, .heading, .display => if (with_icon) 12 else 16,
-        .lg => if (with_icon) 16 else 24,
-    };
-    return densityValue(tokens, base);
+    return densityValue(tokens, 10);
 }
 
 pub fn widgetControlInset(widget: Widget, tokens: DesignTokens, base: f32) f32 {

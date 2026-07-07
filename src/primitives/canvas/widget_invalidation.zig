@@ -596,14 +596,12 @@ fn widgetFocusStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
 }
 
 fn widgetShadowPaintBounds(widget: Widget, tokens: DesignTokens) ?geometry.RectF {
+    // Buttons cast NO shadow (the base control register is flat), so
+    // they carry no shadow damage budget — only the elevated surfaces
+    // below reserve halo pixels.
     const token = switch (widget.kind) {
         .accordion, .bubble, .resizable, .panel, .tooltip => tokens.shadow.sm,
         .dialog, .drawer, .sheet, .popover, .menu_surface, .dropdown_menu => tokens.shadow.md,
-        // Filled buttons cast the whisper shadow; damage is conservative
-        // (a quiet variant casts none but still budgets the halo), so a
-        // button that moves, hides, or loses its shadow when disabled
-        // never leaves shadow pixels behind. Toggle kinds never cast.
-        .button, .icon_button => tokens.shadow.xs,
         else => return null,
     };
     if (token.y == 0 and token.blur == 0 and token.spread == 0) return null;

@@ -52,11 +52,12 @@ const dashboard_chrome_prefix_commands: usize = 5;
 // 70 after the table register: the single-row data grid's cell dropped
 // its default box stroke (tabular chrome is hairline ROW separators now,
 // and a lone last row draws none).
-// 72 after the button fidelity round: the two filled buttons (the
-// toolbar's secondary Refresh, the side column's Live render) each lead
-// with the whisper shadow ahead of their fill.
-const expected_dashboard_command_count: usize = 72;
-const expected_dashboard_interaction_command_count: usize = 72;
+// 70 after the flat button register: buttons cast no shadow at all now
+// (the measured base family is flat), so the two filled buttons (the
+// toolbar's secondary Refresh, the side column's Live render) each
+// dropped the shadow command that briefly led their fill.
+const expected_dashboard_command_count: usize = 70;
+const expected_dashboard_interaction_command_count: usize = 70;
 // Regenerated 2026-07-04: layout measures with the bundled face's real
 // advance table (estimator wave); spot-reviewed before/after — sub-pixel
 // text shifts only, no layout change.
@@ -107,7 +108,14 @@ const expected_dashboard_interaction_command_count: usize = 72;
 // filter popover grew to hold its three rows. Reviewed via a live
 // automation capture (idle popover and a committed row with its
 // checkmark) before blessing.
-const expected_dashboard_reference_signature: u64 = 12478513245896516536;
+// Regenerated 2026-07-06 (button fidelity round two — the measured base
+// register): the control ladder compacts to 28/32/36 heights with one
+// 10px side inset, corners sit at 10 (8 at sm), the sm label steps to
+// 12.8, buttons are FLAT (the round-one whisper shadow is gone), and
+// destructive is the quiet red-wash chip with red ink instead of the
+// filled alarm block. Reviewed via the regenerated docs button previews
+// in light and dark.
+const expected_dashboard_reference_signature: u64 = 3267909799340529904;
 const expected_dashboard_widget_node_count: usize = 48;
 const expected_dashboard_snapshot_widget_count: usize = 48;
 const refresh_command = "dashboard.refresh";

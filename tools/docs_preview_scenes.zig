@@ -170,6 +170,7 @@ pub const scenes = [_]Scene{
     heroScene("badge-hero", buildBadgeHero),
     heroScene("breadcrumb-hero", buildBreadcrumb),
     heroScene("bubble-hero", buildBubbleHero),
+    heroScene("button-group-hero", buildButtonGroupHero),
     heroScene("button-hero", buildButtonHero),
     heroScene("card-hero", buildCardHero),
     heroScene("chart-hero", buildChartHero),
@@ -1054,6 +1055,18 @@ fn buildBubbleHero(ui: *Ui) Node {
 fn buildButtonHero(ui: *Ui) Node {
     return heroTile(ui, .{
         ui.button(.{ .variant = .primary }, "Button"),
+    });
+}
+
+fn buildButtonGroupHero(ui: *Ui) Node {
+    // The flush bar IS the component: three attached outline segments
+    // with one shared corner language and collapsed interior seams.
+    return heroTile(ui, .{
+        ui.el(.button_group, .{}, .{
+            ui.button(.{ .variant = .outline, .icon = "chevron-left" }, "Back"),
+            ui.button(.{ .variant = .outline }, "Today"),
+            ui.button(.{ .variant = .outline, .icon = "chevron-right", .icon_placement = .trailing }, "Next"),
+        }),
     });
 }
 

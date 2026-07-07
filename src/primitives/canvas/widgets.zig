@@ -669,6 +669,24 @@ pub const WidgetOverscroll = enum {
     rubber_band,
 };
 
+/// Where a control sits inside a FLUSH button group (`button_group`
+/// with gap 0), stamped onto the render-time widget copy by BOTH render
+/// walks — never authored, never serialized, never retained. The stamp
+/// is what turns three adjacent buttons into one segmented bar: the
+/// first segment keeps only its leading corners, the last only its
+/// trailing corners, middles square off entirely, and every non-first
+/// segment drops its left border so each interior boundary is painted
+/// by exactly ONE stroke (two overlapping translucent hairlines — the
+/// dark scheme's border register — would composite into a brighter
+/// seam than the group's outer edge).
+pub const WidgetGroupSegment = enum {
+    /// Not a flush-group segment (the default everywhere else).
+    none,
+    first,
+    middle,
+    last,
+};
+
 pub const Widget = struct {
     id: ObjectId = 0,
     kind: WidgetKind,
@@ -779,6 +797,12 @@ pub const Widget = struct {
     /// bounded by `canvas_limits.max_canvas_widget_chart_*` budgets.
     /// `Ui.chart` downsamples long series before they land here.
     chart: chart_model.ChartData = .{},
+    /// Render-walk stamp for flush button-group segments (see
+    /// `WidgetGroupSegment`). Derived at emit time from the widget's
+    /// position among its group's visible children; `.none` everywhere
+    /// authored state lives, so it never participates in retention,
+    /// serialization, or equality decisions.
+    group_segment: WidgetGroupSegment = .none,
     children: []const Widget = &.{},
 };
 

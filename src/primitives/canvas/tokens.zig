@@ -753,7 +753,66 @@ pub const ControlTokens = struct {
     separator: ControlVisualTokens = .{},
     skeleton: ControlVisualTokens = .{},
     spinner: ControlVisualTokens = .{},
+
+    /// The per-scheme control register. Most controls derive their whole
+    /// appearance from `ColorTokens` and need no entry here; the tables
+    /// exist for the treatments whose light/dark difference is MORE than
+    /// a palette swap — different wash STRENGTHS per scheme — which must
+    /// be stated per theme rather than sniffed from surface luminance at
+    /// render time (a themed app with an unusual background must not
+    /// flip register by accident):
+    ///
+    /// - Destructive buttons are the quiet red chip: the destructive hue
+    ///   at 10% alpha in light and 20% in dark (a dark page swallows the
+    ///   thinner wash), text in the destructive red itself, no border.
+    ///   Hover/pressed deepen the wash one 5% step at a time — a
+    ///   translucent chip signals by gaining ink, not losing it.
+    /// - Dark outline buttons are glass: white at 4.5% for the body and
+    ///   white at 15% for the border, so the control brightens whatever
+    ///   it floats over. Light outline is the opaque register — the page
+    ///   background as fill under the standard hairline border.
+    pub fn theme(color_scheme: ColorScheme, contrast: ColorContrast) ControlTokens {
+        const colors = ColorTokens.theme(color_scheme, contrast);
+        const wash: f32 = switch (color_scheme) {
+            .light => 0.10,
+            .dark => 0.20,
+        };
+        return .{
+            .button_outline = switch (color_scheme) {
+                .light => .{
+                    .background = colors.background,
+                },
+                // The glass BORDER is a standard-contrast treatment
+                // only: high contrast keeps the palette's loud hairline
+                // (`colors.border`, white at ~75%) — a 15% override
+                // would quietly undo the contrast the user asked for.
+                // The faint body wash survives both.
+                .dark => switch (contrast) {
+                    .standard => .{
+                        .background = colorAlpha(Color.rgb8(255, 255, 255), 0.045),
+                        .border = colorAlpha(Color.rgb8(255, 255, 255), 0.15),
+                    },
+                    .high => .{
+                        .background = colorAlpha(Color.rgb8(255, 255, 255), 0.045),
+                    },
+                },
+            },
+            .button_destructive = .{
+                .background = colorAlpha(colors.destructive, wash),
+                .hover_background = colorAlpha(colors.destructive, wash + 0.05),
+                .active_background = colorAlpha(colors.destructive, wash + 0.10),
+                .foreground = colors.destructive,
+                .stroke_width = 0,
+            },
+        };
+    }
 };
+
+/// A palette color at an explicit wash strength — the themed control
+/// tables' translucency channel.
+fn colorAlpha(color: Color, alpha: f32) Color {
+    return Color.rgba(color.r, color.g, color.b, std.math.clamp(alpha, 0, 1));
+}
 
 pub const ColorTokenOverrides = struct {
     background: ?Color = null,
@@ -1089,6 +1148,7 @@ pub const DesignTokens = struct {
     pub fn theme(options: ThemeOptions) DesignTokens {
         return .{
             .colors = ColorTokens.theme(options.color_scheme, options.contrast),
+            .controls = ControlTokens.theme(options.color_scheme, options.contrast),
             .motion = if (options.reduce_motion) MotionTokens.reduced() else .{},
             .density = options.density,
         };

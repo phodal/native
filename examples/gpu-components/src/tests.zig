@@ -647,17 +647,15 @@ test "gpu components display list renders stable reference snapshot" {
     // any label near its box edge re-rasterizes at the elision boundary
     // even when no glyph is dropped. Reviewed via regenerated docs
     // previews (only the separator hero pair changed) before blessing.
-    // Regenerated 2026-07-06 (button fidelity round): the button family
-    // takes the reference register head-on — heights land on the
-    // whole-pixel 32/36/40 ladder, side insets breathe at 12/16/24
-    // (one step tighter with an inline icon), corner radius and the
-    // 14px label hold ONE step across sizes, labels draw with the
-    // medium companion face (regular outlines at medium advances in
-    // this deterministic render), filled variants cast a 1px whisper
-    // shadow and press one wash step past hover, quiet variants press
-    // to the deeper neutral wash, and disabled buttons fade every part
-    // (fill/border/ink) to half strength instead of collapsing to a
-    // gray block. Reviewed via regenerated docs button/toggle previews
+    // Regenerated 2026-07-06 (button fidelity round two — the measured
+    // base register): the whole control ladder compacts to 28/32/36
+    // heights (buttons, inputs, and selects move together, so the
+    // one-toolbar-row invariant holds), side insets settle at one 10px
+    // register, corners sit at 10 with one step down to 8 at sm, the sm
+    // label steps to 12.8, buttons are FLAT (round one's whisper shadow
+    // retired), destructive renders as the quiet red-wash chip with red
+    // ink and no border, and dark outline turns glass (white 4.5% body,
+    // white 15% border). Reviewed via regenerated docs button previews
     // in light and dark before blessing.
     // Re-pinned same day on the merged tree adding the select rework:
     // the select trigger's open-below affordance is the registry
@@ -675,7 +673,7 @@ test "gpu components display list renders stable reference snapshot" {
     // hand-drawn two-line glyph. Only the catalog's combobox pixels
     // move past the select-rework pin. Reviewed via the regenerated
     // docs combobox previews (the sole preview churn) before blessing.
-    try std.testing.expectEqual(@as(u64, 12104365516327616860), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 8874355866572474226), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));

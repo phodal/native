@@ -428,9 +428,11 @@ test "widget layout diff tracks added removed and layout changes by id" {
     try std.testing.expect(invalidations[0].layout_dirty);
     try std.testing.expect(invalidations[0].paint_dirty);
     try std.testing.expect(invalidations[0].semantics_dirty);
-    // The button's damage budgets its whisper-shadow halo (1px drop,
-    // 2px blur) around both the old and the new frame.
-    try expectRect(geometry.RectF.init(8, 9, 114, 34), invalidations[0].dirty_bounds);
+    // The button is flat (no shadow halo), so the damage is the union
+    // of the old and new frames plus their chrome-stroke outsets: half
+    // of the resting 1px border around the old frame, half of the 2px
+    // focus-weight stroke around the new (focused) frame.
+    try expectRect(geometry.RectF.init(9.5, 9, 111.5, 32), invalidations[0].dirty_bounds);
 
     try std.testing.expectEqual(WidgetInvalidationKind.removed, invalidations[1].kind);
     try std.testing.expectEqual(@as(ObjectId, 3), invalidations[1].id);
@@ -1225,32 +1227,32 @@ test "widget tree emits panel button text and progress commands" {
     try emitWidgetTree(&builder, root, tokens);
 
     const display_list = builder.displayList();
-    // Panel shadow/fill/border, then the button's whisper shadow ahead
-    // of its own fill/border/label.
-    try std.testing.expectEqual(@as(usize, 10), display_list.commandCount());
+    // Panel shadow/fill/border, then the button's fill/border/label —
+    // buttons are FLAT (no shadow command of their own; only elevated
+    // surfaces cast).
+    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
     try std.testing.expectEqual(@as(?ObjectId, widgetPartId(1, 1)), display_list.commands[0].objectId());
     try std.testing.expect(display_list.commands[0] == .shadow);
     try std.testing.expectEqual(@as(?ObjectId, widgetPartId(1, 2)), display_list.commands[1].objectId());
     try std.testing.expect(display_list.commands[1] == .fill_rounded_rect);
-    try std.testing.expect(display_list.commands[3] == .shadow);
-    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[4].objectId());
-    try std.testing.expect(display_list.commands[4] == .fill_rounded_rect);
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[3].objectId());
+    try std.testing.expect(display_list.commands[3] == .fill_rounded_rect);
 
-    switch (display_list.commands[6]) {
+    switch (display_list.commands[5]) {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(2, 4)), text.id);
             try std.testing.expectEqualStrings("Launch", text.text);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[7]) {
+    switch (display_list.commands[6]) {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(3, 1)), text.id);
             try std.testing.expectEqualStrings("Frames stay retained", text.text);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[9]) {
+    switch (display_list.commands[8]) {
         .fill_rounded_rect => |fill| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(4, 2)), fill.id);
             try expectRect(geometry.RectF.init(16, 96, 40, 8), fill.rect);
@@ -1468,8 +1470,9 @@ test "widget display list renders through reference surface" {
 
     try std.testing.expect(frame.requiresRender());
     try std.testing.expectEqual(CanvasRenderPassLoadAction.clear, frame.renderPass().loadAction());
-    // The button now leads with its whisper shadow (10th command).
-    try std.testing.expectEqual(@as(usize, 10), frame.renderPass().commandCount());
+    // Panel shadow/fill/border + flat button fill/border/label + text +
+    // progress track/fill: buttons cast no shadow of their own.
+    try std.testing.expectEqual(@as(usize, 9), frame.renderPass().commandCount());
 
     var pixels: [240 * 128 * 4]u8 = undefined;
     const surface = try ReferenceRenderSurface.init(240, 128, &pixels);
@@ -1502,14 +1505,14 @@ test "widget emitter applies button state tokens" {
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, tokens);
 
-    // Shadow + fill + border + focus ring + label.
+    // Fill + border + focus ring + label — flat, no shadow command.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[2]) {
         .stroke_rect => |stroke| {
             try std.testing.expectEqual(@as(ObjectId, widgetPartId(7, 3)), stroke.id);
             try std.testing.expectEqual(@as(f32, 3), stroke.stroke.width);
@@ -1517,7 +1520,7 @@ test "widget emitter applies button state tokens" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[4]) {
+    switch (display_list.commands[3]) {
         .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.accent_text, text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -1545,44 +1548,45 @@ test "widget emitter applies button variants" {
     try emitWidgetTree(&builder, .{ .id = 23, .kind = .button, .frame = geometry.RectF.init(0, 120, 120, 32), .text = "Ghost", .variant = .ghost }, tokens);
     try emitWidgetTree(&builder, .{ .id = 24, .kind = .button, .frame = geometry.RectF.init(0, 160, 120, 32), .text = "Delete", .variant = .destructive }, tokens);
 
-    // The filled variants (primary/secondary/destructive) each lead
-    // with the whisper shadow; the quiet variants' transparent bodies
-    // cast none: 4 + 4 + 3 + 3 + 4 commands.
+    // Every variant is FLAT (no shadow command): 5 x (fill + border +
+    // label). Destructive is the quiet red chip — the destructive hue
+    // as a 10% wash under destructive-red text, borderless.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 18), display_list.commandCount());
-    try std.testing.expect(display_list.commands[0] == .shadow);
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 15), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[1]) {
         .stroke_rect => |stroke| try expectFillColor(tokens.colors.accent, stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(display_list.commands[4] == .shadow);
-    switch (display_list.commands[5]) {
+    switch (display_list.commands[3]) {
         .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.surface_subtle, fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[8]) {
+    switch (display_list.commands[6]) {
         .fill_rounded_rect => |fill| try expectFillColor(transparentColor(), fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[11]) {
+    switch (display_list.commands[9]) {
         .fill_rounded_rect => |fill| try expectFillColor(transparentColor(), fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[12]) {
+    switch (display_list.commands[10]) {
         .stroke_rect => |stroke| try std.testing.expectEqual(@as(f32, 0), stroke.stroke.width),
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(display_list.commands[14] == .shadow);
-    switch (display_list.commands[15]) {
-        .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.destructive, fill.fill),
+    switch (display_list.commands[12]) {
+        .fill_rounded_rect => |fill| try expectFillColor(colorWithAlpha(tokens.colors.destructive, 0.10), fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[17]) {
-        .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.destructive_text, text.color),
+    switch (display_list.commands[13]) {
+        .stroke_rect => |stroke| try std.testing.expectEqual(@as(f32, 0), stroke.stroke.width),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[14]) {
+        .draw_text => |text| try std.testing.expectEqualDeep(tokens.colors.destructive, text.color),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -1613,39 +1617,38 @@ test "widget emitter applies button variant control tokens" {
     try emitWidgetTree(&builder, .{ .id = 31, .kind = .button, .frame = geometry.RectF.init(0, 40, 120, 32), .text = "Secondary", .variant = .secondary, .state = .{ .pressed = true } }, tokens);
     try emitWidgetTree(&builder, .{ .id = 32, .kind = .button, .frame = geometry.RectF.init(0, 80, 120, 32), .text = "Local", .variant = .primary, .style = .{ .accent = Color.rgb8(1, 2, 3), .accent_foreground = Color.rgb8(4, 5, 6), .border = Color.rgb8(7, 8, 9) } }, tokens);
 
-    // Every themed rest fill here is opaque, so each button leads with
-    // the whisper shadow: 3 x (shadow + fill + border + label).
+    // Buttons are flat (no shadow command): 3 x (fill + border + label).
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 12), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(14, 54, 108), fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[1]) {
         .stroke_rect => |stroke| try expectFillColor(Color.rgb8(20, 70, 120), stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[2]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(244, 248, 255), text.color),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[5]) {
+    switch (display_list.commands[3]) {
         .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(190, 205, 220), fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[7]) {
+    switch (display_list.commands[5]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(10, 20, 30), text.color),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[9]) {
+    switch (display_list.commands[6]) {
         .fill_rounded_rect => |fill| try expectFillColor(Color.rgb8(1, 2, 3), fill.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[10]) {
+    switch (display_list.commands[7]) {
         .stroke_rect => |stroke| try expectFillColor(Color.rgb8(7, 8, 9), stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[11]) {
+    switch (display_list.commands[8]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(4, 5, 6), text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -2090,15 +2093,14 @@ test "widget emitter applies control radius and stroke tokens" {
     try emitWidgetTree(&builder, .{ .id = 82, .kind = .checkbox, .frame = geometry.RectF.init(0, 86, 40, 24) }, tokens);
     try emitWidgetTree(&builder, .{ .id = 83, .kind = .panel, .frame = geometry.RectF.init(0, 120, 180, 90), .style = .{ .radius = 6, .stroke_width = 1 } }, tokens);
 
-    // The filled button leads with its whisper shadow, so its chrome
-    // sits at [1]/[2].
+    // Buttons are flat, so the button's chrome sits at [0]/[1].
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 12), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 11), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(10), fill.radius),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[1]) {
         .stroke_rect => |stroke| {
             try std.testing.expectEqualDeep(Radius.all(10), stroke.radius);
             try std.testing.expectEqual(@as(f32, 3), stroke.stroke.width);
@@ -2106,11 +2108,11 @@ test "widget emitter applies control radius and stroke tokens" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[4]) {
+    switch (display_list.commands[3]) {
         .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(4), fill.radius),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[5]) {
+    switch (display_list.commands[4]) {
         .stroke_rect => |stroke| {
             try std.testing.expectEqualDeep(Radius.all(4), stroke.radius);
             try std.testing.expectEqual(@as(f32, 2), stroke.stroke.width);
@@ -2118,11 +2120,11 @@ test "widget emitter applies control radius and stroke tokens" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[7]) {
+    switch (display_list.commands[6]) {
         .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(1), fill.radius),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[8]) {
+    switch (display_list.commands[7]) {
         .stroke_rect => |stroke| {
             try std.testing.expectEqualDeep(Radius.all(1), stroke.radius);
             try std.testing.expectEqual(@as(f32, 5), stroke.stroke.width);
@@ -2130,11 +2132,11 @@ test "widget emitter applies control radius and stroke tokens" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[10]) {
+    switch (display_list.commands[9]) {
         .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(6), fill.radius),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[11]) {
+    switch (display_list.commands[10]) {
         .stroke_rect => |stroke| {
             try std.testing.expectEqualDeep(Radius.all(6), stroke.radius);
             try std.testing.expectEqual(@as(f32, 1), stroke.stroke.width);
@@ -2154,38 +2156,39 @@ test "widget emitter applies control sizes" {
     try emitWidgetTree(&builder, .{ .id = 42, .kind = .text_field, .frame = geometry.RectF.init(0, 80, 120, 32), .text = "Input", .size = .sm }, tokens);
     try emitWidgetTree(&builder, .{ .id = 43, .kind = .checkbox, .frame = geometry.RectF.init(0, 120, 80, 20), .size = .lg }, tokens);
 
-    // Buttons hold ONE corner radius and ONE label size across the size
-    // ladder — sm/lg step the chrome (heights, insets), never the corner
-    // or the glyphs — and each filled button leads with its shadow.
+    // Buttons are flat (fill + border + label each). The corner steps
+    // once at sm (8 vs the default/lg 10) and the label steps down to
+    // 12.8 at sm; the 10px inset holds across the ladder.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 13), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 11), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(8), fill.radius),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(@as(f32, 12.8), text.size);
+            try std.testing.expect(text.text_layout != null);
+            // The shared 10px inset on each side of the 120 frame.
+            try std.testing.expectApproxEqAbs(@as(f32, 100), text.text_layout.?.max_width, 0.001);
+        },
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[3]) {
-        .draw_text => |text| {
-            try std.testing.expectEqual(@as(f32, 14), text.size);
-            try std.testing.expect(text.text_layout != null);
-            // sm inset 12 on each side of the 120 frame.
-            try std.testing.expectApproxEqAbs(@as(f32, 96), text.text_layout.?.max_width, 0.001);
-        },
+        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(10), fill.radius),
         else => return error.TestUnexpectedResult,
     }
     switch (display_list.commands[5]) {
-        .fill_rounded_rect => |fill| try std.testing.expectEqualDeep(Radius.all(8), fill.radius),
-        else => return error.TestUnexpectedResult,
-    }
-    switch (display_list.commands[7]) {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(f32, 14), text.size);
             try std.testing.expect(text.text_layout != null);
-            // lg inset 24 on each side of the 120 frame.
-            try std.testing.expectApproxEqAbs(@as(f32, 72), text.text_layout.?.max_width, 0.001);
+            // lg keeps the same 10px inset — sizes step height and
+            // radius, never the padding register.
+            try std.testing.expectApproxEqAbs(@as(f32, 100), text.text_layout.?.max_width, 0.001);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[10]) {
+    switch (display_list.commands[8]) {
         .draw_text => |text| {
             try std.testing.expectEqual(@as(f32, 13), text.size);
             try std.testing.expect(text.text_layout != null);
@@ -2193,7 +2196,7 @@ test "widget emitter applies control sizes" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[11]) {
+    switch (display_list.commands[9]) {
         .fill_rounded_rect => |fill| try std.testing.expectApproxEqAbs(@as(f32, 18), fill.rect.width, 0.001),
         else => return error.TestUnexpectedResult,
     }
@@ -2234,18 +2237,17 @@ test "widget emitter applies per-widget style overrides" {
         .style = active_style,
     }, .{});
 
-    // Both styled rest fills are opaque, so each button leads with the
-    // whisper shadow.
+    // Buttons are flat — styled chrome starts at [0].
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 7), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| {
             try expectFillColor(Color.rgb8(12, 18, 24), fill.fill);
             try std.testing.expectEqualDeep(Radius.all(5), fill.radius);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[2]) {
+    switch (display_list.commands[1]) {
         .stroke_rect => |stroke| {
             try expectFillColor(Color.rgb8(54, 64, 74), stroke.stroke.fill);
             try std.testing.expectEqual(@as(f32, 2), stroke.stroke.width);
@@ -2253,22 +2255,22 @@ test "widget emitter applies per-widget style overrides" {
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[2]) {
         .stroke_rect => |stroke| try expectFillColor(Color.rgb8(90, 120, 255), stroke.stroke.fill),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[4]) {
+    switch (display_list.commands[3]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(235, 241, 247), text.color),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[6]) {
+    switch (display_list.commands[4]) {
         .fill_rounded_rect => |fill| {
             try expectFillColor(Color.rgb8(30, 80, 210), fill.fill);
             try std.testing.expectEqualDeep(Radius.all(4), fill.radius);
         },
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[8]) {
+    switch (display_list.commands[6]) {
         .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(255, 255, 255), text.color),
         else => return error.TestUnexpectedResult,
     }
@@ -2282,16 +2284,17 @@ test "widget emitter applies density tokens to spacing and affordances" {
         .text = "Density",
     };
 
-    // The default-size label inset is 16, density-scaled; the shadow
-    // command sits ahead of the fill/border, so the label lands at [3].
+    // The label inset is the shared 10px register, density-scaled
+    // (8.75/10/11.25); buttons are flat so the label lands at [2]
+    // behind fill and border.
     var compact_button_commands: [5]CanvasCommand = undefined;
     var compact_button_builder = Builder.init(&compact_button_commands);
     try emitWidgetTree(&compact_button_builder, button, .{ .density = .compact });
-    switch (compact_button_builder.displayList().commands[3]) {
+    switch (compact_button_builder.displayList().commands[2]) {
         .draw_text => |text| {
-            try std.testing.expectApproxEqAbs(@as(f32, 14), text.origin.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 8.75), text.origin.x, 0.001);
             try std.testing.expect(text.text_layout != null);
-            try std.testing.expectApproxEqAbs(@as(f32, 112), text.text_layout.?.max_width, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 122.5), text.text_layout.?.max_width, 0.001);
             try std.testing.expectEqual(TextAlign.center, text.text_layout.?.alignment);
         },
         else => return error.TestUnexpectedResult,
@@ -2300,11 +2303,11 @@ test "widget emitter applies density tokens to spacing and affordances" {
     var regular_button_commands: [5]CanvasCommand = undefined;
     var regular_button_builder = Builder.init(&regular_button_commands);
     try emitWidgetTree(&regular_button_builder, button, .{ .density = .regular });
-    switch (regular_button_builder.displayList().commands[3]) {
+    switch (regular_button_builder.displayList().commands[2]) {
         .draw_text => |text| {
-            try std.testing.expectApproxEqAbs(@as(f32, 16), text.origin.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 10), text.origin.x, 0.001);
             try std.testing.expect(text.text_layout != null);
-            try std.testing.expectApproxEqAbs(@as(f32, 108), text.text_layout.?.max_width, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 120), text.text_layout.?.max_width, 0.001);
             try std.testing.expectEqual(TextAlign.center, text.text_layout.?.alignment);
         },
         else => return error.TestUnexpectedResult,
@@ -2313,11 +2316,11 @@ test "widget emitter applies density tokens to spacing and affordances" {
     var spacious_button_commands: [5]CanvasCommand = undefined;
     var spacious_button_builder = Builder.init(&spacious_button_commands);
     try emitWidgetTree(&spacious_button_builder, button, .{ .density = .spacious });
-    switch (spacious_button_builder.displayList().commands[3]) {
+    switch (spacious_button_builder.displayList().commands[2]) {
         .draw_text => |text| {
-            try std.testing.expectApproxEqAbs(@as(f32, 18), text.origin.x, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 11.25), text.origin.x, 0.001);
             try std.testing.expect(text.text_layout != null);
-            try std.testing.expectApproxEqAbs(@as(f32, 104), text.text_layout.?.max_width, 0.001);
+            try std.testing.expectApproxEqAbs(@as(f32, 117.5), text.text_layout.?.max_width, 0.001);
             try std.testing.expectEqual(TextAlign.center, text.text_layout.?.alignment);
         },
         else => return error.TestUnexpectedResult,
@@ -2369,14 +2372,14 @@ test "widget pixel snap tokens align widget chrome and text origins" {
     var builder = Builder.init(&commands);
     try emitWidgetTree(&builder, button, tokens);
 
-    // Shadow + fill + border + label.
+    // Fill + border + label — buttons are flat.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 4), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 3), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try expectRect(geometry.RectF.init(0, 1, 101, 32), fill.rect),
         else => return error.TestUnexpectedResult,
     }
-    switch (display_list.commands[3]) {
+    switch (display_list.commands[2]) {
         .draw_text => |text| {
             try std.testing.expectEqual(@round(text.origin.x), text.origin.x);
             try std.testing.expectEqual(@round(text.origin.y), text.origin.y);
@@ -2416,11 +2419,11 @@ test "widget layout emission can render runtime focus state" {
     var builder = Builder.init(&commands);
     try layout.emitDisplayListWithState(&builder, tokens, .{ .focused_id = 2, .focus_visible_id = 2, .hovered_id = 2, .pressed_id = 2 });
 
-    // Each button leads with its whisper shadow: 5 commands for the
-    // focused/pressed one, 4 for the resting one.
+    // Flat buttons: 4 commands for the focused/pressed one (fill,
+    // border, focus ring, label), 3 for the resting one.
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 9), display_list.commandCount());
-    switch (display_list.commands[1]) {
+    try std.testing.expectEqual(@as(usize, 7), display_list.commandCount());
+    switch (display_list.commands[0]) {
         .fill_rounded_rect => |fill| try expectFillColor(tokens.colors.accent, fill.fill),
         else => return error.TestUnexpectedResult,
     }
@@ -2543,12 +2546,12 @@ test "widget layer tokens order display emission and hit testing" {
     var commands: [8]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
-    // The button contributes 4 commands (whisper shadow first), the
-    // popover 3 (its own shadow, fill, border).
+    // The button contributes 3 flat commands (fill, border, label),
+    // the popover 3 (its own shadow, fill, border).
     const display_list = builder.displayList();
-    try std.testing.expectEqual(@as(usize, 7), display_list.commandCount());
-    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), display_list.commands[1].objectId());
-    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[4].objectId());
+    try std.testing.expectEqual(@as(usize, 6), display_list.commandCount());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), display_list.commands[0].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[3].objectId());
     try std.testing.expectEqual(@as(ObjectId, 2), layout.hitTest(geometry.PointF.init(20, 20)).?.id);
 
     const lowered_overlay = DesignTokens{
@@ -2564,7 +2567,7 @@ test "widget layer tokens order display emission and hit testing" {
     try layout.emitDisplayList(&lowered_builder, lowered_overlay);
     const lowered_display_list = lowered_builder.displayList();
     try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), lowered_display_list.commands[0].objectId());
-    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), lowered_display_list.commands[4].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), lowered_display_list.commands[3].objectId());
     try std.testing.expectEqual(@as(ObjectId, 3), layout.hitTestWithTokens(geometry.PointF.init(20, 20), lowered_overlay).?.id);
 }
 
@@ -2590,11 +2593,11 @@ test "widget explicit layers override token defaults for overlay ordering" {
     var commands: [8]CanvasCommand = undefined;
     var builder = Builder.init(&commands);
     try layout.emitDisplayList(&builder, .{});
-    // The elevated button leads with its whisper shadow, so its fill
-    // lands one slot later.
+    // The popover's 3 chrome commands paint first; the elevated flat
+    // button's fill follows directly.
     const display_list = builder.displayList();
     try std.testing.expectEqual(@as(?ObjectId, widgetPartId(2, 1)), display_list.commands[0].objectId());
-    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), display_list.commands[4].objectId());
+    try std.testing.expectEqual(@as(?ObjectId, widgetPartId(3, 1)), display_list.commands[3].objectId());
     try std.testing.expectEqual(@as(ObjectId, 3), layout.hitTest(geometry.PointF.init(20, 20)).?.id);
 }
 

@@ -59,6 +59,16 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // the 1024-node budget these arrays total several hundred
             // KiB, and the single-threaded event loop makes the shared
             // buffers safe.
+            // Armed split-tween ids (plus the pressed split, if any):
+            // the reconcile's split restore uses these to pick the
+            // slide shape — keep the source's target-fraction child
+            // layout and move the boundary geometrically — over the
+            // re-lay shape a settled fraction (or a live drag) takes.
+            var armed_tween_ids: [canvas_limits.max_canvas_widget_layout_tweens_per_view]canvas.ObjectId = undefined;
+            const armed_tween_count = self.views[index].canvas_widget_layout_tween_count;
+            for (self.views[index].canvas_widget_layout_tweens[0..armed_tween_count], 0..) |tween, tween_index| {
+                armed_tween_ids[tween_index] = tween.spec.id;
+            }
             const reconciled_layout = try canvasWidgetLayoutTreeWithRuntimeReconcileState(
                 previous_layout,
                 layout,
@@ -72,6 +82,8 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                 &self.canvas_widget_reconcile_text_entries,
                 &self.canvas_widget_reconcile_text_bytes,
                 tokens,
+                armed_tween_ids[0..armed_tween_count],
+                canvasWidgetPressedSplitId(self, index),
             );
             // Native scroll drivers: mark natively driven scroll
             // regions before the copy so rebuild-time clamping and display
@@ -242,12 +254,22 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
         ///     the current animated value, fresh clock;
         ///   - every tween slot taken: snap (motion degrades under
         ///     pressure; the state change always lands).
+        ///
+        /// Resize echoes: arming (or retargeting) notes ONE resize
+        /// event carrying the DESTINATION, and the settle step notes
+        /// one with the applied fraction — never one per step. The arm
+        /// echo is what lets a controlled split's model rebuild at the
+        /// target ONCE, so the reconcile keeps the target-wrapped
+        /// content and the tween slides it under the pane clip with
+        /// zero mid-flight re-wraps (the disclosure doctrine,
+        /// horizontal). A divider DRAG keeps its per-step echoes: a
+        /// drag tracks the pointer and must re-wrap live.
         pub fn startCanvasWidgetLayoutTween(self: *Runtime, window_id: platform.WindowId, label: []const u8, tween: canvas.CanvasWidgetLayoutTween) anyerror!platform.ViewInfo {
             try validateRuntimeViewParent(self, window_id);
             try validateViewLabel(label);
             const index = runtimeFindViewIndex(self, window_id, label) orelse return error.ViewNotFound;
             if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
-            try startCanvasWidgetLayoutTweenForView(self, index, tween);
+            try startCanvasWidgetLayoutTweenForView(self, index, tween, true);
             return self.views[index].info();
         }
 
@@ -256,7 +278,13 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
         /// (a split whose SOURCE declares `resize_duration_ms` arms the
         /// same tween the Zig hook would, so both authoring surfaces
         /// step identical fractions on identical frame clocks).
-        fn startCanvasWidgetLayoutTweenForView(self: *Runtime, index: usize, tween: canvas.CanvasWidgetLayoutTween) anyerror!void {
+        /// `announce` notes the destination resize event on a fresh arm
+        /// or retarget — true for the command/hook path (the app's
+        /// model has not seen the target yet and needs one rebuild at
+        /// it), false for the source-declared path (the source that
+        /// armed this tween IS the target declaration; echoing it back
+        /// would be a redundant rebuild).
+        fn startCanvasWidgetLayoutTweenForView(self: *Runtime, index: usize, tween: canvas.CanvasWidgetLayoutTween, announce: bool) anyerror!void {
             if (tween.id == 0) return error.InvalidCommand;
             if (!std.math.isFinite(tween.to)) return error.InvalidCommand;
             const node_index = self.views[index].canvasWidgetNodeIndexById(tween.id) orelse return error.InvalidCommand;
@@ -275,6 +303,7 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                     active.spec = tween;
                     active.from = current;
                     active.start_ns = 0;
+                    if (announce) self.views[index].noteCanvasWidgetResizeEvent(tween.id);
                     try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
                     return;
                 }
@@ -282,6 +311,7 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             if (current == tween.to) return;
 
             if (!snap and self.views[index].armCanvasWidgetLayoutTween(.{ .spec = tween, .from = current })) {
+                if (announce) self.views[index].noteCanvasWidgetResizeEvent(tween.id);
                 try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
                 return;
             }
@@ -314,7 +344,7 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                     .to = node.widget.value,
                     .duration_ms = node.widget.resize_duration_ms,
                     .easing = node.widget.resize_easing,
-                }) catch |err| switch (err) {
+                }, false) catch |err| switch (err) {
                     // The id vanished in reconcile (hidden pane, dropped
                     // subtree): nothing to move — same tolerance as the
                     // Zig hook's stale-id skip.
@@ -329,14 +359,21 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
         /// while it lasts, so the source-declared tween stands down and
         /// re-arms on the first rebuild after release.
         fn canvasWidgetSplitDividerPressed(self: *Runtime, index: usize, split_id: canvas.ObjectId) bool {
+            return canvasWidgetPressedSplitId(self, index) == split_id and split_id != 0;
+        }
+
+        /// The split whose synthesized divider the RETAINED tree holds
+        /// pressed (0 when no divider is pressed): the reconcile keeps
+        /// live re-wrap for exactly this split while a drag lasts.
+        fn canvasWidgetPressedSplitId(self: *Runtime, index: usize) canvas.ObjectId {
             const pressed_id = self.views[index].canvas_widget_pressed_id;
-            if (pressed_id == 0) return false;
-            const divider_index = self.views[index].canvasWidgetNodeIndexById(pressed_id) orelse return false;
+            if (pressed_id == 0) return 0;
+            const divider_index = self.views[index].canvasWidgetNodeIndexById(pressed_id) orelse return 0;
             const divider = self.views[index].widget_layout_nodes[divider_index];
-            if (divider.widget.kind != .split_divider) return false;
-            const parent_index = divider.parent_index orelse return false;
-            if (parent_index >= self.views[index].widget_layout_node_count) return false;
-            return self.views[index].widget_layout_nodes[parent_index].widget.id == split_id;
+            if (divider.widget.kind != .split_divider) return 0;
+            const parent_index = divider.parent_index orelse return 0;
+            if (parent_index >= self.views[index].widget_layout_node_count) return 0;
+            return self.views[index].widget_layout_nodes[parent_index].widget.id;
         }
 
         /// What `setCanvasWidgetLayout` should do about DISCLOSURE
@@ -590,11 +627,19 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
         /// view, called from the frame event dispatch (the kinetic
         /// scroll's sibling). Each active tween samples its eased
         /// fraction at the frame's timestamp and lands it through the
-        /// split-drag mutation path — retained-diff dirty regions and
-        /// `on_resize` events for free. Completed tweens snap to the
-        /// exact target and retire; while any remain active the next
-        /// frame is requested, so the channel disarms itself the frame
-        /// after the last tween settles.
+        /// split-drag GEOMETRY (pane frames move, the second pane's
+        /// subtree translates, dirty regions ride the retained diff) —
+        /// but NOT the drag's per-step resize echo: mid-flight steps
+        /// slide content the reconcile already laid out at the tween's
+        /// target fraction, cropped by the pane's built-in clip, so a
+        /// per-step echo would rebuild and re-wrap the panes every
+        /// frame for nothing (the exact cost this doctrine retires).
+        /// The settle step snaps to the exact target, notes the ONE
+        /// resize echo carrying the applied fraction (the controlled
+        /// echo and any structural swap ride it), and retires; while
+        /// any tween remains active the next frame is requested, so
+        /// the channel disarms itself the frame after the last one
+        /// settles.
         pub fn advanceCanvasWidgetLayoutTweensForFrame(self: *Runtime, view_index: usize, timestamp_ns: u64) anyerror!void {
             if (view_index >= self.view_count) return;
             if (self.views[view_index].kind != .gpu_surface) return;
@@ -618,10 +663,25 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
                 const progress = canvas.layoutTweenProgress(tween.spec.easing, tween.spec.spring, tween.start_ns, tween.spec.duration_ms, timestamp_ns);
                 const done = progress >= 1;
                 const value = if (done) tween.spec.to else tween.from + (tween.spec.to - tween.from) * progress;
-                if (try self.views[view_index].applyCanvasWidgetSplitFraction(node_index, value)) |dirty| {
-                    try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, view_index, dirty);
+                const dirty = if (done)
+                    try self.views[view_index].applyCanvasWidgetSplitFraction(node_index, value)
+                else
+                    try self.views[view_index].applyCanvasWidgetSplitFractionSlide(node_index, value);
+                if (dirty) |region| {
+                    try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, view_index, region);
                 }
                 if (done) {
+                    // A settle that moved nothing because the last step
+                    // already sat EXACTLY on the target still owes the
+                    // app its one settle echo. A settle that moved
+                    // nothing because the pane-min clamp PARKED the
+                    // fraction short of the target owes nothing: the
+                    // model already holds the target it declared, and
+                    // echoing the parked fraction every settle would
+                    // rebuild-and-re-arm forever.
+                    if (dirty == null and self.views[view_index].widget_layout_nodes[node_index].widget.value == tween.spec.to) {
+                        self.views[view_index].noteCanvasWidgetResizeEvent(tween.spec.id);
+                    }
                     // removeCanvasWidgetLayoutTween swap-removes, so the
                     // slot at tween_index now holds an unvisited tween.
                     self.views[view_index].removeCanvasWidgetLayoutTween(tween.spec.id);

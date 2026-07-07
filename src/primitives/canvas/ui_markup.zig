@@ -1235,6 +1235,10 @@ pub const resize_easing_value_message = "unknown resize-easing value - split tak
 
 pub const resize_easing_dependent_attr_message = "resize-easing needs a nonzero resize-duration on the same split - without a duration the split snaps and the easing is silently inert";
 
+pub const resize_origin_element_message = "resize-origin is only supported on split - it names the fraction a freshly mounted split's pane boundary slides in from (its children keep the declared value's pose); anywhere else it would be silently inert";
+
+pub const resize_origin_dependent_attr_message = "resize-origin needs a nonzero resize-duration on the same split - without a duration a mount lands on its value and the origin is silently inert";
+
 pub const avatar_image_message = "image takes one {binding} to a u64 ImageId the app registered at runtime (fx.registerImageBytes) - runtime image ids are model data, not markup literals; 0 renders the initials fallback";
 pub const avatar_image_element_message = "image is only supported on avatar - the other image-bearing widgets (image, icon-button) stay Zig views (ui.image with ElementOptions.image)";
 
@@ -3164,6 +3168,27 @@ fn validateNode(document: MarkupDocument, node: MarkupNode, parent_element: ?[]c
                     if (parseAttrExpression(attribute.value)) |expression| {
                         if (expression == .literal and !nameInList(expression.literal, &resize_easing_value_names)) {
                             return attrError(node, attribute, resize_easing_value_message);
+                        }
+                    }
+                }
+                if (std.mem.eql(u8, attribute.name, "resize-origin")) {
+                    if (!std.mem.eql(u8, node.name, "split")) {
+                        return attrError(node, attribute, resize_origin_element_message);
+                    }
+                    // An origin shapes an enter slide that exists only
+                    // while a nonzero duration declares one: origin
+                    // alone (or beside a literal 0 duration) is
+                    // silently inert, so it is a teaching error — the
+                    // resize-easing dependency policy exactly.
+                    const duration_raw = node.attr("resize-duration") orelse {
+                        return attrError(node, attribute, resize_origin_dependent_attr_message);
+                    };
+                    if (parseAttrExpression(duration_raw)) |duration_expression| {
+                        if (duration_expression == .literal) {
+                            const duration = std.fmt.parseInt(u32, duration_expression.literal, 10) catch 1;
+                            if (duration == 0) {
+                                return attrError(node, attribute, resize_origin_dependent_attr_message);
+                            }
                         }
                     }
                 }

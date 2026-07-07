@@ -1140,6 +1140,78 @@ pub fn relayoutSplitChildren(
     try layoutAnchoredChildren(widget.children, frame, node_index, depth, output, &len, tokens);
 }
 
+/// Slide a laid split's pane boundary to `fraction` GEOMETRICALLY, over
+/// an already-laid node buffer: pane frames move, the second pane's
+/// subtree translates with its leading edge, and NO child re-lays —
+/// every descendant keeps the wrap the source layout gave it. This is
+/// the reveal-under-clip half of the split layout tween (the disclosure
+/// doctrine, horizontal): the source lays panes out ONCE at the tween's
+/// TARGET fraction, this slide restores the mid-flight boundary, and
+/// the pane's built-in content clip crops the overflowing side while
+/// the tween walks the boundary to the already-laid pose. Contrast
+/// `relayoutSplitChildren`, which re-runs child layout at the restored
+/// fraction — the honest shape for a settled runtime-owned fraction,
+/// and exactly the per-step re-wrap a tween must never pay.
+pub fn slideSplitChildren(
+    frame: geometry.RectF,
+    fraction: f32,
+    node_index: usize,
+    nodes: []WidgetLayoutNode,
+) void {
+    const split_depth = nodes[node_index].depth;
+    var pane_indices: [2]?usize = .{ null, null };
+    var divider_index: ?usize = null;
+    var child = node_index + 1;
+    while (child < nodes.len and nodes[child].depth > split_depth) : (child += 1) {
+        if (nodes[child].parent_index != node_index) continue;
+        if (nodes[child].widget.layout.anchor != null) continue;
+        if (nodes[child].widget.kind == .split_divider) {
+            if (divider_index == null) divider_index = child;
+        } else if (pane_indices[0] == null) {
+            pane_indices[0] = child;
+        } else if (pane_indices[1] == null) {
+            pane_indices[1] = child;
+        }
+    }
+    const first_index = pane_indices[0] orelse return;
+    const second_index = pane_indices[1] orelse return;
+    const handle_index = divider_index orelse return;
+
+    const content = frame.inset(nodes[node_index].widget.layout.padding).normalized();
+    const divider_extent = nodes[handle_index].frame.width;
+    const available = @max(0, content.width - divider_extent);
+    const first_min = @max(0, nodes[first_index].widget.layout.min_size.width);
+    const second_min = @max(0, nodes[second_index].widget.layout.min_size.width);
+    // The same clamp family the runtime's drag echo applies: a
+    // sub-epsilon fraction stays a sliver instead of falling into the
+    // `<= 0` unset sentinel, and pane min widths bound the boundary.
+    const effective = splitEffectiveFraction(@max(fraction, 0.0001), available, first_min, second_min);
+
+    const first_width = available * effective;
+    const divider_x = content.x + first_width;
+    const dx = divider_x - nodes[handle_index].frame.x;
+
+    nodes[node_index].widget.value = effective;
+    nodes[handle_index].widget.value = effective;
+    nodes[first_index].frame.width = first_width;
+    nodes[first_index].widget.frame = nodes[first_index].frame;
+    nodes[handle_index].frame.x = divider_x;
+    nodes[handle_index].widget.frame = nodes[handle_index].frame;
+    const second_x = divider_x + divider_extent;
+    nodes[second_index].frame.x = second_x;
+    nodes[second_index].frame.width = @max(0, content.maxX() - second_x);
+    nodes[second_index].widget.frame = nodes[second_index].frame;
+    if (dx == 0) return;
+    // The second pane's content rides its leading edge: translate the
+    // whole subtree (frames only — wraps and sizes stand).
+    const second_depth = nodes[second_index].depth;
+    var index = second_index + 1;
+    while (index < nodes.len and nodes[index].depth > second_depth) : (index += 1) {
+        nodes[index].frame.x += dx;
+        nodes[index].widget.frame = nodes[index].frame;
+    }
+}
+
 /// Widget kinds whose layout gives every child the full content box
 /// (the `stackChildFrame` arm in `layoutWidgetDepth` — keep the two in
 /// lockstep): children layer on top of each other, so `layout.gap` can

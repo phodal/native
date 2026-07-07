@@ -492,23 +492,30 @@ test "layout tween eases the split fraction on the frame clock and retires at th
 
     // First frame stamps the clock: the fraction has not moved yet, and
     // the tween keeps the channel armed by requesting the next frame.
+    // The arm's ONE resize echo drains on this frame carrying the
+    // DESTINATION — the controlled model hears where the panes are
+    // heading and rebuilds at the target exactly once.
     const t0: u64 = 1_000_000_000;
     try tweenFrame(harness, app, t0);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), try splitFraction(harness, split_id), 0.0001);
+    try std.testing.expectEqual(@as(u32, 1), app_state.resize_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), app_state.last_resize_fraction, 0.0001);
 
     // Halfway on the recorded clock: exactly halfway on a linear ease —
-    // and the app hears the same `canvas_widget_resize` a drag emits,
-    // on the SAME frame the step painted.
+    // and NO per-step echo: mid-flight steps slide already-laid content
+    // under the pane clip; a per-step echo would resurrect the
+    // per-frame rebuild the tween exists to retire.
     try tweenFrame(harness, app, t0 + 80_000_000);
     try std.testing.expectApproxEqAbs(@as(f32, 0.35), try splitFraction(harness, split_id), 0.0001);
-    try std.testing.expect(app_state.resize_count > 0);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.35), app_state.last_resize_fraction, 0.0001);
+    try std.testing.expectEqual(@as(u32, 1), app_state.resize_count);
 
-    // Past the duration: snapped to the exact target and retired. The
-    // frames that follow request nothing — the channel disarms itself,
-    // so an idle app goes back to zero frames.
+    // Past the duration: snapped to the exact target, retired, and the
+    // settle's one echo carries the applied fraction. The frames that
+    // follow request nothing — the channel disarms itself, so an idle
+    // app goes back to zero frames.
     try tweenFrame(harness, app, t0 + 200_000_000);
     try std.testing.expectEqual(@as(f32, 0.2), try splitFraction(harness, split_id));
+    try std.testing.expectEqual(@as(u32, 2), app_state.resize_count);
     const requests_settled = harness.null_platform.gpu_surface_frame_request_count;
     try tweenFrame(harness, app, t0 + 210_000_000);
     try std.testing.expectEqual(requests_settled, harness.null_platform.gpu_surface_frame_request_count);
@@ -676,15 +683,309 @@ test "a markup-declared tween steps the same fractions as the Zig-declared one" 
             try tweenFrame(harness, app, timestamp_ns);
             markup_fractions[index] = try splitFraction(harness, split_id);
         }
-        // Each tween step dispatched the same on-resize echo a drag
-        // would, through the markup-bound handler.
-        try std.testing.expect(app_state.resize_count > 0);
+        // The source-declared tween echoes exactly ONCE, at settle,
+        // with the applied fraction (the source that armed it IS the
+        // target declaration, so there is no arm echo and no per-step
+        // echo — mid-flight steps slide already-laid content).
+        try std.testing.expectEqual(@as(u32, 1), app_state.resize_count);
         try std.testing.expectApproxEqAbs(@as(f32, 0.2), app_state.last_resize_fraction, 0.0001);
     }
 
     for (zig_fractions, markup_fractions) |zig_fraction, markup_fraction| {
         try std.testing.expectEqual(zig_fraction, markup_fraction);
     }
+}
+
+// ------------------------------------ tween clip-slide (no mid-flight re-wrap)
+
+const slide_surface_width: f32 = 609;
+const slide_surface_height: f32 = 200;
+
+/// The clip-slide scene: wrapped paragraphs in BOTH panes, so any
+/// mid-flight re-wrap would move text frames and change widths. The
+/// split declares its tween in the SOURCE (`resize_duration`), the
+/// doctrine path: a rebuild that moves `value` lays panes out at the
+/// TARGET fraction once, and the tween slides the boundary under the
+/// panes' built-in clips.
+fn buildSlideTree(ui: *TestUi, fraction: f32) TestUi.Node {
+    return ui.split(.{ .value = fraction, .resize_duration = 160, .resize_easing = .linear, .on_resize = TestUi.valueMsg(.resized) }, .{
+        ui.column(.{ .min_width = 40 }, .{
+            ui.text(.{ .wrap = true }, "First pane paragraph long enough to wrap at every pane width this test walks through."),
+        }),
+        ui.column(.{ .min_width = 40 }, .{
+            ui.text(.{ .wrap = true }, "Second pane paragraph long enough to wrap at every pane width this test walks through."),
+        }),
+    });
+}
+
+fn setSlideLayout(harness: anytype, arena: std.mem.Allocator, fraction: f32) !canvas.ObjectId {
+    var ui = TestUi.init(arena);
+    const tree = try ui.finalize(buildSlideTree(&ui, fraction));
+    const nodes = try arena.alloc(canvas.WidgetLayoutNode, 16);
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height), nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    return tree.root.id;
+}
+
+/// A reference layout of the same tree at `fraction` — the settled pose
+/// the slide must land on, and the wrap truth mid-flight text must hold.
+fn slideReferenceLayout(arena: std.mem.Allocator, fraction: f32) !canvas.WidgetLayoutTree {
+    var ui = TestUi.init(arena);
+    const tree = try ui.finalize(buildSlideTree(&ui, fraction));
+    const nodes = try arena.alloc(canvas.WidgetLayoutNode, 16);
+    return canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height), nodes);
+}
+
+fn slideFrame(harness: anytype, app: App, timestamp_ns: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(slide_surface_width, slide_surface_height),
+        .timestamp_ns = timestamp_ns,
+    } });
+}
+
+/// The Nth `.text` node of a laid tree (0 = first pane's paragraph,
+/// 1 = second pane's) plus its enclosing pane node.
+fn slideTextNode(layout: canvas.WidgetLayoutTree, ordinal: usize) !canvas.WidgetLayoutNode {
+    var seen: usize = 0;
+    for (layout.nodes) |node| {
+        if (node.widget.kind != .text) continue;
+        if (seen == ordinal) return node;
+        seen += 1;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn slidePaneNode(layout: canvas.WidgetLayoutTree, ordinal: usize) !canvas.WidgetLayoutNode {
+    var seen: usize = 0;
+    for (layout.nodes) |node| {
+        if (node.widget.kind != .column) continue;
+        if (seen == ordinal) return node;
+        seen += 1;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "a source-declared tween slides target-laid panes under their clips without re-wrapping" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height),
+    });
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const split_id = try setSlideLayout(harness, arena.allocator(), 0.5);
+    // Display-list ownership handoff (what UiApp does on first present):
+    // every retained change from here — tween steps included — re-emits.
+    _ = try harness.runtime.emitCanvasWidgetDisplayListWithStoredTokens(1, "canvas");
+    const reference = try slideReferenceLayout(arena.allocator(), 0.2);
+    const ref_first_text = try slideTextNode(reference, 0);
+    const ref_second_text = try slideTextNode(reference, 1);
+    const ref_second_pane = try slidePaneNode(reference, 1);
+
+    // The arming rebuild: value moves 0.5 -> 0.2. The boundary must NOT
+    // move yet (the user keeps looking at 0.5), but the pane CONTENT is
+    // already laid out at the TARGET fraction — the first pane's
+    // paragraph wraps at its destination width, clipped by the pane.
+    const armed_id = try setSlideLayout(harness, arena.allocator(), 0.2);
+    try std.testing.expectEqual(split_id, armed_id);
+    const armed = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), armed.findById(split_id).?.widget.value, 0.0001);
+    const armed_first_text = try slideTextNode(armed, 0);
+    const armed_second_text = try slideTextNode(armed, 1);
+    const armed_second_pane = try slidePaneNode(armed, 1);
+    try std.testing.expectEqual(ref_first_text.frame.width, armed_first_text.frame.width);
+    try std.testing.expectEqual(ref_second_text.frame.width, armed_second_text.frame.width);
+    // The second pane's content rides its leading edge: same offset
+    // into the pane as the reference pose, at the mid-flight pane x.
+    try std.testing.expectApproxEqAbs(
+        ref_second_text.frame.x - ref_second_pane.frame.x,
+        armed_second_text.frame.x - armed_second_pane.frame.x,
+        0.001,
+    );
+
+    // Mid-flight: the fraction eases, text widths NEVER change (no
+    // re-wrap — the wrap was computed once, at the target), and the
+    // pane's built-in clip (slot 9) tracks the animated pane frame so
+    // the overflowing side crops instead of painting into its neighbor.
+    const t0: u64 = 1_000_000_000;
+    try slideFrame(harness, app, t0);
+    try slideFrame(harness, app, t0 + 80_000_000);
+    const mid = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.35), mid.findById(split_id).?.widget.value, 0.0001);
+    const mid_first_text = try slideTextNode(mid, 0);
+    const mid_second_text = try slideTextNode(mid, 1);
+    try std.testing.expectEqual(ref_first_text.frame.width, mid_first_text.frame.width);
+    try std.testing.expectEqual(ref_second_text.frame.width, mid_second_text.frame.width);
+    const mid_second_pane = try slidePaneNode(mid, 1);
+    const mid_display = harness.runtime.views[0].canvasDisplayList();
+    const clip_ref = mid_display.findCommandById(canvas.widgetPartId(mid_second_pane.widget.id, 9)) orelse return error.TestUnexpectedResult;
+    switch (clip_ref.command) {
+        .push_clip => |clip| {
+            // The clip is the GROWING pane's ANIMATED frame — still
+            // narrower than the target-wrapped paragraph inside it, so
+            // the overflow crops and reveals as the boundary slides.
+            try std.testing.expectApproxEqAbs(mid_second_pane.frame.width, clip.rect.width, 0.51);
+            try std.testing.expect(clip.rect.width < ref_second_text.frame.width + 1);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // No per-step echoes: mid-flight steps slide already-laid content.
+    try std.testing.expectEqual(@as(u32, 0), app_state.resize_count);
+
+    // Settle: the boundary lands exactly on the already-laid target
+    // pose — text frames equal the reference layout's — and the ONE
+    // resize echo delivers the applied fraction for the controlled
+    // model (and any structural swap) to ride.
+    try slideFrame(harness, app, t0 + 250_000_000);
+    const settled = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 0.2), settled.findById(split_id).?.widget.value);
+    const settled_first_text = try slideTextNode(settled, 0);
+    const settled_second_text = try slideTextNode(settled, 1);
+    try std.testing.expectEqual(ref_first_text.frame.width, settled_first_text.frame.width);
+    try std.testing.expectEqual(ref_second_text.frame.width, settled_second_text.frame.width);
+    try std.testing.expectApproxEqAbs(ref_first_text.frame.x, settled_first_text.frame.x, 0.05);
+    try std.testing.expectApproxEqAbs(ref_second_text.frame.x, settled_second_text.frame.x, 0.05);
+    try std.testing.expectEqual(@as(u32, 1), app_state.resize_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), app_state.last_resize_fraction, 0.0001);
+
+    // The settle echo's rebuild (the controlled model re-declaring the
+    // fraction it just heard) reconciles to the same pose bit-exactly.
+    _ = try setSlideLayout(harness, arena.allocator(), 0.2);
+    const echoed = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(ref_first_text.frame.x, (try slideTextNode(echoed, 0)).frame.x);
+    try std.testing.expectEqual(ref_second_text.frame.x, (try slideTextNode(echoed, 1)).frame.x);
+}
+
+test "a freshly mounted split with a declared origin slides in instead of popping" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height),
+    });
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // First rebuild: no split anywhere (the collapsed-at-rest pose an
+    // app unmounts its pane into).
+    {
+        var ui = TestUi.init(arena.allocator());
+        const tree = try ui.finalize(ui.column(.{}, .{ui.text(.{}, "No panes yet")}));
+        const nodes = try arena.allocator().alloc(canvas.WidgetLayoutNode, 8);
+        const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height), nodes);
+        _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    }
+
+    // Second rebuild MOUNTS the split at value 0.5 with an enter origin
+    // of 0: the first layout slides the boundary to the origin (children
+    // keep the value's wrap) and the tween eases it in.
+    var ui = TestUi.init(arena.allocator());
+    var options = TestUi.ElementOptions{ .value = 0.5, .resize_duration = 160, .resize_easing = .linear, .on_resize = TestUi.valueMsg(.resized) };
+    options.resize_origin = 0;
+    const tree = try ui.finalize(ui.split(options, .{
+        ui.column(.{ .min_width = 40 }, .{}),
+        ui.column(.{ .min_width = 40 }, .{}),
+    }));
+    const nodes = try arena.allocator().alloc(canvas.WidgetLayoutNode, 8);
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height), nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    const mounted = try splitFraction(harness, tree.root.id);
+    // The origin clamps against the pane min widths — near the left
+    // edge, nowhere near the declared value.
+    try std.testing.expect(mounted < 0.1);
+    try std.testing.expect(harness.runtime.views[0].canvasWidgetLayoutTweensActive());
+
+    const t0: u64 = 1_000_000_000;
+    try slideFrame(harness, app, t0);
+    try slideFrame(harness, app, t0 + 80_000_000);
+    const mid = try splitFraction(harness, tree.root.id);
+    try std.testing.expect(mid > mounted and mid < 0.5);
+    try slideFrame(harness, app, t0 + 250_000_000);
+    try std.testing.expectEqual(@as(f32, 0.5), try splitFraction(harness, tree.root.id));
+}
+
+test "reduced motion mounts an origin-declared split at its value" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height),
+    });
+    harness.runtime.appearance.reduce_motion = true;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var ui = TestUi.init(arena.allocator());
+    var options = TestUi.ElementOptions{ .value = 0.5, .resize_duration = 160, .on_resize = TestUi.valueMsg(.resized) };
+    options.resize_origin = 0;
+    const tree = try ui.finalize(ui.split(options, .{
+        ui.column(.{ .min_width = 40 }, .{}),
+        ui.column(.{ .min_width = 40 }, .{}),
+    }));
+    const nodes = try arena.allocator().alloc(canvas.WidgetLayoutNode, 8);
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, slide_surface_width, slide_surface_height), nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    // The snap lowering applied the value in the SAME rebuild: no
+    // animation, no origin pose ever painted.
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try splitFraction(harness, tree.root.id), 0.0001);
+    try std.testing.expect(!harness.runtime.views[0].canvasWidgetLayoutTweensActive());
+}
+
+test "a divider drag interrupts an armed tween and keeps its live per-step echoes" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: ObservingApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 309, 100),
+    });
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ui = TestUi.init(arena.allocator());
+    const tree = try ui.finalize(buildSplitTree(&ui));
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 309, 100), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    _ = try harness.runtime.startCanvasWidgetLayoutTween(1, "canvas", .{ .id = tree.root.id, .to = 0.2, .duration_ms = 160, .easing = .linear });
+    try std.testing.expect(harness.runtime.views[0].canvasWidgetLayoutTweensActive());
+
+    // Press the divider and drag: the drag owns the fraction — the
+    // tween retires and the per-step echo carries the POINTER's
+    // fraction, not the tween's abandoned destination.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_down, .x = 154, .y = 50, .button = 0 } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_drag, .x = 214, .y = 50 } });
+    try std.testing.expect(!harness.runtime.views[0].canvasWidgetLayoutTweensActive());
+    const expected_fraction: f32 = (214.0 - 4.5) / 300.0;
+    try std.testing.expectApproxEqAbs(expected_fraction, app_state.last_resize_fraction, 0.0001);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{ .window_id = 1, .label = "canvas", .kind = .pointer_up, .x = 214, .y = 50, .button = 0 } });
 }
 
 test "a re-declared markup tween target keeps its clock and reduced motion snaps the source move" {

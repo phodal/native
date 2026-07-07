@@ -709,6 +709,13 @@ pub fn canvasWidgetLayoutNodeWithTextReconcileState(
     return copy;
 }
 
+fn objectIdInList(ids: []const canvas.ObjectId, id: canvas.ObjectId) bool {
+    for (ids) |candidate| {
+        if (candidate == id) return true;
+    }
+    return false;
+}
+
 pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     previous: canvas.WidgetLayoutTree,
     next: canvas.WidgetLayoutTree,
@@ -722,6 +729,8 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     text_entries: []CanvasWidgetTextReconcileEntry,
     text_storage: []u8,
     tokens: canvas.DesignTokens,
+    armed_split_tween_ids: []const canvas.ObjectId,
+    pressed_split_id: canvas.ObjectId,
 ) anyerror!canvas.WidgetLayoutTree {
     if (next.nodes.len > node_buffer.len) return error.WidgetNodeLimitReached;
 
@@ -743,36 +752,64 @@ pub fn canvasWidgetLayoutTreeWithRuntimeReconcileState(
     );
 
     // Split fractions reconcile FIRST, as a staged copy of the laid-out
-    // tree: a restored runtime-owned fraction re-runs the split's child
-    // layout in place (same children, same node sequence — only frames
-    // move), so the per-node passes below see final geometry. Outer
+    // tree, so the per-node passes below see final geometry. Outer
     // splits restore before nested ones (ascending node order), so a
-    // nested split re-laid by its ancestor still restores its own
-    // fraction afterwards.
+    // nested split re-laid (or slid) by its ancestor still restores its
+    // own fraction afterwards. Two restore shapes:
+    //   - SETTLED runtime-owned fraction (a past drag, no tween in
+    //     flight): re-run the split's child layout in place — content
+    //     honestly wraps at the restored width;
+    //   - TWEEN in flight (armed already, or arming on this rebuild
+    //     because the source moved with a nonzero duration): keep the
+    //     source's child layout — it is laid at the tween's TARGET
+    //     fraction — and slide the pane boundary back geometrically.
+    //     Content never re-wraps mid-flight; the pane clip crops the
+    //     overflowing side and the tween reveals it one presented
+    //     frame at a time (the disclosure doctrine, horizontal).
     const staged_nodes = node_buffer[0..next.nodes.len];
     @memcpy(staged_nodes, next.nodes);
     for (staged_nodes, 0..) |node, index| {
         if (node.widget.kind != .split or node.widget.id == 0) continue;
-        const previous_runtime = canvasWidgetSourceScrollById(previous_runtime_offsets, node.widget.id) orelse continue;
+        const tween_armed = objectIdInList(armed_split_tween_ids, node.widget.id);
+        const previous_runtime = canvasWidgetSourceScrollById(previous_runtime_offsets, node.widget.id) orelse {
+            // A FRESH split (no retained fraction): a declared enter
+            // origin slides the first layout's boundary to the origin
+            // pose — children keep the declared value's (target) wrap —
+            // so the tween armed right after this reconcile eases it in
+            // instead of the mount popping to its value.
+            if (node.widget.resize_duration_ms != 0 and node.widget.resize_origin >= 0 and node.widget.children.len != 0) {
+                canvas.slideSplitChildren(node.frame, node.widget.resize_origin, index, staged_nodes);
+            }
+            continue;
+        };
         const previous_source = canvasWidgetSourceScrollById(previous_source_scroll_entries, node.widget.id) orelse continue;
         // Source-wins: the runtime-owned fraction survives rebuilds only
         // while the SOURCE fraction is unchanged; a source-side change
         // (the model echoing or driving the fraction) wins — UNLESS the
-        // split declares a layout tween (`resize_duration_ms` nonzero):
-        // then the moved source value is a TARGET, the rendered fraction
-        // stays where it is, and the runtime's tween lowering (armed
-        // right after this reconcile lands, in setCanvasWidgetLayout)
-        // eases it there one presented frame at a time. Reduced motion
-        // still snaps: the tween lowering's snap path applies the target
-        // through this same mutation family in the same rebuild.
+        // split declares a layout tween (`resize_duration_ms` nonzero)
+        // or one is already in flight: then the moved source value is a
+        // TARGET, the rendered fraction stays where it is, and the
+        // runtime's tween lowering (armed right after this reconcile
+        // lands, in setCanvasWidgetLayout) eases it there one presented
+        // frame at a time. Reduced motion still snaps: the tween
+        // lowering's snap path applies the target through this same
+        // mutation family in the same rebuild.
         const source_moved = node.widget.value != previous_source;
-        if (source_moved and node.widget.resize_duration_ms == 0) continue;
+        if (source_moved and node.widget.resize_duration_ms == 0 and !tween_armed) continue;
         if (node.widget.value == previous_runtime) continue;
         staged_nodes[index].widget.value = previous_runtime;
         // Retained trees clear children; a split without them keeps the
         // value restore only (frames follow on the next full layout).
         if (node.widget.children.len == 0) continue;
-        try canvas.relayoutSplitChildren(staged_nodes[index].widget, node.frame, index, node.depth, node_buffer, tokens);
+        // A pressed divider is a live drag: its echo rebuilds must keep
+        // re-wrapping at the dragged width (the pinned drag behavior),
+        // so the slide shape only applies to tween-owned motion.
+        const dragging = pressed_split_id != 0 and node.widget.id == pressed_split_id;
+        if (!dragging and (tween_armed or (source_moved and node.widget.resize_duration_ms != 0))) {
+            canvas.slideSplitChildren(node.frame, previous_runtime, index, staged_nodes);
+        } else {
+            try canvas.relayoutSplitChildren(staged_nodes[index].widget, node.frame, index, node.depth, node_buffer, tokens);
+        }
     }
 
     // Scroll restore is staged too (after splits, so translated frames

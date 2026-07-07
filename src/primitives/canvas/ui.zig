@@ -580,6 +580,15 @@ pub fn Ui(comptime Msg: type) type {
             /// markup validator rejects easing without a duration as
             /// silently-inert data.
             resize_easing: canvas.Easing = .standard,
+            /// Enter-from fraction for a freshly MOUNTED split (markup
+            /// `resize-origin`): with a nonzero `resize_duration`, the
+            /// split's first layout slides its pane boundary to this
+            /// fraction (children keep the declared value's pose) and
+            /// the runtime eases it to the value from there — a pane
+            /// that mounts mid-reveal slides in instead of popping.
+            /// Negative (the default) declares no origin. Only
+            /// meaningful with a nonzero `resize_duration`.
+            resize_origin: f32 = -1,
             style: canvas.WidgetStyle = .{},
             /// Named token references resolved against design tokens in
             /// `finalizeWithTokens`; explicit `style` values win.
@@ -2491,6 +2500,7 @@ pub fn Ui(comptime Msg: type) type {
                 .overscroll = options.overscroll,
                 .resize_duration_ms = options.resize_duration,
                 .resize_easing = options.resize_easing,
+                .resize_origin = options.resize_origin,
             };
             applyKindDefaultLayout(kind, options, &widget.layout);
             return widget;

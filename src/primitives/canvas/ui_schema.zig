@@ -433,6 +433,13 @@ pub const attrs = [_]AttrInfo{
     // visual, like every span channel).
     .{ .code = 76, .name = "scale", .class = .number, .group = .composite },
     .{ .code = 77, .name = "underline", .class = .flag, .group = .composite },
+    // Split enter-from fraction (split only, needs resize-duration; the
+    // validator scopes both, mirroring resize-easing): a freshly
+    // MOUNTED split slides its pane boundary in from this fraction
+    // toward its declared value instead of popping there. Negative
+    // (absent) declares no origin, so every existing document keeps
+    // its mount-never-animates behavior.
+    .{ .code = 78, .name = "resize-origin", .class = .number, .group = .option, .field = "resize_origin" },
 };
 
 // ----------------------------------------------------------------- events

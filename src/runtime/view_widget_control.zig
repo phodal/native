@@ -99,6 +99,12 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
             const available = content.width - divider_extent;
             if (!(available > 0)) return null;
             const fraction = (point.x - content.x - divider_extent * 0.5) / available;
+            // A live drag owns the fraction: an armed layout tween on
+            // this split retires here, so the pointer's per-step echoes
+            // (live re-wrap) never fight the tween's slide — the
+            // source-declared tween re-arms on the first rebuild after
+            // release.
+            self.removeCanvasWidgetLayoutTween(split_node.widget.id);
             return self.applyCanvasWidgetSplitFraction(split_index, fraction);
         }
 
@@ -107,6 +113,22 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
         /// content translates with its pane; internal reflow waits for
         /// the model's rebuild), and note the resize event.
         pub fn applyCanvasWidgetSplitFraction(self: *RuntimeView, split_index: usize, requested_fraction: f32) anyerror!?geometry.RectF {
+            return self.applyCanvasWidgetSplitFractionMoved(split_index, requested_fraction, true);
+        }
+
+        /// The tween-step variant of the fraction apply: the identical
+        /// geometric move WITHOUT the resize note. A drag's per-step
+        /// echo is the live re-wrap channel (the app rebuilds at every
+        /// pointer width); a tween's steps slide already-laid content
+        /// under the pane clip, so a per-step echo would resurrect the
+        /// per-frame rebuild the tween exists to retire — the tween
+        /// notes once at arm (the destination) and once at settle (the
+        /// applied fraction), never per step.
+        pub fn applyCanvasWidgetSplitFractionSlide(self: *RuntimeView, split_index: usize, requested_fraction: f32) anyerror!?geometry.RectF {
+            return self.applyCanvasWidgetSplitFractionMoved(split_index, requested_fraction, false);
+        }
+
+        pub fn applyCanvasWidgetSplitFractionMoved(self: *RuntimeView, split_index: usize, requested_fraction: f32, note_resize: bool) anyerror!?geometry.RectF {
             if (split_index >= self.widget_layout_node_count) return null;
             const split_node = self.widget_layout_nodes[split_index];
             if (split_node.widget.kind != .split or split_node.widget.state.disabled) return null;
@@ -157,7 +179,7 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
             setCanvasWidgetNodeWidth(&self.widget_layout_nodes[second_index], second_width);
             self.translateCanvasWidgetDescendantsX(second_index, dx);
 
-            self.noteCanvasWidgetResizeEvent(split_node.widget.id);
+            if (note_resize) self.noteCanvasWidgetResizeEvent(split_node.widget.id);
             try self.refreshCanvasWidgetSemantics();
             self.widget_revision += 1;
             return self.canvasWidgetDirtyBounds(split_index, split_node.frame);

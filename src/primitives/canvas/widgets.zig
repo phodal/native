@@ -820,6 +820,17 @@ pub const Widget = struct {
     /// `resize-easing=`). Only meaningful with a nonzero
     /// `resize_duration_ms`.
     resize_easing: Easing = .standard,
+    /// Enter-from fraction for a FRESHLY MOUNTED `.split` with a
+    /// nonzero `resize_duration_ms` (`resize_origin:` in the builder,
+    /// `resize-origin=` in markup): the first layout keeps the
+    /// children at the declared `value`'s pose but slides the pane
+    /// boundary to this fraction, and the runtime tween eases it to
+    /// the value from there — a pane that mounts mid-reveal (a sidebar
+    /// expanding out of a collapsed state it was unmounted in) slides
+    /// in instead of popping. Negative (the default) declares no
+    /// origin: mounts land at their value, exactly as before. Ignored
+    /// on splits that already have a retained fraction.
+    resize_origin: f32 = -1,
     /// Window-drag surface (`window-drag="true"` / `.window_drag`): a
     /// pointer press that lands here — or falls through plain text /
     /// icons / decorations onto it — moves the WINDOW instead of

@@ -693,6 +693,7 @@ pub const splitDividerExtent = @import("widget_layout.zig").splitDividerExtent;
 pub const splitFractionBounds = @import("widget_layout.zig").splitFractionBounds;
 pub const splitEffectiveFraction = @import("widget_layout.zig").splitEffectiveFraction;
 pub const relayoutSplitChildren = @import("widget_layout.zig").relayoutSplitChildren;
+pub const slideSplitChildren = @import("widget_layout.zig").slideSplitChildren;
 /// The layout audit (layout_audit.zig): a machine pass over a laid-out
 /// tree that reports clipped/overflowing text, overlapping flow siblings,
 /// content escaping its clip scope, and undersized pointer targets — plus

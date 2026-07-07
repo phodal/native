@@ -62,10 +62,13 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 // like split fractions do.
                 try self.advanceCanvasWidgetDisclosureTweenForFrame(index, frame_event.timestamp_ns);
                 try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
-                // Tween steps note split-resize events with no input in
-                // flight; drain them here so the controlled-split echo
-                // (`on_resize` -> model -> `value`) rides the SAME frame
-                // the step painted, exactly as a divider drag's does.
+                // A settling tween notes its ONE split-resize event with
+                // no input in flight; drain it here so the controlled
+                // echo (`on_resize` -> model -> `value`) and any
+                // structural swap ride the SAME frame the settle
+                // painted. Mid-flight steps note nothing: they slide
+                // content the reconcile already laid out at the target
+                // fraction, so there is no per-step echo to deliver.
                 try dispatchPendingCanvasWidgetResizeEvents(self, app, index);
                 // Observable snapshots (automation, bridge state) only
                 // republish when the runtime is invalidated, and a frame
@@ -374,7 +377,11 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
         /// Drain the view's pending split-resize set into
         /// `canvas_widget_resize` app events. Each entry reads the
         /// node's CURRENT fraction, so several coalesced drag steps
-        /// deliver the final value (the scroll-drain contract).
+        /// deliver the final value (the scroll-drain contract) — except
+        /// while a layout tween is armed on the split: then the event
+        /// carries the tween's DESTINATION, so the arm echo tells the
+        /// controlled model where the panes are heading and its one
+        /// rebuild lays content out at the target the slide reveals.
         pub fn dispatchPendingCanvasWidgetResizeEvents(self: *Runtime, app: runtime_api.App(Runtime), view_index: usize) anyerror!void {
             if (view_index >= self.view_count) return;
             if (self.views[view_index].kind != .gpu_surface) return;
@@ -389,11 +396,12 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 const node_index = self.views[view_index].canvasWidgetNodeIndexById(id) orelse continue;
                 const widget = self.views[view_index].widget_layout_nodes[node_index].widget;
                 if (widget.kind != .split) continue;
+                const fraction = if (self.views[view_index].findCanvasWidgetLayoutTween(id)) |tween| tween.spec.to else widget.value;
                 try self.dispatchEvent(app, .{ .canvas_widget_resize = .{
                     .window_id = self.views[view_index].window_id,
                     .view_label = self.views[view_index].label,
                     .id = id,
-                    .fraction = widget.value,
+                    .fraction = fraction,
                 } });
             }
         }

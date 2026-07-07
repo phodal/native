@@ -390,6 +390,37 @@ test "play, pause, seek, and volume drive the audio effect channel" {
     try live.widgetAction(main.canvas_label, volume_id, "increment");
     try testing.expect(app_state.model.volume_fraction > volume_before);
     try testing.expectEqual(app_state.model.volume_fraction, app_state.effects.pendingAudio().?.volume);
+
+    // A rail click on the seek fader is the pointer twin of the
+    // increment above: the runtime jumps the thumb to the pressed
+    // point, `on_change` dispatches `.seeked`, and the player seeks to
+    // the proportional position — the standard scrubber jump, through
+    // the REAL pointer pipeline.
+    const seek_rail = blk: {
+        const layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+        for (layout.nodes) |node| {
+            if (node.widget.kind != .slider) continue;
+            if (std.mem.eql(u8, node.widget.semantics.label, "Seek")) break :blk node.frame.normalized();
+        }
+        return error.WidgetNotFound;
+    };
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = main.canvas_label,
+        .kind = .pointer_down,
+        .x = seek_rail.x + seek_rail.width * 0.75,
+        .y = seek_rail.y + seek_rail.height / 2,
+    } });
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = main.canvas_label,
+        .kind = .pointer_up,
+        .x = seek_rail.x + seek_rail.width * 0.75,
+        .y = seek_rail.y + seek_rail.height / 2,
+    } });
+    try testing.expectApproxEqAbs(@as(f32, 0.75), app_state.model.seek_fraction, 0.001);
+    try testing.expectEqual(@as(u64, app_state.model.elapsed_ms), app_state.effects.audioSnapshot().position_ms);
+    try testing.expectApproxEqAbs(0.75 * duration, @as(f32, @floatFromInt(app_state.model.elapsed_ms)), 1);
 }
 
 test "track end auto-advances; the play-next queue wins over album order" {

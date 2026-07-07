@@ -333,6 +333,10 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             if (runtimeFindViewIndex(self, input_event.window_id, input_event.label)) |index| {
                 try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
                 try dispatchPendingCanvasWidgetResizeEvents(self, app, index);
+                // Slider values a pointer gesture changed (rail click,
+                // scrub drag) follow the same drain discipline, so the
+                // app's `on_change` hears the applied value this input.
+                try dispatchPendingCanvasWidgetChangeEvents(self, app, index);
             }
             try self.dispatchEvent(app, .{ .gpu_surface_input = input_event });
             if (canvas_widget_refresh_batch_active) {
@@ -402,6 +406,36 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                     .view_label = self.views[view_index].label,
                     .id = id,
                     .fraction = fraction,
+                } });
+            }
+        }
+
+        /// Drain the view's pending slider-change set into
+        /// `canvas_widget_change` app events. Each entry reads the
+        /// node's CURRENT value, so several coalesced drag steps
+        /// deliver the final value (the scroll-drain contract). Only
+        /// pointer gestures note entries — sliders never change on
+        /// frame ticks, so unlike splits (whose tweens note resize
+        /// events per frame step) this drain has no frame-path caller.
+        pub fn dispatchPendingCanvasWidgetChangeEvents(self: *Runtime, app: runtime_api.App(Runtime), view_index: usize) anyerror!void {
+            if (view_index >= self.view_count) return;
+            if (self.views[view_index].kind != .gpu_surface) return;
+            if (self.views[view_index].widget_change_event_count == 0) return;
+
+            // Copy-then-reset: app dispatch can rebuild the view, which
+            // may note fresh entries for the next drain.
+            const pending_ids = self.views[view_index].widget_change_event_ids;
+            const pending_count = self.views[view_index].widget_change_event_count;
+            self.views[view_index].widget_change_event_count = 0;
+            for (pending_ids[0..pending_count]) |id| {
+                const node_index = self.views[view_index].canvasWidgetNodeIndexById(id) orelse continue;
+                const widget = self.views[view_index].widget_layout_nodes[node_index].widget;
+                if (widget.kind != .slider) continue;
+                try self.dispatchEvent(app, .{ .canvas_widget_change = .{
+                    .window_id = self.views[view_index].window_id,
+                    .view_label = self.views[view_index].label,
+                    .id = id,
+                    .value = widget.value,
                 } });
             }
         }

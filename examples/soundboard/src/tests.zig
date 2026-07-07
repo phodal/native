@@ -229,6 +229,85 @@ test "play, pause, and seek drive the real audio effect" {
     try testing.expectEqual(@as(u32, @intCast(after_seek)), app_state.model.elapsed_ms);
 }
 
+test "a rail click on the seek bar jumps playback; a drag keeps scrubbing" {
+    // Regression: the engine's slider pointer path applied the value as
+    // a visual echo but never dispatched `on-change`, so clicking the
+    // track-progress rail moved the thumb on screen while `.seeked`
+    // never fired — no seekAudio, and the next position tick snapped
+    // the bar back. This drives the REAL pointer pipeline: platform
+    // pointer input on the rail -> the runtime jumps the thumb to the
+    // pressed point -> `on-change` dispatches `.seeked` -> the sync
+    // hook mirrors the fraction -> update forwards the target to the
+    // player.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+    const fx = &app_state.effects;
+    const track = model_mod.trackById(1);
+
+    try live.dispatch(.{ .play_track = track.id });
+    const duration_ms: u64 = track.duration_ms;
+    try fx.feedAudioEvent(.loaded, 0, duration_ms, true);
+    try live.wake();
+
+    // The seek slider's laid-out rail, from the runtime's live layout.
+    const rail = blk: {
+        const layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+        for (layout.nodes) |node| {
+            if (node.widget.kind == .slider) break :blk node.frame.normalized();
+        }
+        return error.TestUnexpectedResult;
+    };
+    const rail_y = rail.y + rail.height / 2;
+
+    // Click 4/5 along the rail: playback jumps there in one press.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = main.canvas_label,
+        .kind = .pointer_down,
+        .x = rail.x + rail.width * 0.8,
+        .y = rail_y,
+    } });
+    try testing.expectApproxEqAbs(@as(f32, 0.8), app_state.model.seek_fraction, 0.001);
+    const duration: f32 = @floatFromInt(app_state.model.now_duration_ms);
+    try testing.expectApproxEqAbs(app_state.model.seek_fraction * duration, @as(f32, @floatFromInt(app_state.model.elapsed_ms)), 1);
+    try testing.expectEqual(@as(u64, app_state.model.elapsed_ms), fx.audioSnapshot().position_ms);
+
+    // Keep the press and drag back to 2/5: the scrub follows live, the
+    // player seeking with every step.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = main.canvas_label,
+        .kind = .pointer_drag,
+        .x = rail.x + rail.width * 0.4,
+        .y = rail_y,
+    } });
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = main.canvas_label,
+        .kind = .pointer_up,
+        .x = rail.x + rail.width * 0.4,
+        .y = rail_y,
+    } });
+    try testing.expectApproxEqAbs(@as(f32, 0.4), app_state.model.seek_fraction, 0.001);
+    try testing.expectEqual(@as(u64, app_state.model.elapsed_ms), fx.audioSnapshot().position_ms);
+
+    // The next position tick reports from the seeked position, and the
+    // RENDERED slider value (the played/remaining split) agrees with it
+    // — seeking never desyncs the visual from the clock.
+    const after_seek = fx.audioSnapshot().position_ms + 500;
+    try fx.feedAudioEvent(.position, after_seek, duration_ms, true);
+    try live.wake();
+    try testing.expectEqual(@as(u32, @intCast(after_seek)), app_state.model.elapsed_ms);
+    const layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    var slider_value: ?f32 = null;
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .slider) slider_value = node.widget.value;
+    }
+    const expected_fraction = @as(f32, @floatFromInt(after_seek)) / duration;
+    try testing.expectApproxEqAbs(expected_fraction, slider_value.?, 0.0001);
+}
+
 test "the seek bar's rendered value advances with position events" {
     // Regression: the slider reconcile used to retain its runtime value
     // unconditionally, so the model-driven `value="{progressFraction}"`

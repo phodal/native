@@ -385,6 +385,17 @@ pub const RuntimeView = struct {
     /// `canvas_limits.max_canvas_widget_resize_events_per_view`).
     widget_resize_event_ids: [canvas_limits.max_canvas_widget_resize_events_per_view]canvas.ObjectId = undefined,
     widget_resize_event_count: usize = 0,
+    /// Sliders whose value changed from a POINTER gesture since the last
+    /// app dispatch (rail click, thumb drag): drained into
+    /// `canvas_widget_change` events at the gpu-surface dispatch points.
+    /// Pointer-only deliberately — keyboard steps and assistive
+    /// increment/decrement already reach the app through the keyboard
+    /// dispatch path (`msgForKeyboard`), so noting them here would
+    /// double-deliver one gesture. Deduped by id; the dispatched event
+    /// reads the CURRENT value, so coalescing drag steps per node is
+    /// lossless (see `canvas_limits.max_canvas_widget_change_events_per_view`).
+    widget_change_event_ids: [canvas_limits.max_canvas_widget_change_events_per_view]canvas.ObjectId = undefined,
+    widget_change_event_count: usize = 0,
     widget_source_text_entries: [max_canvas_widget_source_text_entries_per_view]CanvasWidgetSourceTextEntry = undefined,
     widget_source_text_count: usize = 0,
     widget_source_scroll_entries: [canvas_limits.max_canvas_widget_nodes_per_view]CanvasWidgetSourceScrollEntry = undefined,
@@ -502,6 +513,7 @@ pub const RuntimeView = struct {
     pub const applyCanvasWidgetSplitFractionSlide = CanvasWidgetControlMethods.applyCanvasWidgetSplitFractionSlide;
     pub const applyCanvasWidgetSplitFractionMoved = CanvasWidgetControlMethods.applyCanvasWidgetSplitFractionMoved;
     pub const noteCanvasWidgetResizeEvent = CanvasWidgetControlMethods.noteCanvasWidgetResizeEvent;
+    pub const noteCanvasWidgetChangeEvent = CanvasWidgetControlMethods.noteCanvasWidgetChangeEvent;
     pub const translateCanvasWidgetDescendantsX = CanvasWidgetControlMethods.translateCanvasWidgetDescendantsX;
     pub const toggleCanvasWidgetTreeItemExpanded = CanvasWidgetControlMethods.toggleCanvasWidgetTreeItemExpanded;
     pub const applyCanvasWidgetControlKeyboard = CanvasWidgetControlMethods.applyCanvasWidgetControlKeyboard;

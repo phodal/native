@@ -199,6 +199,20 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
             self.widget_resize_event_count += 1;
         }
 
+        /// Note a slider whose value changed from a pointer gesture
+        /// since the last app dispatch (the change twin of
+        /// `noteCanvasWidgetResizeEvent`): deduped by id, coalesced
+        /// losslessly — the dispatched event reads the CURRENT value.
+        pub fn noteCanvasWidgetChangeEvent(self: *RuntimeView, id: canvas.ObjectId) void {
+            if (id == 0) return;
+            for (self.widget_change_event_ids[0..self.widget_change_event_count]) |pending| {
+                if (pending == id) return;
+            }
+            if (self.widget_change_event_count >= self.widget_change_event_ids.len) return;
+            self.widget_change_event_ids[self.widget_change_event_count] = id;
+            self.widget_change_event_count += 1;
+        }
+
         /// Horizontal twin of `translateCanvasWidgetScrollDescendants`:
         /// shift a pane subtree sideways when its pane edge moves.
         pub fn translateCanvasWidgetDescendantsX(self: *RuntimeView, node_index: usize, dx: f32) void {
@@ -286,13 +300,26 @@ pub fn RuntimeViewCanvasWidgetControl(comptime RuntimeView: type) type {
             return self.canvasWidgetDirtyBounds(index, widget.frame);
         }
 
+        /// A pointer gesture on a slider — a click anywhere on the rail
+        /// (the thumb jumps to the pressed point, the standard native
+        /// scrubber behavior) or a drag continuing from one — maps the
+        /// pointer's x to the proportional value and applies it as the
+        /// optimistic echo. The change is also NOTED for the app: the
+        /// pointer path has no dispatch of its own (releases resolve
+        /// press/toggle/select intents, none of which a slider claims,
+        /// and keyboard steps dispatch through the keyboard path), so
+        /// without the note a rail click would move the thumb visually
+        /// while the model never heard `on_change` — a seek bar that
+        /// snapped back on the next position tick.
         pub fn applyCanvasWidgetSliderValue(self: *RuntimeView, id: canvas.ObjectId, point: geometry.PointF) anyerror!?geometry.RectF {
             const index = self.canvasWidgetNodeIndexById(id) orelse return null;
             const widget = self.widget_layout_nodes[index].widget;
             if (widget.kind != .slider or widget.state.disabled or widget.frame.width <= 0) return null;
 
             const next_value = std.math.clamp((point.x - widget.frame.x) / widget.frame.width, 0, 1);
-            return self.setCanvasWidgetValue(index, next_value);
+            const dirty = try self.setCanvasWidgetValue(index, next_value) orelse return null;
+            self.noteCanvasWidgetChangeEvent(id);
+            return dirty;
         }
 
         pub fn toggleCanvasWidgetBooleanControl(self: *RuntimeView, id: canvas.ObjectId) anyerror!?geometry.RectF {

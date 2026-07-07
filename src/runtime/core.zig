@@ -149,6 +149,7 @@ pub const CanvasWidgetContextMenuRequestEvent = runtime_api.CanvasWidgetContextM
 pub const CanvasWidgetDismissEvent = runtime_api.CanvasWidgetDismissEvent;
 pub const CanvasWidgetContextPressEvent = runtime_api.CanvasWidgetContextPressEvent;
 pub const CanvasWidgetResizeEvent = runtime_api.CanvasWidgetResizeEvent;
+pub const CanvasWidgetChangeEvent = runtime_api.CanvasWidgetChangeEvent;
 pub const WindowClosedEvent = runtime_api.WindowClosedEvent;
 pub const AutomationProvenanceEvent = runtime_api.AutomationProvenanceEvent;
 pub const InvalidationReason = runtime_api.InvalidationReason;

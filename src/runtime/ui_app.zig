@@ -2422,6 +2422,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .canvas_widget_dismiss => |dismiss_event| try self.handleDismiss(runtime, dismiss_event),
                 .canvas_widget_context_press => |press_event| try self.handleContextPress(runtime, press_event),
                 .canvas_widget_resize => |resize_event| try self.handleWidgetResize(runtime, resize_event),
+                .canvas_widget_change => |change_event| try self.handleWidgetChange(runtime, change_event),
                 .window_closed => |closed| try self.handleWindowClosed(runtime, closed),
                 .automation_provenance => |query| try self.handleProvenanceQuery(runtime, query),
                 else => {},
@@ -2900,6 +2901,20 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             const tree = self.treeForViewLabel(resize_event.view_label) orelse return;
             if (tree.msgForResize(resize_event.id, resize_event.fraction)) |msg| {
                 try self.dispatch(runtime, resize_event.window_id, msg);
+            }
+        }
+
+        /// Slider value changes from pointer gestures (rail click, scrub
+        /// drag) route through the slider's `on_value`/`on_change`
+        /// handler. The payload is the value the runtime already applied
+        /// (the optimistic echo), and `dispatch` runs the `sync` hook
+        /// before update — so a model that mirrors slider state through
+        /// `sync` reads the applied value first and its update arm acts
+        /// on it, the same contract keyboard slider steps follow.
+        fn handleWidgetChange(self: *Self, runtime: *Runtime, change_event: core.CanvasWidgetChangeEvent) anyerror!void {
+            const tree = self.treeForViewLabel(change_event.view_label) orelse return;
+            if (tree.msgForChange(change_event.id, change_event.value)) |msg| {
+                try self.dispatch(runtime, change_event.window_id, msg);
             }
         }
 

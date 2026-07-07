@@ -459,6 +459,7 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                 .canvas_widget_dismiss => {},
                 .canvas_widget_context_press => {},
                 .canvas_widget_resize => {},
+                .canvas_widget_change => {},
                 .window_closed => {
                     self.invalidateFor(.state, null);
                 },

@@ -162,6 +162,23 @@ pub const CanvasWidgetResizeEvent = struct {
     fraction: f32,
 };
 
+/// A slider's value changed from a pointer gesture — a click on the rail
+/// (the thumb jumps to the pressed point) or a scrubbing drag. The
+/// runtime already applied the value (the optimistic echo; the source
+/// tree is truth on the next rebuild) and delivers this event so a TEA
+/// model can OWN it: `UiApp` maps it through the tree's handler table to
+/// the slider's `on_value`/`on_change` Msg. Keyboard steps and assistive
+/// increment/decrement do not emit this event — they already dispatch
+/// through the keyboard path (`msgForKeyboard`).
+pub const CanvasWidgetChangeEvent = struct {
+    window_id: platform.WindowId = 1,
+    view_label: []const u8,
+    /// The slider's structural widget id.
+    id: canvas.ObjectId,
+    /// The applied value (already clamped to 0...1).
+    value: f32,
+};
+
 /// A secondary-button press (right/ctrl-click, touch long-press) whose
 /// route offered NO context menu — no app-declared items, no editable or
 /// selected-text default. Delivered with the resolved press target so
@@ -266,6 +283,7 @@ pub const Event = union(enum) {
     canvas_widget_dismiss: CanvasWidgetDismissEvent,
     canvas_widget_context_press: CanvasWidgetContextPressEvent,
     canvas_widget_resize: CanvasWidgetResizeEvent,
+    canvas_widget_change: CanvasWidgetChangeEvent,
     window_closed: WindowClosedEvent,
     automation_provenance: AutomationProvenanceEvent,
 
@@ -292,6 +310,7 @@ pub const Event = union(enum) {
             .canvas_widget_dismiss => "canvas_widget_dismiss",
             .canvas_widget_context_press => "canvas_widget_context_press",
             .canvas_widget_resize => "canvas_widget_resize",
+            .canvas_widget_change => "canvas_widget_change",
             .window_closed => "window_closed",
             .automation_provenance => "automation_provenance",
         };

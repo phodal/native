@@ -865,6 +865,17 @@ pub fn Ui(comptime Msg: type) type {
                 return null;
             }
 
+            /// Typed dispatch for a slider's applied value change (a
+            /// pointer rail click or scrub drag): the widget's
+            /// `on_value` constructor when bound, else its plain
+            /// `on_change` Msg — the same resolution order the keyboard
+            /// path's set_value intent uses, so both input families
+            /// reach the same handler.
+            pub fn msgForChange(self: Tree, id: ObjectId, value: f32) ?Msg {
+                if (self.msgForValue(id, value)) |msg| return msg;
+                return self.msgFor(id, .change);
+            }
+
             /// Typed dispatch for split-fraction changes: builds the
             /// message through the split's `on_resize` constructor.
             pub fn msgForResize(self: Tree, id: ObjectId, fraction: f32) ?Msg {

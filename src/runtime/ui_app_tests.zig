@@ -648,6 +648,9 @@ const ThemedModel = struct {
     high_contrast: bool = false,
     frame_reports: u32 = 0,
     slider_value: f32 = 0.5,
+    /// How many times `on_change` reached update — the pointer test
+    /// counts one dispatch per gesture step (down, each drag move).
+    slider_changes: u32 = 0,
 };
 
 const ThemedMsg = union(enum) {
@@ -672,7 +675,10 @@ fn themedUpdate(model: *ThemedModel, msg: ThemedMsg) void {
             model.high_contrast = appearance.high_contrast;
         },
         .frame_seen => model.frame_reports += 1,
-        .slider_changed => {},
+        // The value itself arrives through the `sync` hook before this
+        // Msg is applied (the runtime-owned slider contract); update
+        // only counts the dispatch.
+        .slider_changed => model.slider_changes += 1,
     }
 }
 
@@ -882,6 +888,100 @@ test "ui app hooks drive chrome, dynamic tokens, animations, and frame reports" 
         .nonblank = true,
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.model.frame_reports);
+}
+
+test "slider pointer gestures dispatch on_change: rail click commits, drag scrubs" {
+    // Regression: the pointer path applied slider values as the visual
+    // echo but never dispatched the app's `on_change` — a rail click
+    // moved the thumb on screen while the model heard nothing, so a
+    // model-driven slider (a transport scrubber) snapped back on its
+    // next source rebuild. Pointer changes now drain into
+    // `canvas_widget_change` events; this pins the full pipeline:
+    // platform pointer input -> runtime echo -> change drain -> the
+    // slider's Msg -> `sync` reading the applied value into the model.
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(ThemedApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = ThemedApp.init(std.heap.page_allocator, .{}, themedOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    // The slider's laid-out rail, straight from the runtime's layout.
+    const rail = blk: {
+        const layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+        for (layout.nodes) |node| {
+            if (node.widget.kind == .slider) break :blk node.frame.normalized();
+        }
+        return error.TestUnexpectedResult;
+    };
+    const rail_y = rail.y + rail.height / 2;
+
+    // Rail click: pressing at 3/4 along the rail (nowhere near the
+    // thumb, which sits at the initial 0.5) commits the proportional
+    // value in ONE dispatch — the standard native scrubber jump.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_down,
+        .x = rail.x + rail.width * 0.75,
+        .y = rail_y,
+    } });
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.slider_changes);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), app_state.model.slider_value, 0.01);
+
+    // Click-then-drag scrubs continuously: the same gesture keeps
+    // dispatching as the pointer moves, and the model follows live.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_drag,
+        .x = rail.x + rail.width * 0.25,
+        .y = rail_y,
+    } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.slider_changes);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), app_state.model.slider_value, 0.01);
+
+    // Releasing where the drag ended applies no new value: one gesture
+    // never double-commits its final position.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_up,
+        .x = rail.x + rail.width * 0.25,
+        .y = rail_y,
+    } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.slider_changes);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), app_state.model.slider_value, 0.01);
+
+    // Keyboard steps are UNCHANGED: they dispatch through the keyboard
+    // path exactly once — the pointer-change drain must not add a
+    // second delivery for the same step.
+    const slider_id = blk: {
+        const layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+        for (layout.nodes) |node| {
+            if (node.widget.kind == .slider) break :blk node.widget.id;
+        }
+        return error.TestUnexpectedResult;
+    };
+    var command_buffer: [96]u8 = undefined;
+    const increment = try std.fmt.bufPrint(&command_buffer, "widget-action {s} {d} increment", .{ canvas_label, slider_id });
+    try harness.runtime.dispatchAutomationCommand(app, increment);
+    try std.testing.expectEqual(@as(u32, 3), app_state.model.slider_changes);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.30), app_state.model.slider_value, 0.01);
 }
 
 test "unthemed apps follow the system appearance live; explicit tokens opt out" {

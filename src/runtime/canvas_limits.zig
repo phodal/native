@@ -207,6 +207,15 @@ pub const max_canvas_widget_scroll_events_per_view: usize = 8;
 // past the bound are dropped (the fraction still applies and repaints —
 // only the observation Msg is skipped).
 pub const max_canvas_widget_resize_events_per_view: usize = 4;
+// Sliders whose value changed from a pointer gesture since the last app
+// dispatch (rail click, thumb drag): same shape as the scroll- and
+// resize-event sets above — entries are slider node ids, deduped, and
+// the dispatched event reads the CURRENT value, so coalescing several
+// drag steps into one pending entry is lossless. A pointer scrubs
+// exactly one slider at a time, so 4 covers every realistic view; ids
+// past the bound are dropped (the value still applies and repaints —
+// only the observation Msg is skipped).
+pub const max_canvas_widget_change_events_per_view: usize = 4;
 
 // Anchored floating surfaces (widgets with `layout.anchor` set: anchored
 // dropdown menus, popovers) mounted at once per view. Not a memory bound —

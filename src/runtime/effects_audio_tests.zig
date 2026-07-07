@@ -34,6 +34,7 @@ const AudioModel = struct {
     last_position_ms: u64 = 0,
     last_duration_ms: u64 = 0,
     last_playing: bool = false,
+    last_buffering: bool = false,
     completed_count: usize = 0,
 
     fn record(model: *AudioModel, event: effects_mod.EffectAudio) void {
@@ -43,12 +44,15 @@ const AudioModel = struct {
         model.last_position_ms = event.position_ms;
         model.last_duration_ms = event.duration_ms;
         model.last_playing = event.playing;
+        model.last_buffering = event.buffering;
         if (event.kind == .completed) model.completed_count += 1;
     }
 };
 
 const AudioMsg = union(enum) {
     play,
+    play_url,
+    play_url_only,
     play_empty_path,
     pause,
     unpause,
@@ -63,12 +67,33 @@ const AudioEffects = AudioApp.Effects;
 
 const track_key: u64 = 41;
 const track_path = "assets/music/exit-signs/cedar-ave.mp3";
+const track_url = "https://music.example.test/pack/music/exit-signs/cedar-ave.mp3";
+const track_cache_path = "/tmp/fake-caches/audio/cedar-ave-cache.mp3";
+const track_bytes: u64 = 2_154_887;
 
 fn audioUpdate(model: *AudioModel, msg: AudioMsg, fx: *AudioEffects) void {
     switch (msg) {
         .play => fx.playAudio(.{
             .key = track_key,
             .path = track_path,
+            .on_event = AudioEffects.audioMsg(.audio_event),
+        }),
+        // The full cascade shape: local path first, url fallback with a
+        // cache path and the manifest's byte size as the integrity gate.
+        .play_url => fx.playAudio(.{
+            .key = track_key,
+            .path = track_path,
+            .url = track_url,
+            .cache_path = track_cache_path,
+            .expected_bytes = track_bytes,
+            .on_event = AudioEffects.audioMsg(.audio_event),
+        }),
+        // URL-only: no local probe at all.
+        .play_url_only => fx.playAudio(.{
+            .key = track_key,
+            .url = track_url,
+            .cache_path = track_cache_path,
+            .expected_bytes = track_bytes,
             .on_event = AudioEffects.audioMsg(.audio_event),
         }),
         .play_empty_path => fx.playAudio(.{
@@ -99,18 +124,27 @@ const Harness = struct {
     app_state: *AudioApp,
     app: core.App,
 
+    const Config = struct {
+        /// false models a host without an audio player (GTK/Win32
+        /// today): the services are nulled BEFORE the platform value is
+        /// captured, the same shape a real player-less host wires.
+        audio_playback: bool = true,
+        /// false models a host with a local player but no streaming
+        /// path: `audioLoadUrl` is absent and URL playback degrades to
+        /// one loud failed Msg.
+        audio_streaming: bool = true,
+    };
+
     fn create() !Harness {
-        return createConfigured(true);
+        return createConfigured(.{});
     }
 
-    /// `audio_playback = false` models a host without an audio player
-    /// (GTK/Win32 today): the services are nulled BEFORE the platform
-    /// value is captured, the same shape a real player-less host wires.
-    fn createConfigured(audio_playback: bool) !Harness {
+    fn createConfigured(config: Config) !Harness {
         const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
         errdefer harness.destroy(std.testing.allocator);
         harness.null_platform.gpu_surfaces = true;
-        harness.null_platform.audio_playback = audio_playback;
+        harness.null_platform.audio_playback = config.audio_playback;
+        harness.null_platform.audio_streaming = config.audio_streaming;
         // The harness snapshots the services at create; re-capture so
         // the audio toggle above nulls the service fns the runtime
         // hands the effects channel — the same wiring a real
@@ -302,7 +336,7 @@ test "a platform without audio playback degrades to one failed event" {
     // Model GTK/Win32 today: the services are absent and the feature
     // reports false, so playback fails loudly through the Msg loop
     // instead of crashing or silently no-opping.
-    var h = try Harness.createConfigured(false);
+    var h = try Harness.createConfigured(.{ .audio_playback = false });
     defer h.destroy();
 
     try h.app_state.dispatch(&h.harness.runtime, 1, .play);
@@ -311,6 +345,143 @@ test "a platform without audio playback degrades to one failed event" {
     try std.testing.expectEqual(effects_mod.EffectAudioEventKind.failed, h.app_state.model.last_kind.?);
     try std.testing.expectEqual(track_key, h.app_state.model.last_key);
     try std.testing.expect(h.harness.runtime.automationSnapshot("Audio").audio == null);
+}
+
+test "a missing local file falls through to the url: stream now, cache next time" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const np = &h.harness.null_platform;
+    const fx = &h.app_state.effects;
+    // Model the assets-absent machine: every local load answers
+    // AudioSourceNotFound, exactly what sends the cascade to the URL.
+    np.audio_local_files = false;
+    try np.setAudioDuration("cedar-ave.mp3", 89_160);
+
+    try h.app_state.dispatch(&h.harness.runtime, 1, .play_url);
+    // The local path was honestly tried (and missing) before the URL
+    // resolved — resolution order is pinned, not assumed.
+    try std.testing.expectEqual(@as(usize, 1), np.audio_load_count);
+    try std.testing.expectEqual(@as(usize, 1), np.audio_load_url_count);
+    try std.testing.expectEqualStrings(track_url, np.audio.path());
+    try std.testing.expectEqual(effects_mod.EffectAudioSource.stream, fx.audioSnapshot().source);
+    // A fresh stream has no bytes yet: buffering starts true
+    // optimistically, and the loaded acknowledgment clears it.
+    try std.testing.expect(fx.audioSnapshot().buffering);
+    try h.harness.runtime.dispatchPlatformEvent(h.app, np.takeAudioLoaded().?);
+    try std.testing.expectEqual(effects_mod.EffectAudioEventKind.loaded, h.app_state.model.last_kind.?);
+    try std.testing.expect(!fx.audioSnapshot().buffering);
+
+    // A mid-stream stall rides a position tick with buffering=true; the
+    // Msg payload and the snapshot both report it, and the next healthy
+    // tick clears it.
+    try h.harness.runtime.dispatchPlatformEvent(h.app, np.stallAudio().?);
+    try std.testing.expect(h.app_state.model.last_buffering);
+    try std.testing.expect(fx.audioSnapshot().buffering);
+    try h.harness.runtime.dispatchPlatformEvent(h.app, np.advanceAudio(500).?);
+    try std.testing.expect(!h.app_state.model.last_buffering);
+    try std.testing.expect(!fx.audioSnapshot().buffering);
+
+    // Completion installs the cache entry (the fake analog of the
+    // host's verify-then-rename): the SECOND play of the same URL
+    // resolves from cache — local playback, no buffering, no stream.
+    try h.harness.runtime.dispatchPlatformEvent(h.app, np.advanceAudio(89_160).?);
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.completed_count);
+    try h.app_state.dispatch(&h.harness.runtime, 1, .play_url);
+    try std.testing.expectEqual(@as(usize, 2), np.audio_load_url_count);
+    try std.testing.expectEqual(effects_mod.EffectAudioSource.cache, fx.audioSnapshot().source);
+    try std.testing.expect(!fx.audioSnapshot().buffering);
+}
+
+test "url-only playback skips the local probe entirely" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const np = &h.harness.null_platform;
+    const fx = &h.app_state.effects;
+
+    try h.app_state.dispatch(&h.harness.runtime, 1, .play_url_only);
+    try std.testing.expectEqual(@as(usize, 0), np.audio_load_count);
+    try std.testing.expectEqual(@as(usize, 1), np.audio_load_url_count);
+    try std.testing.expectEqual(effects_mod.EffectAudioSource.stream, fx.audioSnapshot().source);
+}
+
+test "a local decode failure never retries the url: masking the real problem helps nobody" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const np = &h.harness.null_platform;
+    // An oversized path is the one synchronous local failure the fake
+    // can produce that is NOT AudioSourceNotFound... a present file
+    // that fails decode is terminal. The fake models source-missing
+    // only, so pin the complement: with local files PRESENT the url is
+    // never consulted.
+    try h.app_state.dispatch(&h.harness.runtime, 1, .play_url);
+    try std.testing.expectEqual(@as(usize, 1), np.audio_load_count);
+    try std.testing.expectEqual(@as(usize, 0), np.audio_load_url_count);
+    try std.testing.expectEqual(effects_mod.EffectAudioSource.local, h.app_state.effects.audioSnapshot().source);
+}
+
+test "a host with a player but no streaming path degrades url playback to one failed msg" {
+    var h = try Harness.createConfigured(.{ .audio_streaming = false });
+    defer h.destroy();
+    h.harness.null_platform.audio_local_files = false;
+
+    try h.app_state.dispatch(&h.harness.runtime, 1, .play_url);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.event_count);
+    try std.testing.expectEqual(effects_mod.EffectAudioEventKind.failed, h.app_state.model.last_kind.?);
+    try std.testing.expectEqual(track_key, h.app_state.model.last_key);
+}
+
+test "a missing local file with no url is still the original failed degrade" {
+    var h = try Harness.create();
+    defer h.destroy();
+    h.harness.null_platform.audio_local_files = false;
+
+    try h.app_state.dispatch(&h.harness.runtime, 1, .play);
+    try h.drainWakes();
+    try std.testing.expectEqual(@as(usize, 1), h.app_state.model.event_count);
+    try std.testing.expectEqual(effects_mod.EffectAudioEventKind.failed, h.app_state.model.last_kind.?);
+}
+
+test "fake executor records the whole url request shape" {
+    var h = try Harness.create();
+    defer h.destroy();
+    const fx = &h.app_state.effects;
+    fx.executor = .fake;
+
+    try h.app_state.dispatch(&h.harness.runtime, 1, .play_url);
+    const request = fx.pendingAudio().?;
+    try std.testing.expectEqualStrings(track_path, request.path);
+    try std.testing.expectEqualStrings(track_url, request.url);
+    try std.testing.expectEqualStrings(track_cache_path, request.cache_path);
+    try std.testing.expectEqual(track_bytes, request.expected_bytes);
+    try std.testing.expectEqual(@as(usize, 0), h.harness.null_platform.audio_load_url_count);
+}
+
+test "audioCachePath keys by url hash under audio/ and keeps the extension" {
+    var buffer: [512]u8 = undefined;
+    const first = try effects_mod.audioCachePath(&buffer, "/tmp/caches/app", track_url);
+    try std.testing.expect(std.mem.startsWith(u8, first, "/tmp/caches/app/audio/"));
+    try std.testing.expect(std.mem.endsWith(u8, first, ".mp3"));
+
+    // Same url, same path — the cache is content-addressed by source.
+    var second_buffer: [512]u8 = undefined;
+    const second = try effects_mod.audioCachePath(&second_buffer, "/tmp/caches/app", track_url);
+    try std.testing.expectEqualStrings(first, second);
+
+    // Different url, different path.
+    var third_buffer: [512]u8 = undefined;
+    const third = try effects_mod.audioCachePath(&third_buffer, "/tmp/caches/app", "https://music.example.test/pack/music/exit-signs/harvest-lot.mp3");
+    try std.testing.expect(!std.mem.eql(u8, first, third));
+
+    // URL machinery never smuggles into the file name: a query-string
+    // "extension" is dropped, not embedded.
+    var fourth_buffer: [512]u8 = undefined;
+    const fourth = try effectsCachePathNoExt(&fourth_buffer);
+    try std.testing.expect(std.mem.indexOfAny(u8, std.fs.path.basename(fourth), "?#&") == null);
+}
+
+fn effectsCachePathNoExt(buffer: []u8) ![]const u8 {
+    return effects_mod.audioCachePath(buffer, "/tmp/caches/app", "https://music.example.test/stream?id=42");
 }
 
 test "a platform straggler after stop is swallowed, never misattributed" {

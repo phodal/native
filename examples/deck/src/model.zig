@@ -48,9 +48,9 @@ pub const Effects = native_sdk.Effects(Msg);
 /// the soundboard's). Track `file` paths are relative to the
 /// SOUNDBOARD's assets directory — the mp3s live once on disk and both
 /// examples play the same files.
-pub const ManifestTrack = struct { title: []const u8, file: []const u8, duration_ms: u32 };
+pub const ManifestTrack = struct { title: []const u8, file: []const u8, duration_ms: u32, bytes: u64 };
 pub const ManifestAlbum = struct { artist: []const u8, title: []const u8, year: u16, art: ?[]const u8, tracks: []const ManifestTrack };
-pub const Catalog = struct { version: u32, albums: []const ManifestAlbum };
+pub const Catalog = struct { version: u32, url_base: ?[]const u8, albums: []const ManifestAlbum };
 
 /// The committed catalog: browsable without any gitignored audio on disk.
 pub const catalog: Catalog = @import("music_manifest.zon");
@@ -94,9 +94,15 @@ pub const Track = struct {
     title: []const u8,
     /// Playable path (deck-relative into the soundboard's assets).
     path: []const u8,
+    /// The manifest's relative file path, doubling as the track's URL
+    /// path under the streaming base.
+    file: []const u8,
     /// Manifest duration: the display default until the platform's
     /// `.loaded` acknowledgment reports the decoded duration.
     duration_ms: u32,
+    /// The prepared file's exact byte size — the cache integrity gate
+    /// for streamed plays.
+    bytes: u64,
 };
 
 /// Flat album table derived from the manifest at comptime: ids are
@@ -134,7 +140,9 @@ pub const tracks: [track_count]Track = blk: {
                 .number = track_index + 1,
                 .title = track.title,
                 .path = audio_root ++ track.file,
+                .file = track.file,
                 .duration_ms = track.duration_ms,
+                .bytes = track.bytes,
             };
             index += 1;
         }
@@ -174,6 +182,27 @@ pub const marquee_step_ms: u32 = 500;
 /// prepares the shared gitignored audio.
 pub const no_media_marquee = "NO MEDIA";
 pub const no_media_remedy = "RUN TOOLS/PREPARE-EXAMPLE-MUSIC.SH";
+
+/// The honest degraded state after a failed STREAM (a URL base is
+/// configured, so the local-file miss streamed — and the network let
+/// the deck down: offline with a cold cache, a dead host, a mid-flight
+/// drop). Distinct stamp, distinct remedy.
+pub const stream_failed_marquee = "STREAM LOST";
+pub const stream_failed_remedy = "CHECK THE CONNECTION AND RETRY";
+
+/// The marquee stamp while a stream is stalled waiting for bytes — the
+/// honest state between playing and paused that only URL sources have.
+pub const buffering_marquee = "BUFFERING";
+
+/// Streaming configuration bounds (manifest `.url_base`, overridable
+/// with NATIVE_SDK_MUSIC_URL_BASE at launch; the cache directory from
+/// app_dirs). Over-long values are refused whole, never truncated.
+pub const max_url_base = 256;
+pub const max_cache_dir = 512;
+
+/// The manifest's committed streaming base ("" when null): the model
+/// default the env override replaces at launch.
+pub const manifest_url_base: []const u8 = catalog.url_base orelse "";
 
 /// Effect keys, model-owned identity (effect-key style). The audio
 /// channel's key is the playing track's id — its own namespace, so it
@@ -234,9 +263,30 @@ pub const Model = struct {
     /// value at load, replaced by the platform's decoded duration when
     /// the `.loaded` acknowledgment arrives.
     now_duration_ms: u32 = 0,
-    /// A load failed (missing mp3s, a platform without audio): the VFD
-    /// wears the NO MEDIA remedy until the next successful load attempt.
+    /// A load failed (missing mp3s, no URL base, or a platform without
+    /// audio): the VFD wears the NO MEDIA remedy until the next
+    /// successful load attempt.
     media_failed: bool = false,
+    /// A STREAM failed (URL base configured, network gone): the VFD
+    /// wears the STREAM LOST remedy instead — different problem,
+    /// different fix.
+    stream_failed: bool = false,
+    /// The stream is stalled waiting for network bytes, mirrored from
+    /// the audio events' buffering flag; the marquee stamps BUFFERING
+    /// while it holds. Local files never set it.
+    buffering: bool = false,
+    /// The streaming URL base (manifest default, env override at
+    /// launch; empty = local-only) and the platform cache directory
+    /// resolved in main — same conventions as the soundboard, one
+    /// on-disk cache since both examples share the audio.
+    url_base_buffer: [max_url_base]u8 = blk: {
+        var buffer: [max_url_base]u8 = @splat(0);
+        @memcpy(buffer[0..manifest_url_base.len], manifest_url_base);
+        break :blk buffer;
+    },
+    url_base_len: usize = manifest_url_base.len,
+    cache_dir_buffer: [max_cache_dir]u8 = @splat(0),
+    cache_dir_len: usize = 0,
     queue: [max_queue]u8 = @splat(0),
     queue_len: usize = 0,
     queue_dropped: u32 = 0,
@@ -285,8 +335,45 @@ pub const Model = struct {
         return model.now == null;
     }
 
+    /// Any degraded playback state, for the VFD's warning tint (the
+    /// stamps themselves name which problem it is).
     pub fn mediaFailed(model: *const Model) bool {
-        return model.media_failed;
+        return model.media_failed or model.stream_failed;
+    }
+
+    /// The channel-line remedy matching the marquee's failure stamp.
+    pub fn remedyText(model: *const Model) []const u8 {
+        if (model.stream_failed) return stream_failed_remedy;
+        return no_media_remedy;
+    }
+
+    pub fn urlBase(model: *const Model) []const u8 {
+        return model.url_base_buffer[0..model.url_base_len];
+    }
+
+    pub fn cacheDir(model: *const Model) []const u8 {
+        return model.cache_dir_buffer[0..model.cache_dir_len];
+    }
+
+    pub fn streamingConfigured(model: *const Model) bool {
+        return model.url_base_len > 0;
+    }
+
+    /// Install the streaming base (launch-time). Trailing slash
+    /// trimmed; over-long values refused whole, never truncated.
+    pub fn setUrlBase(model: *Model, base: []const u8) void {
+        const trimmed = std.mem.trimEnd(u8, base, "/");
+        if (trimmed.len > max_url_base) return;
+        @memcpy(model.url_base_buffer[0..trimmed.len], trimmed);
+        model.url_base_len = trimmed.len;
+    }
+
+    /// Install the platform cache directory (launch-time). Over-long
+    /// values leave the cache disabled — streams still play.
+    pub fn setCacheDir(model: *Model, dir: []const u8) void {
+        if (dir.len > max_cache_dir) return;
+        @memcpy(model.cache_dir_buffer[0..dir.len], dir);
+        model.cache_dir_len = dir.len;
     }
 
     pub fn coverFor(model: *const Model, album_id: u8) canvas.ImageId {
@@ -330,7 +417,9 @@ pub const Model = struct {
     /// same window of text. After a failed load the marquee stamps the
     /// NO MEDIA state instead.
     pub fn marqueeText(model: *const Model, arena: std.mem.Allocator) []const u8 {
+        if (model.stream_failed) return stream_failed_marquee;
         if (model.media_failed) return no_media_marquee;
+        if (model.buffering) return buffering_marquee;
         const track = model.nowTrack() orelse return "NO SIGNAL";
         const album = albumById(track.album);
         // ASCII-only composition: the rotation slices bytes, so a
@@ -599,26 +688,36 @@ fn handleAudio(model: *Model, fx: *Effects, event: native_sdk.EffectAudio) void 
             // The platform's decoded duration replaces the manifest's
             // display default.
             model.now_duration_ms = clampMs(event.duration_ms);
+            model.buffering = event.buffering;
         },
         .position => {
             // The progress clock: everything derived from playback time
             // (marquee, spectrum, timecode) advances here and ONLY here,
-            // so pause freezes it all deterministically.
+            // so pause freezes it all deterministically. The stream's
+            // honest stall flag rides every tick.
             model.elapsed_ms = clampMs(event.position_ms);
+            model.buffering = event.buffering;
         },
         // Natural end: the play-next queue wins, else album order.
         .completed => advance(model, fx),
-        // Missing/unreadable file or a platform without audio playback
-        // (`failed`), or a path the effects layer refused (`rejected` —
-        // impossible for these comptime paths, honest anyway): clear the
-        // deck and light the NO MEDIA remedy. Never a crash, never
-        // silence.
+        // Playback could not run (`failed`), or the effects layer
+        // refused the request (`rejected` — impossible for these
+        // comptime paths, honest anyway). With a URL base configured
+        // the local-file miss would have streamed, so a failure means
+        // the NETWORK let the deck down — STREAM LOST; without one the
+        // shared assets are not prepared — NO MEDIA. Never a crash,
+        // never silence.
         .failed, .rejected => {
             model.now = null;
             model.playing = false;
+            model.buffering = false;
             model.elapsed_ms = 0;
             model.now_duration_ms = 0;
-            model.media_failed = true;
+            if (model.streamingConfigured()) {
+                model.stream_failed = true;
+            } else {
+                model.media_failed = true;
+            }
         },
     }
 }
@@ -633,15 +732,35 @@ fn startTrack(model: *Model, fx: *Effects, track_id: u8) void {
     model.elapsed_ms = 0;
     // Display default until `.loaded` reports the decoded duration.
     model.now_duration_ms = track.duration_ms;
-    // A fresh load attempt is the retry path out of the NO MEDIA state.
+    // A fresh load attempt is the retry path out of the failure states.
     model.media_failed = false;
+    model.stream_failed = false;
+    model.buffering = false;
     model.playing = true;
+    // The source cascade rides ONE playAudio call: the shared local
+    // file first, then (URL base configured) the track's URL — verified
+    // cache entry or progressive stream that fills the cache, keyed by
+    // the URL's hash. `expected_bytes` is the manifest's prepared size,
+    // the gate that keeps partial cache entries from ever playing.
+    var url_buffer: [max_url_base + 512]u8 = undefined;
+    var url: []const u8 = "";
+    if (model.streamingConfigured()) {
+        url = std.fmt.bufPrint(&url_buffer, "{s}/{s}", .{ model.urlBase(), track.file }) catch "";
+    }
+    var cache_buffer: [max_cache_dir + 128]u8 = undefined;
+    var cache_path: []const u8 = "";
+    if (url.len > 0 and model.cacheDir().len > 0) {
+        cache_path = native_sdk.audioCachePath(&cache_buffer, model.cacheDir(), url) catch "";
+    }
     // One player is the whole surface: a new playAudio replaces whatever
     // played before, and the track id is the channel key echoed in every
     // event for this playback.
     fx.playAudio(.{
         .key = track_id,
         .path = track.path,
+        .url = url,
+        .cache_path = cache_path,
+        .expected_bytes = track.bytes,
         .on_event = Effects.audioMsg(.audio_event),
     });
     // Keep the platform player honest with the VOL fader from the very

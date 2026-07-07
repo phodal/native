@@ -35,11 +35,12 @@ typedef enum {
 } native_sdk_appkit_event_kind_t;
 
 /* Audio player reports (EVENT_AUDIO payloads). LOADED acknowledges a
- * successful native_sdk_appkit_audio_load with the decoded duration;
- * POSITION ticks at a coarse honest cadence (~500ms) only while playing;
- * COMPLETED fires exactly once at a track's natural end; FAILED reports
- * an asynchronous decode/device failure. Ordinals are mirrored by the
- * Zig side (audioEventKindFromInt). */
+ * successful native_sdk_appkit_audio_load (or a ready URL stream) with
+ * the decoded duration; POSITION ticks at a coarse honest cadence
+ * (~500ms) only while playing; COMPLETED fires exactly once at a
+ * track's natural end; FAILED reports an asynchronous decode/device
+ * failure — or a network failure that killed a stream mid-flight.
+ * Ordinals are mirrored by the Zig side (audioEventKindFromInt). */
 typedef enum {
     NATIVE_SDK_APPKIT_AUDIO_EVENT_LOADED = 0,
     NATIVE_SDK_APPKIT_AUDIO_EVENT_POSITION = 1,
@@ -271,6 +272,11 @@ typedef struct {
     uint64_t audio_position_ms;
     uint64_t audio_duration_ms;
     int audio_playing;
+    /* Nonzero while a streamed URL source is stalled waiting for
+     * network bytes — distinct from audio_playing (transport intent):
+     * a stream can be un-paused yet silent until bytes arrive. Local
+     * files never buffer. */
+    int audio_buffering;
 } native_sdk_appkit_event_t;
 
 typedef void (*native_sdk_appkit_event_callback_t)(void *context, const native_sdk_appkit_event_t *event);
@@ -395,6 +401,19 @@ void native_sdk_appkit_cancel_timer(native_sdk_appkit_host_t *host, uint64_t tim
  * pause, and set_volume treat that as a harmless no-op on the Zig side).
  * All entries are loop-thread only. */
 int native_sdk_appkit_audio_load(native_sdk_appkit_host_t *host, const char *path, size_t path_len);
+/* URL sources on the same single player. Resolution is honest and
+ * two-step: a verified cache entry at cache_path (present, and
+ * expected_bytes matches when nonzero — a partial or stale entry never
+ * plays; it is deleted and re-streamed) plays as a plain local file and
+ * returns 1; otherwise playback STREAMS progressively via AVPlayer —
+ * audible as soon as enough bytes arrive, never download-then-play —
+ * while a parallel download fills cache_path for next time (written to
+ * a .part sibling, size-verified, then atomically renamed into place)
+ * and the call returns 0. An empty cache_path disables caching. Returns
+ * 2 when the URL cannot even be parsed. Async failures (unreachable
+ * host, mid-stream network loss, undecodable payload) arrive as one
+ * EVENT_AUDIO/FAILED on the run loop. Loop-thread only. */
+int native_sdk_appkit_audio_load_url(native_sdk_appkit_host_t *host, const char *url, size_t url_len, const char *cache_path, size_t cache_path_len, uint64_t expected_bytes);
 int native_sdk_appkit_audio_play(native_sdk_appkit_host_t *host);
 int native_sdk_appkit_audio_pause(native_sdk_appkit_host_t *host);
 int native_sdk_appkit_audio_stop(native_sdk_appkit_host_t *host);

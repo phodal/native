@@ -68,8 +68,9 @@ pub const magic = "NSDKSJNL";
 
 /// Journal format version. Any change to record layouts or journaled
 /// enum orders bumps this; readers refuse other versions loudly rather
-/// than misreading yesterday's shape.
-pub const format_version: u32 = 1;
+/// than misreading yesterday's shape. v2 added the stream `buffering`
+/// flag to audio event and audio effect records.
+pub const format_version: u32 = 2;
 
 // ------------------------------------------------------------- budgets
 //
@@ -467,6 +468,7 @@ pub fn encodeEvent(event: platform.Event, buffer: []u8) JournalError![]const u8 
             try cursor.writeInt(u64, audio.position_ms);
             try cursor.writeInt(u64, audio.duration_ms);
             try cursor.writeBool(audio.playing);
+            try cursor.writeBool(audio.buffering);
         },
         .files_dropped => |drop| {
             try cursor.writeEnum(EventTag.files_dropped);
@@ -659,6 +661,7 @@ pub fn decodeEvent(bytes: []const u8, storage: *EventDecodeStorage) JournalError
                 .position_ms = try cursor.readInt(u64),
                 .duration_ms = try cursor.readInt(u64),
                 .playing = try cursor.readBool(),
+                .buffering = try cursor.readBool(),
             } };
         },
         .files_dropped => blk: {
@@ -823,6 +826,7 @@ pub fn encodeEffect(record: EffectResultRecord, buffer: []u8) JournalError![]con
     try cursor.writeInt(u64, record.audio_position_ms);
     try cursor.writeInt(u64, record.audio_duration_ms);
     try cursor.writeBool(record.audio_playing);
+    try cursor.writeBool(record.audio_buffering);
     return buffer[0..cursor.len];
 }
 
@@ -852,6 +856,7 @@ pub fn decodeEffect(bytes: []const u8) JournalError!EffectResultRecord {
         .audio_position_ms = try cursor.readInt(u64),
         .audio_duration_ms = try cursor.readInt(u64),
         .audio_playing = try cursor.readBool(),
+        .audio_buffering = try cursor.readBool(),
     };
     if (!cursor.done()) return error.JournalCorrupt;
     return record;
@@ -1288,6 +1293,7 @@ test "effect codec round-trips payloads and outcomes" {
         .audio_position_ms = 1_500,
         .audio_duration_ms = 89_160,
         .audio_playing = true,
+        .audio_buffering = true,
     }, &buffer);
     const audio_decoded = try decodeEffect(audio_encoded);
     try testing.expectEqual(runtime_effects.EffectResultKind.audio, audio_decoded.kind);
@@ -1296,6 +1302,7 @@ test "effect codec round-trips payloads and outcomes" {
     try testing.expectEqual(@as(u64, 1_500), audio_decoded.audio_position_ms);
     try testing.expectEqual(@as(u64, 89_160), audio_decoded.audio_duration_ms);
     try testing.expect(audio_decoded.audio_playing);
+    try testing.expect(audio_decoded.audio_buffering);
 }
 
 test "header, checkpoint, screenshot, and end codecs round-trip" {

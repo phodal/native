@@ -62,7 +62,7 @@ Native SDK capabilities are native OS services and app events exposed through `P
       <td><code>fx.playAudio(options)</code> / <code>fx.pauseAudio()</code> / <code>fx.resumeAudio()</code> / <code>fx.stopAudio()</code> / <code>fx.seekAudio(ms)</code> / <code>fx.setAudioVolume(v)</code></td>
       <td>None. Effects-channel API; every report arrives as an <code>on_event</code> Msg.</td>
       <td>None. No bridge surface.</td>
-      <td>macOS system-engine host (one player, AVAudioPlayer); Linux, Windows, and macOS Chromium report unsupported and playback degrades to one explicit failed Msg</td>
+      <td>macOS system-engine host (one player: AVAudioPlayer for local files, AVPlayer for streamed URLs); Linux, Windows, and macOS Chromium report unsupported and playback degrades to one explicit failed Msg</td>
     </tr>
     <tr>
       <td>File drops</td>
@@ -97,6 +97,12 @@ Native SDK capabilities are native OS services and app events exposed through `P
 
 Unsupported platform hosts reject with the standard unsupported-service error.
 
+## Audio streaming and the track cache
+
+`fx.playAudio` resolves its source in a fixed order: the local `path` first; when it is absent or missing, the `url` — where a verified cache entry at `cache_path` plays as a plain local file (no network), and anything else streams progressively (playback starts while bytes are still arriving, never download-then-play) while the same bytes fill the cache for the next play. `expected_bytes` (the track's known size, from a manifest) is the integrity gate: a cache entry or a finished download whose size disagrees never plays — it is discarded and re-streamed. While a stream waits for bytes, position events carry `buffering = true`: an honest third UI state, distinct from playing and paused, since the transport is not paused but nothing is coming out of the speakers. Seek and volume work mid-stream; a network failure mid-stream (or offline with a cold cache) delivers one explicit `.failed` Msg.
+
+The cache lives under the platform caches directory (the `app_dirs` `.cache` convention — `~/Library/Caches/<app>/audio/` on macOS, `$XDG_CACHE_HOME/<app>/audio/` on Linux, `%LOCALAPPDATA%\<app>\Cache\audio\` on Windows), keyed by the URL's hash (`native_sdk.audioCachePath` derives the path). Clearing the cache is deleting that one directory; the OS already treats caches there as reclaimable. Hosts with a player but no streaming path report `audio_streaming` unsupported and URL playback degrades to the same explicit failed Msg. For record/replay, streaming changes nothing: the delivered audio events are journaled at the effect boundary like every other result, so network timing — real-world nondeterminism — stays outside the recording and replay never touches the network.
+
 ## Support discovery
 
 Use `runtime.supports(...)` before native code shows optional affordances. Trusted WebView code can make the same check with `native-sdk.platform.supports` when that built-in command is explicitly allowed:
@@ -109,6 +115,7 @@ const support = {
   credentials: await window.zero.platform.supports("credentials"),
   fileDrops: await window.zero.platform.supports("file_drops"),
   audioPlayback: await window.zero.platform.supports("audio_playback"),
+  audioStreaming: await window.zero.platform.supports("audio_streaming"),
 };
 ```
 

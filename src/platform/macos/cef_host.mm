@@ -2263,6 +2263,16 @@ int native_sdk_appkit_audio_load(native_sdk_appkit_host_t *host, const char *pat
     return 2;
 }
 
+int native_sdk_appkit_audio_load_url(native_sdk_appkit_host_t *host, const char *url, size_t url_len, const char *cache_path, size_t cache_path_len, uint64_t expected_bytes) {
+    (void)host;
+    (void)url;
+    (void)url_len;
+    (void)cache_path;
+    (void)cache_path_len;
+    (void)expected_bytes;
+    return 2;
+}
+
 int native_sdk_appkit_audio_play(native_sdk_appkit_host_t *host) {
     (void)host;
     return 0;

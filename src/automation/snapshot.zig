@@ -217,10 +217,16 @@ pub const Tray = struct {
 /// Live audio playback state (the effects channel's single player), as
 /// the runtime last mirrored it. Speakers are outside every window
 /// capture, so `state=` and the advancing `position_ms` are the
-/// automation-visible evidence music is actually playing.
+/// automation-visible evidence music is actually playing. `buffering`
+/// (a stalled stream — un-paused yet silent) prints as its own state,
+/// and `source` names where the bytes come from (local file, verified
+/// cache entry, network stream), so the resolution order is provable
+/// from the snapshot alone.
 pub const Audio = struct {
     key: u64 = 0,
     playing: bool = false,
+    buffering: bool = false,
+    source: []const u8 = "local",
     position_ms: u64 = 0,
     duration_ms: u64 = 0,
 };
@@ -546,9 +552,12 @@ pub fn writeText(input: Input, writer: anytype) !void {
         }
     }
     if (input.audio) |audio| {
-        try writer.print("audio key={d} state={s} position_ms={d} duration_ms={d}\n", .{
+        try writer.print("audio key={d} state={s} source={s} position_ms={d} duration_ms={d}\n", .{
             audio.key,
-            if (audio.playing) "playing" else "paused",
+            // Buffering is the honest third state: the transport is not
+            // paused, but a stalled stream is not audibly playing either.
+            if (audio.buffering) "buffering" else if (audio.playing) "playing" else "paused",
+            audio.source,
             audio.position_ms,
             audio.duration_ms,
         });

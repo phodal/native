@@ -109,6 +109,8 @@ pub fn RuntimeAutomationSnapshot(comptime Runtime: type) type {
             return .{
                 .key = self.audio_key,
                 .playing = self.audio_playing,
+                .buffering = self.audio_buffering,
+                .source = @tagName(self.audio_source),
                 .position_ms = self.audio_position_ms,
                 .duration_ms = self.audio_duration_ms,
             };

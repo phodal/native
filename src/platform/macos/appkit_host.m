@@ -29,6 +29,13 @@ static const uint32_t NativeSdkShortcutModifierControl = 1u << 2;
 static const uint32_t NativeSdkShortcutModifierOption = 1u << 3;
 static const uint32_t NativeSdkShortcutModifierShift = 1u << 4;
 static void *NativeSdkAppKitAppearanceObservationContext = &NativeSdkAppKitAppearanceObservationContext;
+/* KVO contexts for the streaming audio player: the AVPlayerItem's load
+ * status (readyToPlay -> the LOADED acknowledgment; failed -> one FAILED
+ * event) and the AVPlayer's timeControlStatus (waiting-to-play IS the
+ * honest buffering signal — the transport is not paused, but no audio
+ * comes out until bytes arrive). */
+static void *NativeSdkAppKitStreamItemStatusContext = &NativeSdkAppKitStreamItemStatusContext;
+static void *NativeSdkAppKitStreamTimeControlContext = &NativeSdkAppKitStreamTimeControlContext;
 static NSRect constrainFrame(NSRect frame);
 static NSString *NativeSdkAppKitBridgeScript(void);
 static NSString *NativeSdkMimeTypeForPath(NSString *path);
@@ -621,6 +628,33 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
  * honest cadence — position is a readout, not a frame clock. */
 @property(nonatomic, strong) AVAudioPlayer *audioPlayer;
 @property(nonatomic, strong) NSTimer *audioPositionTimer;
+/* URL sources ride AVPlayer, not AVAudioPlayer — AVAudioPlayer wants a
+ * complete local file, while AVPlayer streams progressively (playback
+ * starts as soon as enough bytes arrive, never download-then-play) and
+ * keeps seek and volume working mid-stream. Exactly one of audioPlayer/
+ * streamPlayer is non-nil at a time: local files and verified cache
+ * hits stay on AVAudioPlayer (a proven, simpler decode path), streams
+ * use this pair. */
+@property(nonatomic, strong) AVPlayer *streamPlayer;
+@property(nonatomic, strong) AVPlayerItem *streamItem;
+/* NSNotificationCenter block-observer tokens for the stream item's
+ * natural end and mid-flight failure; removed on teardown. */
+@property(nonatomic, strong) id streamEndObserver;
+@property(nonatomic, strong) id streamFailObserver;
+/* KVO registration flag so teardown removes observers exactly once. */
+@property(nonatomic, assign) BOOL streamObservingStatus;
+/* The LOADED acknowledgment fires once per stream (item status can
+ * bounce through readyToPlay again after a stall). */
+@property(nonatomic, assign) BOOL streamLoadedEmitted;
+/* The honest buffering mirror emitted with every audio event: YES from
+ * stream start (no bytes yet) until the player reports it is actually
+ * rolling, then follows timeControlStatus. */
+@property(nonatomic, assign) BOOL streamBuffering;
+/* The cache fill: a parallel download of the same URL, installed at
+ * the cache path only after an atomic size-verified rename. Cancelled
+ * when a new load replaces the stream; orphaned (left to finish) when
+ * the stream completes naturally. */
+@property(nonatomic, strong) NSURLSessionDownloadTask *audioCacheDownload;
 @property(nonatomic, strong) NSString *appName;
 /* The human-facing app name (app.zon display_name, falling back through
  * the window title to the binary name). Everything the OS labels the
@@ -749,6 +783,13 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)appTimerFired:(NSTimer *)timer;
 - (void)invalidateAppTimers;
 - (int)audioLoadPath:(NSString *)path;
+- (int)audioLoadURL:(NSString *)urlString cachePath:(NSString *)cachePath expectedBytes:(uint64_t)expectedBytes;
+- (void)startAudioCacheDownloadFrom:(NSURL *)url toPath:(NSString *)cachePath expectedBytes:(uint64_t)expectedBytes;
+- (void)audioTearDownStreamCancellingDownload:(BOOL)cancelDownload;
+- (void)streamItemStatusChanged;
+- (void)streamTimeControlChanged;
+- (void)streamDidPlayToEnd;
+- (void)streamDidFail;
 - (int)audioPlay;
 - (int)audioPause;
 - (int)audioStop;
@@ -7911,6 +7952,23 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
         [self emitAppearanceChanged];
         return;
     }
+    /* AVPlayer/AVPlayerItem KVO can fire on background threads; every
+     * audio entry point is loop-thread only, so hop before touching
+     * player state or emitting. */
+    if (context == NativeSdkAppKitStreamItemStatusContext) {
+        __weak NativeSdkAppKitHost *weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf streamItemStatusChanged];
+        });
+        return;
+    }
+    if (context == NativeSdkAppKitStreamTimeControlContext) {
+        __weak NativeSdkAppKitHost *weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf streamTimeControlChanged];
+        });
+        return;
+    }
     [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
 }
 
@@ -8067,27 +8125,62 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
     [self.appTimers removeAllObjects];
 }
 
-/* Emit one audio report carrying the player's live position/duration
- * readout. Runs on the loop thread — every audio entry point is
- * loop-thread only, and AVAudioPlayer delegate callbacks arrive on the
- * thread that started playback (this one). */
+/* CMTime arithmetic by hand, on purpose: CMTimeGetSeconds and friends
+ * are exported by CoreMedia, and linking CoreMedia would have to ripple
+ * through every example's explicit framework list for two one-line
+ * conversions. The struct and its flag constants are header-only, so
+ * reading value/timescale directly keeps the link set unchanged. */
+static double NativeSdkSecondsFromCMTime(CMTime time) {
+    if ((time.flags & kCMTimeFlags_Valid) == 0) return 0.0;
+    if ((time.flags & (kCMTimeFlags_Indefinite | kCMTimeFlags_PositiveInfinity | kCMTimeFlags_NegativeInfinity)) != 0) return 0.0;
+    if (time.timescale == 0) return 0.0;
+    return (double)time.value / (double)time.timescale;
+}
+
+static CMTime NativeSdkCMTimeFromMs(uint64_t ms) {
+    CMTime time;
+    time.value = (CMTimeValue)ms;
+    time.timescale = 1000;
+    time.flags = kCMTimeFlags_Valid;
+    time.epoch = 0;
+    return time;
+}
+
+/* Emit one audio report carrying the live position/duration readout of
+ * whichever player is active (the local AVAudioPlayer or the streaming
+ * AVPlayer). Runs on the loop thread — every audio entry point is
+ * loop-thread only; AVAudioPlayer delegate callbacks arrive on the
+ * thread that started playback (this one), and the stream player's KVO
+ * and notification handlers hop to the main queue before landing here. */
 - (void)emitAudioEventOfKind:(int)kind {
     AVAudioPlayer *player = self.audioPlayer;
+    AVPlayer *stream = self.streamPlayer;
     uint64_t position_ms = 0;
     uint64_t duration_ms = 0;
     int playing = 0;
+    int buffering = 0;
     if (player) {
         NSTimeInterval position = player.currentTime;
         NSTimeInterval duration = player.duration;
         if (position > 0) position_ms = (uint64_t)llround(position * 1000.0);
         if (duration > 0) duration_ms = (uint64_t)llround(duration * 1000.0);
         playing = player.isPlaying ? 1 : 0;
+    } else if (stream) {
+        double position = NativeSdkSecondsFromCMTime(stream.currentTime);
+        double duration = self.streamItem ? NativeSdkSecondsFromCMTime(self.streamItem.duration) : 0.0;
+        if (position > 0) position_ms = (uint64_t)llround(position * 1000.0);
+        if (duration > 0) duration_ms = (uint64_t)llround(duration * 1000.0);
+        /* rate > 0 is the transport intent (un-paused); the buffering
+         * flag beside it says whether audio is actually coming out. */
+        playing = stream.rate > 0 ? 1 : 0;
+        buffering = self.streamBuffering ? 1 : 0;
     }
     if (kind == NATIVE_SDK_APPKIT_AUDIO_EVENT_COMPLETED) {
         /* A finished player rewinds itself to zero; report the honest
          * terminal position instead. */
         position_ms = duration_ms;
         playing = 0;
+        buffering = 0;
     }
     [self emitEvent:(native_sdk_appkit_event_t){
         .kind = NATIVE_SDK_APPKIT_EVENT_AUDIO,
@@ -8095,6 +8188,7 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
         .audio_position_ms = position_ms,
         .audio_duration_ms = duration_ms,
         .audio_playing = playing,
+        .audio_buffering = buffering,
         .timestamp_ns = NativeSdkTimestampNanoseconds(),
     }];
 }
@@ -8105,7 +8199,7 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
 }
 
 - (void)audioPositionTimerFired:(NSTimer *)timer {
-    if (!self.audioPlayer) {
+    if (!self.audioPlayer && !self.streamPlayer) {
         [self stopAudioPositionTimer];
         return;
     }
@@ -8136,10 +8230,232 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
     return 0;
 }
 
+/* URL sources: verified cache entry first (plays as a plain local
+ * file, no network), then a progressive AVPlayer stream with a
+ * parallel cache-filling download. Returns 1 for the cache hit, 0 for
+ * a started stream, 2 when the URL cannot be parsed; everything
+ * asynchronous — readiness, stalls, natural end, network death —
+ * arrives as EVENT_AUDIO reports. */
+- (int)audioLoadURL:(NSString *)urlString cachePath:(NSString *)cachePath expectedBytes:(uint64_t)expectedBytes {
+    [self audioStop];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url || !url.scheme) return 2;
+    if (cachePath.length > 0) {
+        NSFileManager *manager = [NSFileManager defaultManager];
+        NSDictionary *attributes = [manager attributesOfItemAtPath:cachePath error:nil];
+        if (attributes) {
+            unsigned long long size = [attributes fileSize];
+            if (expectedBytes == 0 || size == (unsigned long long)expectedBytes) {
+                if ([self audioLoadPath:cachePath] == 0) return 1;
+                /* An entry with the right size that will not decode is
+                 * corrupt — fall through to discard and re-stream. */
+            }
+            /* Partial, stale, or corrupt: a bad cache entry never
+             * plays, and never survives to fool the next lookup. */
+            [manager removeItemAtPath:cachePath error:nil];
+        }
+    }
+    AVPlayerItem *item = [AVPlayerItem playerItemWithURL:url];
+    AVPlayer *player = [AVPlayer playerWithPlayerItem:item];
+    /* The default stall policy: start as soon as sustained playback is
+     * likely, keep rolling through short gaps. Stated explicitly
+     * because immediate progressive start is the contract here. */
+    player.automaticallyWaitsToMinimizeStalling = YES;
+    self.streamItem = item;
+    self.streamPlayer = player;
+    self.streamBuffering = YES;
+    self.streamLoadedEmitted = NO;
+    [item addObserver:self
+           forKeyPath:@"status"
+              options:NSKeyValueObservingOptionNew
+              context:NativeSdkAppKitStreamItemStatusContext];
+    [player addObserver:self
+             forKeyPath:@"timeControlStatus"
+                options:NSKeyValueObservingOptionNew
+                context:NativeSdkAppKitStreamTimeControlContext];
+    self.streamObservingStatus = YES;
+    __weak NativeSdkAppKitHost *weakSelf = self;
+    self.streamEndObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:AVPlayerItemDidPlayToEndTimeNotification
+                    object:item
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+                    (void)note;
+                    [weakSelf streamDidPlayToEnd];
+                }];
+    self.streamFailObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:AVPlayerItemFailedToPlayToEndTimeNotification
+                    object:item
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *note) {
+                    (void)note;
+                    [weakSelf streamDidFail];
+                }];
+    if (cachePath.length > 0) {
+        [self startAudioCacheDownloadFrom:url toPath:cachePath expectedBytes:expectedBytes];
+    }
+    return 0;
+}
+
+/* The cache fill is a PARALLEL download, not a tee off the player's
+ * own connection: an AVAssetResourceLoader tee needs a custom URL
+ * scheme plus a hand-rolled range-request server between AVPlayer and
+ * the network, and a partially buffered stream must never masquerade
+ * as a cache entry. One extra request on a track's first (uncached)
+ * play buys a stock streaming path and a cache whose entries are
+ * whole files by construction: downloaded beside the final name,
+ * size-verified against the manifest, and renamed into place — a
+ * same-directory rename, so a partial file never occupies the cache
+ * name even across a crash. */
+- (void)startAudioCacheDownloadFrom:(NSURL *)url toPath:(NSString *)cachePath expectedBytes:(uint64_t)expectedBytes {
+    NSURLSessionDownloadTask *task = [[NSURLSession sharedSession]
+        downloadTaskWithURL:url
+          completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+              /* Background queue: file moves only, no host state. A
+               * failed or cancelled download simply leaves no cache
+               * entry — the next play streams again. */
+              if (error || !location) return;
+              if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                  NSInteger status = ((NSHTTPURLResponse *)response).statusCode;
+                  if (status != 200) return;
+              }
+              NSFileManager *manager = [NSFileManager defaultManager];
+              NSString *directory = [cachePath stringByDeletingLastPathComponent];
+              [manager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
+              NSString *partPath = [cachePath stringByAppendingPathExtension:@"part"];
+              [manager removeItemAtPath:partPath error:nil];
+              if (![manager moveItemAtURL:location toURL:[NSURL fileURLWithPath:partPath] error:nil]) return;
+              NSDictionary *attributes = [manager attributesOfItemAtPath:partPath error:nil];
+              unsigned long long size = attributes ? [attributes fileSize] : 0;
+              if (expectedBytes != 0 && size != (unsigned long long)expectedBytes) {
+                  /* Truncated or wrong content: never installed. */
+                  [manager removeItemAtPath:partPath error:nil];
+                  return;
+              }
+              [manager removeItemAtPath:cachePath error:nil];
+              [manager moveItemAtPath:partPath toPath:cachePath error:nil];
+          }];
+    self.audioCacheDownload = task;
+    [task resume];
+}
+
+/* Release the stream player and its observers. The download is
+ * cancelled when a new load replaces the stream mid-flight (a skipped
+ * track should not keep burning bandwidth) but ORPHANED on natural
+ * completion — it is usually already done, and letting a straggler
+ * finish installs the cache entry the completed play earned. */
+- (void)audioTearDownStreamCancellingDownload:(BOOL)cancelDownload {
+    AVPlayerItem *item = self.streamItem;
+    AVPlayer *player = self.streamPlayer;
+    if (self.streamObservingStatus) {
+        [item removeObserver:self forKeyPath:@"status" context:NativeSdkAppKitStreamItemStatusContext];
+        [player removeObserver:self forKeyPath:@"timeControlStatus" context:NativeSdkAppKitStreamTimeControlContext];
+        self.streamObservingStatus = NO;
+    }
+    if (self.streamEndObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.streamEndObserver];
+        self.streamEndObserver = nil;
+    }
+    if (self.streamFailObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.streamFailObserver];
+        self.streamFailObserver = nil;
+    }
+    [player pause];
+    self.streamItem = nil;
+    self.streamPlayer = nil;
+    self.streamBuffering = NO;
+    self.streamLoadedEmitted = NO;
+    if (cancelDownload) [self.audioCacheDownload cancel];
+    self.audioCacheDownload = nil;
+}
+
+/* Item status flipped (main queue, hopped from KVO): readyToPlay is
+ * the stream's LOADED acknowledgment — the duration is decoded and
+ * playback is rolling or about to; failed is the honest terminal
+ * report for an unreachable host or an undecodable payload. */
+- (void)streamItemStatusChanged {
+    AVPlayerItem *item = self.streamItem;
+    if (!item) return;
+    if (item.status == AVPlayerItemStatusReadyToPlay) {
+        if (self.streamLoadedEmitted) return;
+        self.streamLoadedEmitted = YES;
+        [self emitAudioEventOfKind:NATIVE_SDK_APPKIT_AUDIO_EVENT_LOADED];
+        return;
+    }
+    if (item.status == AVPlayerItemStatusFailed) {
+        [self streamDidFail];
+    }
+}
+
+/* timeControlStatus flipped (main queue, hopped from KVO): waiting to
+ * play at the requested rate IS buffering. Emit the transition
+ * immediately as a position report so the UI flips its buffering
+ * state now, not at the next 500ms tick. */
+- (void)streamTimeControlChanged {
+    AVPlayer *player = self.streamPlayer;
+    if (!player) return;
+    BOOL buffering = player.timeControlStatus == AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate;
+    if (buffering == self.streamBuffering) return;
+    self.streamBuffering = buffering;
+    [self emitAudioEventOfKind:NATIVE_SDK_APPKIT_AUDIO_EVENT_POSITION];
+}
+
+/* Natural end of a streamed track. Same retire-before-emit discipline
+ * as the AVAudioPlayer delegate below: the completion Msg routinely
+ * starts the NEXT track from inside its own dispatch, and tearing
+ * down afterwards would destroy the player that load just installed.
+ * The duration is captured first so the event still carries the
+ * honest terminal position. */
+- (void)streamDidPlayToEnd {
+    if (!self.streamPlayer) return;
+    [self stopAudioPositionTimer];
+    uint64_t duration_ms = 0;
+    if (self.streamItem) {
+        double duration = NativeSdkSecondsFromCMTime(self.streamItem.duration);
+        if (duration > 0) duration_ms = (uint64_t)llround(duration * 1000.0);
+    }
+    [self audioTearDownStreamCancellingDownload:NO];
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_AUDIO,
+        .audio_kind = NATIVE_SDK_APPKIT_AUDIO_EVENT_COMPLETED,
+        .audio_position_ms = duration_ms,
+        .audio_duration_ms = duration_ms,
+        .audio_playing = 0,
+        .audio_buffering = 0,
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
+    }];
+}
+
+/* A stream died mid-flight (network loss, server reset, undecodable
+ * bytes) or never became playable (offline with a cold cache): one
+ * FAILED event, player retired first. The cache download is cancelled
+ * too — bytes from a failing source are not trustworthy. */
+- (void)streamDidFail {
+    if (!self.streamPlayer) return;
+    [self stopAudioPositionTimer];
+    [self audioTearDownStreamCancellingDownload:YES];
+    [self emitEvent:(native_sdk_appkit_event_t){
+        .kind = NATIVE_SDK_APPKIT_EVENT_AUDIO,
+        .audio_kind = NATIVE_SDK_APPKIT_AUDIO_EVENT_FAILED,
+        .audio_position_ms = 0,
+        .audio_duration_ms = 0,
+        .audio_playing = 0,
+        .audio_buffering = 0,
+        .timestamp_ns = NativeSdkTimestampNanoseconds(),
+    }];
+}
+
 - (int)audioPlay {
-    AVAudioPlayer *player = self.audioPlayer;
-    if (!player) return 0;
-    if (![player play]) return 0;
+    if (self.streamPlayer) {
+        /* AVPlayer's play is asynchronous by nature (it starts when
+         * buffered bytes allow), so a stream's play always "applies" —
+         * readiness and stalls report through the event stream. */
+        [self.streamPlayer play];
+    } else {
+        AVAudioPlayer *player = self.audioPlayer;
+        if (!player) return 0;
+        if (![player play]) return 0;
+    }
     if (!self.audioPositionTimer) {
         /* Common modes for the same reason app timers use them: the
          * readout must keep ticking while a menu is open or the window
@@ -8156,6 +8472,11 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
 }
 
 - (int)audioPause {
+    if (self.streamPlayer) {
+        [self.streamPlayer pause];
+        [self stopAudioPositionTimer];
+        return 1;
+    }
     AVAudioPlayer *player = self.audioPlayer;
     if (!player) return 0;
     [player pause];
@@ -8164,8 +8485,15 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
 }
 
 - (int)audioStop {
-    AVAudioPlayer *player = self.audioPlayer;
     [self stopAudioPositionTimer];
+    if (self.streamPlayer) {
+        /* Replacement or explicit stop mid-stream: the cache download
+         * dies with the playback — a skipped track should not keep
+         * burning bandwidth (its next play streams and fills again). */
+        [self audioTearDownStreamCancellingDownload:YES];
+        return 1;
+    }
+    AVAudioPlayer *player = self.audioPlayer;
     if (!player) return 0;
     player.delegate = nil;
     [player stop];
@@ -8174,6 +8502,16 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
 }
 
 - (int)audioSeekToMs:(uint64_t)positionMs {
+    if (self.streamPlayer) {
+        /* Mid-stream seek: AVPlayer clamps to the seekable ranges it
+         * has (or fetches the range it needs); exact tolerance keeps
+         * the readout honest against the requested position. */
+        CMTime zero = NativeSdkCMTimeFromMs(0);
+        [self.streamPlayer seekToTime:NativeSdkCMTimeFromMs(positionMs)
+                      toleranceBefore:zero
+                       toleranceAfter:zero];
+        return 1;
+    }
     AVAudioPlayer *player = self.audioPlayer;
     if (!player) return 0;
     NSTimeInterval target = (NSTimeInterval)positionMs / 1000.0;
@@ -8183,6 +8521,10 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
 }
 
 - (int)audioSetVolume:(double)volume {
+    if (self.streamPlayer) {
+        self.streamPlayer.volume = (float)volume;
+        return 1;
+    }
     AVAudioPlayer *player = self.audioPlayer;
     if (!player) return 0;
     player.volume = (float)volume;
@@ -8773,6 +9115,18 @@ int native_sdk_appkit_audio_load(native_sdk_appkit_host_t *host, const char *pat
     NSString *path_string = [[NSString alloc] initWithBytes:path length:path_len encoding:NSUTF8StringEncoding];
     if (!path_string) return 1;
     return [object audioLoadPath:path_string];
+}
+
+int native_sdk_appkit_audio_load_url(native_sdk_appkit_host_t *host, const char *url, size_t url_len, const char *cache_path, size_t cache_path_len, uint64_t expected_bytes) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    NSString *url_string = [[NSString alloc] initWithBytes:url length:url_len encoding:NSUTF8StringEncoding];
+    if (!url_string) return 2;
+    NSString *cache_string = @"";
+    if (cache_path_len > 0) {
+        cache_string = [[NSString alloc] initWithBytes:cache_path length:cache_path_len encoding:NSUTF8StringEncoding];
+        if (!cache_string) return 2;
+    }
+    return [object audioLoadURL:url_string cachePath:cache_string expectedBytes:expected_bytes];
 }
 
 int native_sdk_appkit_audio_play(native_sdk_appkit_host_t *host) {

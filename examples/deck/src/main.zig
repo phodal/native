@@ -228,9 +228,26 @@ fn sync(model: *Model, layout: canvas.WidgetLayoutTree) void {
 // ------------------------------------------------------------------- main
 
 pub fn main(init: std.process.Init) !void {
+    // Streaming configuration, resolved once at launch (same story as
+    // the soundboard): NATIVE_SDK_MUSIC_URL_BASE overrides the
+    // manifest's committed base, and the platform caches directory
+    // hosts the track cache in its audio/ child — delete it to clear.
+    // Launch-time only, so replay's deterministic-init contract holds:
+    // no env read ever happens inside update.
+    var model: Model = .{};
+    if (init.environ_map.get("NATIVE_SDK_MUSIC_URL_BASE")) |base| model.setUrlBase(base);
+    var cache_dir_buffer: [model_mod.max_cache_dir]u8 = undefined;
+    const cache_dir = native_sdk.app_dirs.resolveOne(
+        .{ .name = "deck" },
+        native_sdk.app_dirs.currentPlatform(),
+        native_sdk.debug.envFromMap(init.environ_map),
+        .cache,
+        &cache_dir_buffer,
+    ) catch "";
+    model.setCacheDir(cache_dir);
     const app_state = try std.heap.page_allocator.create(DeckApp);
     defer std.heap.page_allocator.destroy(app_state);
-    app_state.* = DeckApp.init(std.heap.page_allocator, .{}, deckOptions());
+    app_state.* = DeckApp.init(std.heap.page_allocator, model, deckOptions());
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "deck",

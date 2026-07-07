@@ -446,16 +446,59 @@ pub const EffectAudioEventKind = enum(u8) {
 
 /// Payload for `on_event` Msg constructors of audio effects. Positions
 /// and durations are milliseconds; `playing` is the player's honest
-/// state when the event was produced. All fields are plain data — safe
-/// to store in the model, unlike the borrowed byte slices other effect
-/// families carry.
+/// state when the event was produced; `buffering` is true while a
+/// streamed URL source is stalled waiting for network bytes — distinct
+/// from `playing` (the transport intent): a stream can be un-paused yet
+/// silent until bytes arrive, and honest UI shows that difference.
+/// Local files and verified cache hits never buffer. All fields are
+/// plain data — safe to store in the model, unlike the borrowed byte
+/// slices other effect families carry.
 pub const EffectAudio = struct {
     key: u64,
     kind: EffectAudioEventKind,
     position_ms: u64 = 0,
     duration_ms: u64 = 0,
     playing: bool = false,
+    buffering: bool = false,
 };
+
+/// Where the active playback's bytes actually come from — the resolved
+/// end of the `playAudio` source cascade (local file, then verified
+/// cache entry, then network stream). Exposed in the snapshot and the
+/// fake executor's request so tests and automation can pin the
+/// resolution order, not just hear audio events.
+pub const EffectAudioSource = enum(u8) {
+    local,
+    cache,
+    stream,
+};
+
+/// Derive the conventional cache file path for a URL audio source:
+/// `<cache_dir>/audio/<hash>.<ext>`, where `<hash>` is the first 16
+/// bytes of the URL's SHA-256 in lowercase hex and `<ext>` is the URL's
+/// file extension (kept as a decoder hint; dropped when absent or
+/// implausibly long). Keying by URL hash makes the cache content-
+/// addressed by source: no name collisions, no path-escaping concerns,
+/// and clearing it is deleting one directory — `cache_dir` should be
+/// the platform caches directory (`app_dirs` kind `.cache`), so the OS
+/// already treats it as reclaimable.
+pub fn audioCachePath(buffer: []u8, cache_dir: []const u8, url: []const u8) ![]const u8 {
+    if (cache_dir.len == 0 or url.len == 0) return error.InvalidAudioOptions;
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(url, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest[0..16].*, .lower);
+    const tail = if (std.mem.lastIndexOfScalar(u8, url, '/')) |slash| url[slash + 1 ..] else url;
+    var extension: []const u8 = "";
+    if (std.mem.lastIndexOfScalar(u8, tail, '.')) |dot| {
+        const candidate = tail[dot..];
+        // A plausible extension only: short, and free of query/fragment
+        // syntax that would smuggle URL machinery into a file name.
+        if (candidate.len <= 8 and std.mem.indexOfAny(u8, candidate, "?#&") == null) {
+            extension = candidate;
+        }
+    }
+    return std.fmt.bufPrint(buffer, "{s}/audio/{s}{s}", .{ cache_dir, hex, extension });
+}
 
 /// Base platform timer id for fx timers: slot N arms the platform timer
 /// `effect_timer_platform_id_base + N`. Lives in the framework-reserved
@@ -524,6 +567,7 @@ pub const EffectResultRecord = struct {
     audio_position_ms: u64 = 0,
     audio_duration_ms: u64 = 0,
     audio_playing: bool = false,
+    audio_buffering: bool = false,
 };
 
 /// Type-erased sink the drain reports every delivered result to while a
@@ -898,11 +942,34 @@ pub fn Effects(comptime Msg: type) type {
             /// the previous playback outright — one player is the whole
             /// surface.
             key: u64,
-            /// Local file path (≤ `max_effect_audio_path_bytes`; longer
-            /// or empty is rejected with one `.rejected` event). Copied
-            /// at call time — the caller's buffer may be reused
-            /// immediately.
-            path: []const u8,
+            /// Local file path, tried FIRST. May be empty when `url` is
+            /// set (URL-only playback). A present-but-missing file falls
+            /// through to `url` when one is given; with no `url` (or any
+            /// other load failure) one `.failed` event reports it. Every
+            /// string here is copied at call time — the caller's buffers
+            /// may be reused immediately — and each is bounded by
+            /// `max_effect_audio_path_bytes` (longer, or path AND url
+            /// both empty, is rejected with one `.rejected` event).
+            path: []const u8 = "",
+            /// http(s) source, tried when the local path is absent or
+            /// missing. The platform resolves it honestly: a verified
+            /// cache entry at `cache_path` plays locally (no network);
+            /// otherwise playback STREAMS progressively — audible before
+            /// the download finishes — while the bytes fill the cache
+            /// for next time. Empty means local-only (today's behavior).
+            url: []const u8 = "",
+            /// Where the URL's bytes are cached, and the cache policy in
+            /// one field: empty disables caching (stream-only). The
+            /// platform writes beside this path and atomically renames
+            /// into place only after the size verifies, so a partial
+            /// download never occupies the cache name.
+            cache_path: []const u8 = "",
+            /// The track's known byte size (from a manifest), the cache
+            /// integrity gate: a cache entry whose size disagrees is
+            /// discarded and re-streamed, and a finished download that
+            /// disagrees is never installed. Zero means "unknown" —
+            /// existence alone then qualifies a cache entry.
+            expected_bytes: u64 = 0,
             /// Msg constructor every playback event flows through (see
             /// `audioMsg`). Without one, playback still runs; the app
             /// just hears nothing back.
@@ -939,14 +1006,36 @@ pub fn Effects(comptime Msg: type) type {
             key: u64 = 0,
             on_event: ?AudioMsgFn = null,
             playing: bool = false,
+            /// Where the resolved playback's bytes come from: `.local`
+            /// until the URL branch of the cascade runs, then whatever
+            /// the platform answered (`.cache` or `.stream`).
+            source: EffectAudioSource = .local,
+            /// True while a stream is stalled waiting for bytes. Set
+            /// optimistically when a stream starts (nothing has arrived
+            /// yet), cleared by the platform's `.loaded` acknowledgment
+            /// and tracked from event flags after that.
+            buffering: bool = false,
             position_ms: u64 = 0,
             duration_ms: u64 = 0,
             volume: f32 = 1.0,
             path_buffer: [max_effect_audio_path_bytes]u8 = undefined,
             path_len: usize = 0,
+            url_buffer: [max_effect_audio_path_bytes]u8 = undefined,
+            url_len: usize = 0,
+            cache_path_buffer: [max_effect_audio_path_bytes]u8 = undefined,
+            cache_path_len: usize = 0,
+            expected_bytes: u64 = 0,
 
             fn path(channel: *const AudioChannel) []const u8 {
                 return channel.path_buffer[0..channel.path_len];
+            }
+
+            fn url(channel: *const AudioChannel) []const u8 {
+                return channel.url_buffer[0..channel.url_len];
+            }
+
+            fn cachePath(channel: *const AudioChannel) []const u8 {
+                return channel.cache_path_buffer[0..channel.cache_path_len];
             }
         };
 
@@ -956,16 +1045,21 @@ pub fn Effects(comptime Msg: type) type {
             active: bool = false,
             key: u64 = 0,
             playing: bool = false,
+            buffering: bool = false,
+            source: EffectAudioSource = .local,
             position_ms: u64 = 0,
             duration_ms: u64 = 0,
         };
 
         /// A recorded audio playback request, exposed by the fake
-        /// executor for test assertions. `path` borrows the channel's
-        /// storage — valid until the next `playAudio`.
+        /// executor for test assertions. The strings borrow the
+        /// channel's storage — valid until the next `playAudio`.
         pub const AudioRequest = struct {
             key: u64,
             path: []const u8,
+            url: []const u8,
+            cache_path: []const u8,
+            expected_bytes: u64,
             playing: bool,
             position_ms: u64,
             volume: f32,
@@ -2063,21 +2157,31 @@ pub fn Effects(comptime Msg: type) type {
             return fire_fn(.{ .key = key, .timestamp_ns = timestamp_ns, .outcome = .fired });
         }
 
-        /// Load a track by path into the app's single audio player and
-        /// start playing it, replacing whatever played before. TEA all
-        /// the way down: every report — the load acknowledgment with the
-        /// real duration, coarse position ticks while playing, the one
-        /// completion at natural end, failures — arrives as an
-        /// `on_event` Msg (payload `EffectAudio`) through the ordinary
-        /// update path. Never fails from the caller's view: an empty or
-        /// oversized path delivers one `.rejected` event; a platform
-        /// without audio playback (Linux/Windows today) or an unreadable
-        /// file delivers one `.failed` event — never a crash, never
-        /// silence. The audio key is its own namespace (like timer keys)
-        /// and identifies the playback in every event; it consumes no
-        /// `max_effects` slots.
+        /// Load a track into the app's single audio player and start
+        /// playing it, replacing whatever played before. Sources resolve
+        /// in a fixed, honest order: the LOCAL `path` first; when it is
+        /// absent (or the file is missing) the `url` — where the
+        /// platform plays a verified cache entry locally, or STREAMS
+        /// progressively (audible before the download finishes) while
+        /// the bytes fill the cache for next time. TEA all the way down:
+        /// every report — the load acknowledgment with the real
+        /// duration, coarse position ticks while playing (carrying the
+        /// stream's honest `buffering` flag), the one completion at
+        /// natural end, failures — arrives as an `on_event` Msg (payload
+        /// `EffectAudio`) through the ordinary update path. Never fails
+        /// from the caller's view: an oversized string (or path and url
+        /// both empty) delivers one `.rejected` event; a platform
+        /// without audio playback (Linux/Windows today), an unreadable
+        /// file with no url fallback, or a network failure delivers one
+        /// `.failed` event — never a crash, never silence. The audio key
+        /// is its own namespace (like timer keys) and identifies the
+        /// playback in every event; it consumes no `max_effects` slots.
         pub fn playAudio(self: *Self, options: PlayAudioOptions) void {
-            if (options.path.len == 0 or options.path.len > max_effect_audio_path_bytes) {
+            const rejected = (options.path.len == 0 and options.url.len == 0) or
+                options.path.len > max_effect_audio_path_bytes or
+                options.url.len > max_effect_audio_path_bytes or
+                options.cache_path.len > max_effect_audio_path_bytes;
+            if (rejected) {
                 self.deliverLoopAudio(.{ .key = options.key, .kind = .rejected }, options.on_event);
                 return;
             }
@@ -2090,13 +2194,48 @@ pub fn Effects(comptime Msg: type) type {
                 // Optimistic command mirror; the platform's events are
                 // the authority from the `.loaded` acknowledgment on.
                 .playing = true,
+                // The fake executor cannot resolve the cascade, so it
+                // records the requested shape: URL-only requests read as
+                // streams, anything with a local path as local.
+                .source = if (options.path.len == 0) .stream else .local,
                 .volume = volume,
+                .expected_bytes = options.expected_bytes,
             };
             @memcpy(self.audio.path_buffer[0..options.path.len], options.path);
             self.audio.path_len = options.path.len;
+            @memcpy(self.audio.url_buffer[0..options.url.len], options.url);
+            self.audio.url_len = options.url.len;
+            @memcpy(self.audio.cache_path_buffer[0..options.cache_path.len], options.cache_path);
+            self.audio.cache_path_len = options.cache_path.len;
             if (self.audio.fake) return;
             const services = self.services orelse return self.failAudioChannel();
-            services.audioLoad(options.path) catch return self.failAudioChannel();
+            // The source cascade. A missing local file is the ONE local
+            // failure that falls through to the url — everything else
+            // (no player, decode failure) is terminal, because retrying
+            // a different source would mask the real problem.
+            resolve: {
+                if (options.path.len > 0) {
+                    if (services.audioLoad(options.path)) |_| {
+                        self.audio.source = .local;
+                        break :resolve;
+                    } else |err| {
+                        if (err != error.AudioSourceNotFound or options.url.len == 0) {
+                            return self.failAudioChannel();
+                        }
+                    }
+                }
+                const resolution = services.audioLoadUrl(options.url, options.cache_path, options.expected_bytes) catch
+                    return self.failAudioChannel();
+                self.audio.source = switch (resolution) {
+                    .cache => .cache,
+                    .stream => .stream,
+                };
+                // A fresh stream has no bytes yet: buffering starts true
+                // optimistically and the platform's `.loaded`
+                // acknowledgment (and every event after) is the
+                // authority from there.
+                self.audio.buffering = resolution == .stream;
+            }
             services.audioPlay() catch return self.failAudioChannel();
             if (volume != 1.0) services.audioSetVolume(volume) catch {};
         }
@@ -2181,6 +2320,7 @@ pub fn Effects(comptime Msg: type) type {
                 .position_ms = platform_event.position_ms,
                 .duration_ms = platform_event.duration_ms,
                 .playing = platform_event.playing,
+                .buffering = platform_event.buffering,
             }) orelse return null;
             const event_fn = audio_fn orelse return null;
             self.journalNote(.{
@@ -2190,6 +2330,7 @@ pub fn Effects(comptime Msg: type) type {
                 .audio_position_ms = event.position_ms,
                 .audio_duration_ms = event.duration_ms,
                 .audio_playing = event.playing,
+                .audio_buffering = event.buffering,
             });
             return event_fn(event);
         }
@@ -2200,6 +2341,8 @@ pub fn Effects(comptime Msg: type) type {
                 .active = self.audio.active,
                 .key = self.audio.key,
                 .playing = self.audio.playing,
+                .buffering = self.audio.buffering,
+                .source = self.audio.source,
                 .position_ms = self.audio.position_ms,
                 .duration_ms = self.audio.duration_ms,
             };
@@ -2212,6 +2355,9 @@ pub fn Effects(comptime Msg: type) type {
             return .{
                 .key = self.audio.key,
                 .path = self.audio.path(),
+                .url = self.audio.url(),
+                .cache_path = self.audio.cachePath(),
+                .expected_bytes = self.audio.expected_bytes,
                 .playing = self.audio.playing,
                 .position_ms = self.audio.position_ms,
                 .volume = self.audio.volume,
@@ -2224,6 +2370,13 @@ pub fn Effects(comptime Msg: type) type {
         /// updated), mirroring `takeAudioMsg` exactly. Fails when no
         /// playback is active to receive it.
         pub fn feedAudioEvent(self: *Self, kind: EffectAudioEventKind, position_ms: u64, duration_ms: u64, playing: bool) !void {
+            return self.feedAudioEventBuffering(kind, position_ms, duration_ms, playing, false);
+        }
+
+        /// `feedAudioEvent` with the stream-stall flag — the shape the
+        /// replayer feeds (journal records carry buffering) and stream
+        /// suites use; the plain feed keeps local-file tests terse.
+        pub fn feedAudioEventBuffering(self: *Self, kind: EffectAudioEventKind, position_ms: u64, duration_ms: u64, playing: bool, buffering: bool) !void {
             if (!self.audio.active) return error.EffectNotFound;
             self.deliverPending(.{ .audio = .{
                 .event = .{
@@ -2232,6 +2385,7 @@ pub fn Effects(comptime Msg: type) type {
                     .position_ms = position_ms,
                     .duration_ms = duration_ms,
                     .playing = playing,
+                    .buffering = buffering,
                 },
                 .audio_fn = null,
                 .resolve = true,
@@ -2343,6 +2497,7 @@ pub fn Effects(comptime Msg: type) type {
                                 .audio_position_ms = event.position_ms,
                                 .audio_duration_ms = event.duration_ms,
                                 .audio_playing = event.playing,
+                                .audio_buffering = event.buffering,
                             });
                             return event_fn(event);
                         },
@@ -3059,16 +3214,24 @@ pub fn Effects(comptime Msg: type) type {
                     self.audio.position_ms = resolved.position_ms;
                     if (resolved.duration_ms > 0) self.audio.duration_ms = resolved.duration_ms;
                     self.audio.playing = resolved.playing;
+                    // The platform is the buffering authority from its
+                    // first report on: `.loaded` means bytes decoded
+                    // (stream underway), so the optimistic start-of-
+                    // stream flag clears here unless the event holds it.
+                    self.audio.buffering = resolved.buffering;
                 },
                 .completed => {
                     if (resolved.duration_ms > 0) self.audio.duration_ms = resolved.duration_ms;
                     resolved.position_ms = self.audio.duration_ms;
                     resolved.playing = false;
+                    resolved.buffering = false;
                     self.audio.position_ms = self.audio.duration_ms;
                     self.audio.playing = false;
+                    self.audio.buffering = false;
                 },
                 .failed, .rejected => {
                     resolved.playing = false;
+                    resolved.buffering = false;
                     self.audio = .{ .volume = self.audio.volume };
                 },
             }

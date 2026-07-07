@@ -103,6 +103,9 @@ const AppKitEvent = extern struct {
     audio_position_ms: u64,
     audio_duration_ms: u64,
     audio_playing: c_int,
+    /// Nonzero while a streamed source is stalled waiting for network
+    /// bytes (distinct from `audio_playing`, the transport intent).
+    audio_buffering: c_int,
 };
 
 const AppKitCallback = *const fn (context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) void;
@@ -152,6 +155,7 @@ extern fn native_sdk_appkit_show_context_menu(host: *AppKitHost, window_id: u64,
 extern fn native_sdk_appkit_start_timer(host: *AppKitHost, timer_id: u64, interval_ns: u64, repeats: c_int) void;
 extern fn native_sdk_appkit_cancel_timer(host: *AppKitHost, timer_id: u64) void;
 extern fn native_sdk_appkit_audio_load(host: *AppKitHost, path: [*]const u8, path_len: usize) c_int;
+extern fn native_sdk_appkit_audio_load_url(host: *AppKitHost, url: [*]const u8, url_len: usize, cache_path: [*]const u8, cache_path_len: usize, expected_bytes: u64) c_int;
 extern fn native_sdk_appkit_audio_play(host: *AppKitHost) c_int;
 extern fn native_sdk_appkit_audio_pause(host: *AppKitHost) c_int;
 extern fn native_sdk_appkit_audio_stop(host: *AppKitHost) c_int;
@@ -511,6 +515,7 @@ pub const MacPlatform = struct {
                 .start_timer_fn = startTimer,
                 .cancel_timer_fn = cancelTimer,
                 .audio_load_fn = audioLoad,
+                .audio_load_url_fn = audioLoadUrl,
                 .audio_play_fn = audioPlay,
                 .audio_pause_fn = audioPause,
                 .audio_stop_fn = audioStop,
@@ -561,10 +566,12 @@ pub const MacPlatform = struct {
             .gpu_surfaces,
             .gpu_surface_scroll_drivers,
             .view_surface_adoption,
-            // Audio lives in the AppKit host (AVAudioPlayer); the
-            // Chromium host stubs the C ABI and reports honestly
-            // unsupported rather than half-implementing a second player.
+            // Audio lives in the AppKit host (AVAudioPlayer locally,
+            // AVPlayer for streamed URL sources); the Chromium host
+            // stubs the C ABI and reports honestly unsupported rather
+            // than half-implementing a second player.
             .audio_playback,
+            .audio_streaming,
             => self.web_engine == .system,
         };
     }
@@ -725,6 +732,7 @@ fn appkitCallback(context: ?*anyopaque, event: *const AppKitEvent) callconv(.c) 
             .position_ms = event.audio_position_ms,
             .duration_ms = event.audio_duration_ms,
             .playing = event.audio_playing != 0,
+            .buffering = event.audio_buffering != 0,
         } }),
         .widget_accessibility_action => if (widgetAccessibilityActionFromInt(event.widget_action)) |action| {
             state.emit(.{ .widget_accessibility_action = .{
@@ -1122,6 +1130,21 @@ fn audioLoad(context: ?*anyopaque, path: []const u8) anyerror!void {
         0 => {},
         1 => error.AudioSourceNotFound,
         else => error.AudioDecodeFailed,
+    };
+}
+
+/// Map the streaming host's synchronous result: 1 a verified cache
+/// entry is playing locally, 0 a progressive stream started (the
+/// `.loaded` acknowledgment follows when the item is ready), anything
+/// else the URL itself was unusable. Network failures after this point
+/// are asynchronous and arrive as `.audio`/`.failed` events.
+fn audioLoadUrl(context: ?*anyopaque, url: []const u8, cache_path: []const u8, expected_bytes: u64) anyerror!platform_mod.AudioLoadResolution {
+    const self: *MacPlatform = @ptrCast(@alignCast(context.?));
+    if (self.web_engine != .system) return error.UnsupportedService;
+    return switch (native_sdk_appkit_audio_load_url(self.host, url.ptr, url.len, cache_path.ptr, cache_path.len, expected_bytes)) {
+        0 => .stream,
+        1 => .cache,
+        else => error.InvalidAudioOptions,
     };
 }
 

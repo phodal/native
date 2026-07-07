@@ -314,7 +314,7 @@ pub const LinuxPlatform = struct {
             // popover-menu presenter yet (documented in the skill), and
             // wires no audio services — every audio call answers
             // `error.UnsupportedService` instead of pretending.
-            .gpu_surface_scroll_drivers, .context_menus, .view_surface_adoption, .audio_playback => false,
+            .gpu_surface_scroll_drivers, .context_menus, .view_surface_adoption, .audio_playback, .audio_streaming => false,
         };
     }
 

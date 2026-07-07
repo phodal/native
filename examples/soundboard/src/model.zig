@@ -11,12 +11,17 @@
 //! Playback is REAL audio through the runtime audio effect family:
 //! pressing play issues `fx.playAudio` for the track's file and every
 //! report — the load acknowledgment with the decoded duration, coarse
-//! position ticks, the one completion at natural end, failures — arrives
-//! as an `.audio_event` Msg through the ordinary update path. The audio
-//! files themselves are gitignored (the prepare script downloads them);
-//! a missing file surfaces as one `.failed` event and the model degrades
-//! to an honest "assets not prepared" notice — browsing the catalog
-//! never needs the mp3s.
+//! position ticks (with the stream's honest buffering flag), the one
+//! completion at natural end, failures — arrives as an `.audio_event`
+//! Msg through the ordinary update path. The audio files themselves are
+//! gitignored (the prepare script downloads them), and sources resolve
+//! in a fixed order: the prepared LOCAL file, then a verified CACHE
+//! entry, then a progressive STREAM from the catalog's URL base that
+//! fills the cache for next time. With no URL base configured a missing
+//! file surfaces as one `.failed` event and the model degrades to an
+//! honest "assets not prepared" notice; with one configured, a `.failed`
+//! means the stream itself died (offline with a cold cache) and the
+//! notice says so instead — browsing the catalog never needs the mp3s.
 //!
 //! Everything the views show that is computable — filtered lists,
 //! progress fractions, time labels — is derived per rebuild into the
@@ -41,9 +46,9 @@ pub const Effects = native_sdk.Effects(Msg);
 /// The manifest's shape, typed so the zon import is checked field by
 /// field at comptime — a drifted manifest is a compile error, not a
 /// runtime surprise.
-pub const ManifestTrack = struct { title: []const u8, file: []const u8, duration_ms: u32 };
+pub const ManifestTrack = struct { title: []const u8, file: []const u8, duration_ms: u32, bytes: u64 };
 pub const ManifestAlbum = struct { artist: []const u8, title: []const u8, year: u16, art: ?[]const u8, tracks: []const ManifestTrack };
-pub const Catalog = struct { version: u32, albums: []const ManifestAlbum };
+pub const Catalog = struct { version: u32, url_base: ?[]const u8, albums: []const ManifestAlbum };
 
 /// The committed catalog. Track `file` paths are relative to assets/;
 /// album `art` paths are relative to src/ (the committed covers).
@@ -78,9 +83,16 @@ pub const Track = struct {
     /// Playback path relative to the example root ("assets/" + the
     /// manifest's file), concatenated at comptime.
     path: []const u8,
+    /// The manifest's relative file path ("music/<album>/<track>.mp3"),
+    /// doubling as the track's URL path under the streaming base.
+    file: []const u8,
     /// The manifest's duration — the display value until the platform's
     /// `.loaded` acknowledgment reports the decoded one.
     duration_ms: u32,
+    /// The prepared file's exact byte size — the cache integrity gate
+    /// for streamed plays (a cache entry whose size disagrees never
+    /// plays; it is discarded and re-streamed).
+    bytes: u64,
 };
 
 /// First letters of the title's first two words, uppercased — the cover
@@ -141,7 +153,9 @@ pub const tracks = blk: {
                 .number = position + 1,
                 .title = track.title,
                 .path = "assets/" ++ track.file,
+                .file = track.file,
                 .duration_ms = track.duration_ms,
+                .bytes = track.bytes,
             };
             index += 1;
         }
@@ -185,6 +199,31 @@ pub const copy_key: u64 = 2;
 /// run — never a crash, never silence, and the catalog browses fine.
 pub const assets_missing_title = "music assets not prepared";
 pub const assets_missing_hint = "run tools/prepare-example-music.sh";
+
+/// The honest degraded state when a STREAM fails (a URL base is
+/// configured, the local file was absent, and the network let the
+/// playback down — offline with a cold cache, a dead host, a mid-flight
+/// drop). Distinct from the assets notice on purpose: the remedy is
+/// different.
+pub const stream_failed_title = "stream unavailable";
+pub const stream_failed_hint = "check the connection and try again";
+
+/// The artist line while a stream is stalled waiting for bytes — the
+/// honest state between "playing" and "paused" that only URL sources
+/// have.
+pub const buffering_hint = "buffering…";
+
+/// Streaming configuration bounds: the URL base (manifest `.url_base`,
+/// overridable with NATIVE_SDK_MUSIC_URL_BASE at launch) and the
+/// platform cache directory resolved in main. Longer values are
+/// REFUSED whole at set time, never truncated — a truncated URL would
+/// stream garbage politely.
+pub const max_url_base = 256;
+pub const max_cache_dir = 512;
+
+/// The manifest's committed streaming base ("" when null): the model
+/// default the env override replaces at launch.
+pub const manifest_url_base: []const u8 = catalog.url_base orelse "";
 
 // ------------------------------------------------------------------- model
 
@@ -252,9 +291,33 @@ pub const Model = struct {
     /// is the authority once it has actually opened the file).
     now_duration_ms: u32 = 0,
     /// A track's file failed to load (the gitignored audio assets are
-    /// not prepared, or the platform has no audio playback): playback is
-    /// cleared and the now-playing bar shows the prepare hint instead.
+    /// not prepared, no URL base is configured, or the platform has no
+    /// audio playback): playback is cleared and the now-playing bar
+    /// shows the prepare hint instead.
     assets_missing: bool = false,
+    /// A STREAM failed (a URL base is configured and the network let
+    /// the playback down): playback is cleared and the now-playing bar
+    /// shows the connection hint instead of the prepare hint.
+    stream_failed: bool = false,
+    /// The stream is stalled waiting for network bytes — mirrored from
+    /// the audio events' buffering flag so the bar can show the honest
+    /// third state between playing and paused. Local files never set it.
+    buffering: bool = false,
+    /// The streaming URL base: the manifest's committed value until
+    /// main overrides it from NATIVE_SDK_MUSIC_URL_BASE. Empty means
+    /// local-only playback (today's behavior, and the hermetic default).
+    url_base_buffer: [max_url_base]u8 = blk: {
+        var buffer: [max_url_base]u8 = @splat(0);
+        @memcpy(buffer[0..manifest_url_base.len], manifest_url_base);
+        break :blk buffer;
+    },
+    url_base_len: usize = manifest_url_base.len,
+    /// The platform caches directory for this app (app_dirs `.cache`),
+    /// resolved in main; the track cache lives in its audio/ child.
+    /// Empty (tests, resolution failure) disables the cache — streams
+    /// still play, they just never persist.
+    cache_dir_buffer: [max_cache_dir]u8 = @splat(0),
+    cache_dir_len: usize = 0,
     queue: [max_queue]u8 = @splat(0),
     queue_len: usize = 0,
     queue_dropped: u32 = 0,
@@ -273,6 +336,41 @@ pub const Model = struct {
 
     pub fn search(model: *const Model) []const u8 {
         return model.search_buffer.text();
+    }
+
+    pub fn urlBase(model: *const Model) []const u8 {
+        return model.url_base_buffer[0..model.url_base_len];
+    }
+
+    pub fn cacheDir(model: *const Model) []const u8 {
+        return model.cache_dir_buffer[0..model.cache_dir_len];
+    }
+
+    /// Whether tracks can stream on demand: a URL base is configured
+    /// (manifest or env). This is what turns the "assets not prepared"
+    /// story into "streams on demand".
+    pub fn streamingConfigured(model: *const Model) bool {
+        return model.url_base_len > 0;
+    }
+
+    /// Install the streaming base (launch-time: env override or the
+    /// manifest default). A trailing slash is trimmed so URL assembly
+    /// is uniform; an over-long value is refused whole — a truncated
+    /// base would stream garbage politely.
+    pub fn setUrlBase(model: *Model, base: []const u8) void {
+        const trimmed = std.mem.trimEnd(u8, base, "/");
+        if (trimmed.len > max_url_base) return;
+        @memcpy(model.url_base_buffer[0..trimmed.len], trimmed);
+        model.url_base_len = trimmed.len;
+    }
+
+    /// Install the platform cache directory (launch-time). Over-long
+    /// values are refused whole, leaving the cache disabled — honest
+    /// degrade, streams still play.
+    pub fn setCacheDir(model: *Model, dir: []const u8) void {
+        if (dir.len > max_cache_dir) return;
+        @memcpy(model.cache_dir_buffer[0..dir.len], dir);
+        model.cache_dir_len = dir.len;
     }
 
     pub fn searching(model: *const Model) bool {
@@ -341,14 +439,20 @@ pub const Model = struct {
     /// failure, so the user is told what to run instead of hearing
     /// nothing.
     pub fn nowPlayingTitle(model: *const Model) []const u8 {
+        if (model.stream_failed) return stream_failed_title;
         if (model.assets_missing) return assets_missing_title;
         const track = model.nowTrack() orelse return "Nothing playing";
         return track.title;
     }
 
     pub fn nowPlayingArtist(model: *const Model) []const u8 {
+        if (model.stream_failed) return stream_failed_hint;
         if (model.assets_missing) return assets_missing_hint;
         const track = model.nowTrack() orelse return "Pick an album or a song to start";
+        // The honest third state: a stalled stream is not paused, but
+        // nothing is coming out of the speakers either — say so where
+        // the artist normally reads.
+        if (model.buffering) return buffering_hint;
         return albumById(track.album).artist;
     }
 
@@ -601,20 +705,32 @@ fn handleAudioEvent(model: *Model, fx: *Effects, event: native_sdk.EffectAudio) 
             if (event.duration_ms > 0) model.now_duration_ms = @intCast(event.duration_ms);
             model.elapsed_ms = @intCast(event.position_ms);
             model.playing = event.playing;
+            model.buffering = event.buffering;
         },
         .position => {
             model.elapsed_ms = @intCast(event.position_ms);
             if (event.duration_ms > 0) model.now_duration_ms = @intCast(event.duration_ms);
+            // The stream's honest stall flag rides every tick; local
+            // files always report false.
+            model.buffering = event.buffering;
         },
         .completed => advance(model, fx),
         .failed, .rejected => {
-            // The file could not load — the gitignored assets are not
-            // prepared (or the host has no audio playback). Clear
-            // playback and surface the prepare hint; the catalog keeps
-            // browsing fine without any mp3s.
-            model.assets_missing = true;
+            // Playback could not run. With a URL base configured the
+            // local-file miss would have streamed, so a failure here
+            // means the NETWORK let the playback down (offline with a
+            // cold cache, a dead host, a mid-flight drop); without one
+            // it means the gitignored assets are not prepared (or the
+            // host has no audio playback). Two notices, two remedies —
+            // and the catalog keeps browsing fine either way.
+            if (model.streamingConfigured()) {
+                model.stream_failed = true;
+            } else {
+                model.assets_missing = true;
+            }
             model.now = null;
             model.playing = false;
+            model.buffering = false;
             model.elapsed_ms = 0;
             model.now_duration_ms = 0;
         },
@@ -630,15 +746,38 @@ fn startTrack(model: *Model, fx: *Effects, track_id: u8) void {
     // anywhere).
     model.elapsed_ms = 0;
     model.now_duration_ms = track.duration_ms;
-    // A fresh attempt clears the degraded notice; if the file is still
-    // missing the `.failed` event raises it again.
+    // A fresh attempt clears the degraded notices; if the source is
+    // still unplayable the `.failed` event raises the right one again.
     model.assets_missing = false;
+    model.stream_failed = false;
+    model.buffering = false;
     model.playing = true;
+    // The source cascade rides ONE playAudio call: the prepared local
+    // file first, then (URL base configured) the track's URL — where
+    // the platform plays a verified cache entry locally or streams
+    // progressively while filling the cache, keyed by the URL's hash
+    // under the platform caches directory. `expected_bytes` is the
+    // manifest's prepared size, the integrity gate that keeps partial
+    // or stale cache entries from ever playing. The strings are copied
+    // at call time, so stack buffers are fine here.
+    var url_buffer: [max_url_base + 512]u8 = undefined;
+    var url: []const u8 = "";
+    if (model.streamingConfigured()) {
+        url = std.fmt.bufPrint(&url_buffer, "{s}/{s}", .{ model.urlBase(), track.file }) catch "";
+    }
+    var cache_buffer: [max_cache_dir + 128]u8 = undefined;
+    var cache_path: []const u8 = "";
+    if (url.len > 0 and model.cacheDir().len > 0) {
+        cache_path = native_sdk.audioCachePath(&cache_buffer, model.cacheDir(), url) catch "";
+    }
     // One player total: a new playAudio replaces whatever played before,
     // and the track id keys every event back to this playback.
     fx.playAudio(.{
         .key = track_id,
         .path = track.path,
+        .url = url,
+        .cache_path = cache_path,
+        .expected_bytes = track.bytes,
         .on_event = Effects.audioMsg(.audio_event),
     });
 }

@@ -429,6 +429,85 @@ test "track end auto-advances; the play-next queue wins over album order" {
     try testing.expectEqual(@as(?u8, album_tracks[0].id), app_state.model.now);
 }
 
+test "streaming resolution order drives the VFD honestly: stream, buffer, cache" {
+    // The source cascade against the null platform's fake player with
+    // the REAL executor — the deck's version of the soundboard's
+    // resolution-order proof, told in the VFD's voice.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+    const fx = &app_state.effects;
+    const np = &live.harness.null_platform;
+    fx.executor = .real;
+    app_state.model.setUrlBase("https://music.example.test/pack");
+    app_state.model.setCacheDir("/tmp/fake-caches/deck");
+    np.audio_local_files = false;
+
+    // The shared assets are absent, a URL base is configured: the play
+    // streams on demand instead of failing.
+    try live.dispatch(.{ .play_track = first_track.id });
+    try testing.expectEqual(native_sdk.EffectAudioSource.stream, fx.audioSnapshot().source);
+    var url_buffer: [512]u8 = undefined;
+    const expected_url = try std.fmt.bufPrint(&url_buffer, "https://music.example.test/pack/{s}", .{first_track.file});
+    try testing.expectEqualStrings(expected_url, np.audio.path());
+
+    // A stalled stream stamps BUFFERING on the marquee — the honest
+    // third state between playing and paused.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.stallAudio().?);
+    try testing.expect(app_state.model.buffering);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const buffering_tree = try buildTree(arena, &app_state.model);
+    const marquee = findByLabel(buffering_tree.root, "Marquee").?;
+    try testing.expectEqualStrings(model_mod.buffering_marquee, marquee.text);
+
+    // Bytes flow again; completion installs the fake cache entry, the
+    // deck auto-advances (a fresh stream), and replaying the finished
+    // track resolves from cache — local playback, no network.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.takeAudioLoaded().?);
+    try testing.expect(!app_state.model.buffering);
+    const duration = np.audio.duration_ms;
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.advanceAudio(duration).?);
+    try testing.expect(app_state.model.now != null);
+    try testing.expect(app_state.model.now.? != first_track.id);
+    try live.dispatch(.{ .play_track = first_track.id });
+    try testing.expectEqual(native_sdk.EffectAudioSource.cache, fx.audioSnapshot().source);
+}
+
+test "a dead stream stamps STREAM LOST, not the prepare-script remedy" {
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+    const np = &live.harness.null_platform;
+    app_state.effects.executor = .real;
+    app_state.model.setUrlBase("https://music.example.test/pack");
+    app_state.model.setCacheDir("/tmp/fake-caches/deck");
+    np.audio_local_files = false;
+
+    try live.dispatch(.{ .play_track = first_track.id });
+    // Offline with a cold cache: the stream dies with one `.failed`
+    // event. With a URL base configured the prepare-script remedy
+    // would be a lie — the VFD names the network instead.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.failAudio().?);
+    try testing.expect(app_state.model.stream_failed);
+    try testing.expect(!app_state.model.media_failed);
+    try testing.expect(app_state.model.mediaFailed());
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const tree = try buildTree(arena, &app_state.model);
+    const marquee = findByLabel(tree.root, "Marquee").?;
+    try testing.expectEqualStrings(model_mod.stream_failed_marquee, marquee.text);
+    const channel = findByLabel(tree.root, "Channel").?;
+    try testing.expectEqualStrings(model_mod.stream_failed_remedy, channel.text);
+
+    // Pressing play again is the retry, exactly like NO MEDIA.
+    try live.dispatch(.{ .play_track = first_track.id });
+    try testing.expect(!app_state.model.mediaFailed());
+}
+
 test "a failed load clears the deck and stamps the NO MEDIA remedy on the VFD" {
     const live = try LiveApp.start(true);
     defer live.stop();

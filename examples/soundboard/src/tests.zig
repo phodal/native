@@ -396,6 +396,104 @@ test "a failed load lands the honest assets-not-prepared state" {
     try testing.expect(fx.pendingAudio() != null);
 }
 
+test "resolution order is honest: local file, then cache, then stream" {
+    // The full source cascade against the null platform's fake player —
+    // the same PlatformServices seam AVAudioPlayer/AVPlayer serve on
+    // macOS — with the REAL effects executor, so the effects layer's
+    // resolution (not a test stub) decides where the bytes come from.
+    const live = try LiveApp.start(false);
+    defer live.stop();
+    const app_state = live.app_state;
+    const fx = &app_state.effects;
+    const np = &live.harness.null_platform;
+    fx.executor = .real;
+    app_state.model.setUrlBase("https://music.example.test/pack/");
+    app_state.model.setCacheDir("/tmp/fake-caches/soundboard");
+    // 1. The prepared local file wins when it exists (the fake's
+    //    default): no URL is ever consulted.
+    try live.dispatch(.{ .play_track = 1 });
+    try testing.expectEqual(native_sdk.EffectAudioSource.local, fx.audioSnapshot().source);
+    try testing.expectEqual(@as(usize, 0), np.audio_load_url_count);
+
+    // 2. Local assets absent: the same gesture streams on demand (a
+    //    DIFFERENT track — playing the loaded one again is the
+    //    play/pause toggle). The URL is the base + the manifest's
+    //    relative file, and the effects channel reports the stream
+    //    honestly (buffering until bytes).
+    const track = model_mod.trackById(2);
+    np.audio_local_files = false;
+    try live.dispatch(.{ .play_track = track.id });
+    try testing.expectEqual(native_sdk.EffectAudioSource.stream, fx.audioSnapshot().source);
+    try testing.expect(fx.audioSnapshot().buffering);
+    var url_buffer: [512]u8 = undefined;
+    const expected_url = try std.fmt.bufPrint(&url_buffer, "https://music.example.test/pack/{s}", .{track.file});
+    try testing.expectEqualStrings(expected_url, np.audio.path());
+
+    // The now-playing bar shows the honest buffering state (distinct
+    // from playing) once an event reports it.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.stallAudio().?);
+    try testing.expect(app_state.model.buffering);
+    const buffering_layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    var saw_buffering = false;
+    for (buffering_layout.nodes) |node| {
+        if (std.mem.eql(u8, node.widget.text, model_mod.buffering_hint)) saw_buffering = true;
+    }
+    try testing.expect(saw_buffering);
+
+    // The loaded acknowledgment clears the stall; playback proceeds.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.takeAudioLoaded().?);
+    try testing.expect(!app_state.model.buffering);
+
+    // 3. Completion installs the cache entry (the fake analog of the
+    //    host's verify-then-rename). The completion auto-advances to
+    //    the album's next track (a fresh stream); playing the FINISHED
+    //    track again then resolves from cache — local playback, no
+    //    stream, no buffering.
+    const duration = np.audio.duration_ms;
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.advanceAudio(duration).?);
+    try testing.expect(app_state.model.now != null);
+    try testing.expect(app_state.model.now.? != track.id);
+    try live.dispatch(.{ .play_track = track.id });
+    try testing.expectEqual(native_sdk.EffectAudioSource.cache, fx.audioSnapshot().source);
+    try testing.expect(!fx.audioSnapshot().buffering);
+}
+
+test "offline with a cold cache lands the honest stream-failed state" {
+    const live = try LiveApp.start(false);
+    defer live.stop();
+    const app_state = live.app_state;
+    const np = &live.harness.null_platform;
+    app_state.effects.executor = .real;
+    app_state.model.setUrlBase("https://music.example.test/pack");
+    app_state.model.setCacheDir("/tmp/fake-caches/soundboard");
+    np.audio_local_files = false;
+
+    try live.dispatch(.{ .play_track = 1 });
+    // The stream dies (offline, dead host, mid-flight drop): one
+    // `.failed` event, and the notice names the NETWORK, not the
+    // prepare script — with a URL base configured the assets hint
+    // would be a lie.
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), np.failAudio().?);
+    try testing.expect(app_state.model.stream_failed);
+    try testing.expect(!app_state.model.assets_missing);
+    try testing.expectEqual(@as(?u8, null), app_state.model.now);
+
+    const layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    var saw_title = false;
+    var saw_hint = false;
+    for (layout.nodes) |node| {
+        if (std.mem.eql(u8, node.widget.text, model_mod.stream_failed_title)) saw_title = true;
+        if (std.mem.eql(u8, node.widget.text, model_mod.stream_failed_hint)) saw_hint = true;
+    }
+    try testing.expect(saw_title);
+    try testing.expect(saw_hint);
+
+    // A fresh play clears the notice optimistically, exactly like the
+    // assets notice.
+    try live.dispatch(.toggle_play);
+    try testing.expect(!app_state.model.stream_failed);
+}
+
 test "copy title spawns pbcopy with the track title on stdin" {
     const live = try LiveApp.start(true);
     defer live.stop();

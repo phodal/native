@@ -114,6 +114,13 @@ pub const PlatformFeature = enum {
     /// answer `error.UnsupportedService` today — named unsupported, not
     /// half-implemented.
     audio_playback,
+    /// URL audio sources on the same single player (macOS: AVPlayer in
+    /// the AppKit host): progressive streaming that starts before the
+    /// download finishes, plus a byte-verified local cache fill so the
+    /// next play of the same URL is local. Hosts with `audio_playback`
+    /// but no streaming path answer `error.UnsupportedService` from
+    /// `audioLoadUrl` — named unsupported, not half-implemented.
+    audio_streaming,
 };
 
 pub const WebViewSourceKind = enum {
@@ -1168,11 +1175,26 @@ pub const AudioEventKind = enum(u8) {
 
 /// One report from the platform audio player. Positions and durations are
 /// in milliseconds; `playing` is the player's honest state at emit time.
+/// `buffering` is true while a streamed source is stalled waiting for
+/// network bytes — distinct from `playing`, which reports the transport
+/// intent; a stream can be "playing" (not paused) yet buffering (silent
+/// until bytes arrive). Local-file playback never buffers.
 pub const AudioEvent = struct {
     kind: AudioEventKind,
     position_ms: u64 = 0,
     duration_ms: u64 = 0,
     playing: bool = false,
+    buffering: bool = false,
+};
+
+/// How `audioLoadUrl` resolved a URL source. `.cache` means a verified
+/// local cache entry existed and plays as a plain local file — no
+/// network is touched; `.stream` means playback streams progressively
+/// from the network (starting as soon as enough bytes arrive) while the
+/// same bytes are downloaded into the cache for the next play.
+pub const AudioLoadResolution = enum(u8) {
+    cache,
+    stream,
 };
 
 pub const FileDropEvent = struct {
@@ -1853,6 +1875,20 @@ pub const PlatformServices = struct {
     /// would be mixer design this layer has not earned. Loop-thread only,
     /// like every audio entry below.
     audio_load_fn: ?*const fn (context: ?*anyopaque, path: []const u8) anyerror!void = null,
+    /// Load a URL audio source into the same single player. The platform
+    /// resolves it honestly in two steps: a verified cache entry at
+    /// `cache_path` (present AND `expected_bytes` matches when non-zero —
+    /// a partial or stale entry never plays; it is discarded and
+    /// re-streamed) answers `.cache` and plays as a plain local file;
+    /// otherwise playback STREAMS progressively from the network —
+    /// starting as soon as enough bytes arrive, never download-then-play
+    /// — while the same bytes download into `cache_path` (written beside
+    /// it and atomically renamed into place only after the size verifies)
+    /// and the call answers `.stream`. An empty `cache_path` disables
+    /// caching (stream only). The `.loaded` acknowledgment, `buffering`
+    /// flags on position ticks, completion, and mid-stream network
+    /// failures (`.failed`) all arrive as ordinary `.audio` events.
+    audio_load_url_fn: ?*const fn (context: ?*anyopaque, url: []const u8, cache_path: []const u8, expected_bytes: u64) anyerror!AudioLoadResolution = null,
     /// Start or resume the loaded player. While playing the platform
     /// emits `.audio`/`.position` events at a coarse honest cadence
     /// (about every 500ms — position is a readout, not a frame clock)
@@ -2283,6 +2319,20 @@ pub const PlatformServices = struct {
         return load_fn(self.context, path);
     }
 
+    /// Load a URL audio source into the app's single audio player,
+    /// resolving cache-vs-stream honestly (see `audio_load_url_fn`).
+    /// Platforms without a streaming path answer
+    /// `error.UnsupportedService`; bad arguments are rejected here
+    /// before the platform is asked. URLs and cache paths share the
+    /// local-path length bound — both travel the same fixed buffers.
+    pub fn audioLoadUrl(self: PlatformServices, url: []const u8, cache_path: []const u8, expected_bytes: u64) anyerror!AudioLoadResolution {
+        if (url.len == 0) return error.InvalidAudioOptions;
+        if (url.len > max_audio_path_bytes) return error.AudioPathTooLarge;
+        if (cache_path.len > max_audio_path_bytes) return error.AudioPathTooLarge;
+        const load_fn = self.audio_load_url_fn orelse return error.UnsupportedService;
+        return load_fn(self.context, url, cache_path, expected_bytes);
+    }
+
     pub fn audioPlay(self: PlatformServices) anyerror!void {
         const play_fn = self.audio_play_fn orelse return error.UnsupportedService;
         return play_fn(self.context);
@@ -2441,6 +2491,7 @@ fn defaultSupportsFeature(services: PlatformServices, feature: PlatformFeature) 
         .context_menus => services.show_context_menu_fn != null,
         .view_surface_adoption => services.adopt_view_surface_fn != null,
         .audio_playback => services.audio_load_fn != null,
+        .audio_streaming => services.audio_load_url_fn != null,
     };
 }
 

@@ -928,7 +928,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                     .file => try self.effects.feedFileResult(record.key, record.file_outcome, record.payload),
                     .clipboard => try self.effects.feedClipboardResult(record.key, record.clipboard_outcome, record.payload),
                     .clock => try self.effects.pushReplayClock(record.clock_wall_ms),
-                    .audio => try self.effects.feedAudioEvent(record.audio_kind, record.audio_position_ms, record.audio_duration_ms, record.audio_playing),
+                    .audio => try self.effects.feedAudioEventBuffering(record.audio_kind, record.audio_position_ms, record.audio_duration_ms, record.audio_playing, record.audio_buffering),
                     .timer => {},
                 },
             }
@@ -1002,6 +1002,8 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             runtime.audio_active = audio.active;
             runtime.audio_key = audio.key;
             runtime.audio_playing = audio.playing;
+            runtime.audio_buffering = audio.buffering;
+            runtime.audio_source = audio.source;
             runtime.audio_position_ms = audio.position_ms;
             runtime.audio_duration_ms = audio.duration_ms;
         }

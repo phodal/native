@@ -317,7 +317,7 @@ pub const WindowsPlatform = struct {
             // (TrackPopupMenu is the natural future context-menu seam —
             // the tray already uses it) and wires no audio services, so
             // every audio call answers `error.UnsupportedService`.
-            .gpu_surface_scroll_drivers, .context_menus, .view_surface_adoption, .audio_playback => false,
+            .gpu_surface_scroll_drivers, .context_menus, .view_surface_adoption, .audio_playback, .audio_streaming => false,
         };
     }
 

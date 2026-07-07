@@ -148,9 +148,11 @@ fn vfdPanel(ui: *Ui, model: *const Model) Ui.Node {
                 }),
                 if (model.mediaFailed())
                     // The remedy at the tighter caption pitch, so the full
-                    // script name fits the VFD's text column.
+                    // script name fits the VFD's text column. Which remedy
+                    // depends on which failure: prepare the assets, or
+                    // check the network.
                     ui.paragraph(.{ .semantics = .{ .label = "Channel" } }, &.{
-                        .{ .text = model_mod.no_media_remedy, .monospace = true, .color = .warning, .scale = caption_scale },
+                        .{ .text = model.remedyText(), .monospace = true, .color = .warning, .scale = caption_scale },
                     })
                 else
                     ui.paragraph(.{ .semantics = .{ .label = "Channel" } }, &.{

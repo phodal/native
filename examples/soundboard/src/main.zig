@@ -222,9 +222,28 @@ fn findByLabel(widget: canvas.Widget, label: []const u8) ?canvas.Widget {
 
 pub fn main(init: std.process.Init) !void {
     registerIcons();
+    // Streaming configuration, resolved once at launch: the env URL
+    // base overrides the manifest's committed one (so a locally served
+    // pack needs no re-prepare), and the platform caches directory
+    // (~/Library/Caches/soundboard on macOS, XDG cache on Linux) hosts
+    // the track cache in its audio/ child — delete that directory to
+    // clear the cache. Both land in the INITIAL model, so replay's
+    // deterministic-init contract holds: no env read ever happens
+    // inside update.
+    var model: Model = .{};
+    if (init.environ_map.get("NATIVE_SDK_MUSIC_URL_BASE")) |base| model.setUrlBase(base);
+    var cache_dir_buffer: [model_mod.max_cache_dir]u8 = undefined;
+    const cache_dir = native_sdk.app_dirs.resolveOne(
+        .{ .name = "soundboard" },
+        native_sdk.app_dirs.currentPlatform(),
+        native_sdk.debug.envFromMap(init.environ_map),
+        .cache,
+        &cache_dir_buffer,
+    ) catch "";
+    model.setCacheDir(cache_dir);
     const app_state = try std.heap.page_allocator.create(SoundboardApp);
     defer std.heap.page_allocator.destroy(app_state);
-    app_state.* = SoundboardApp.init(std.heap.page_allocator, .{}, soundboardOptions());
+    app_state.* = SoundboardApp.init(std.heap.page_allocator, model, soundboardOptions());
     defer app_state.deinit();
     try runner.runWithOptions(app_state.app(), .{
         .app_name = "soundboard",

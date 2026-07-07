@@ -95,6 +95,8 @@ pub const max_effect_timers = runtime_effects.max_effect_timers;
 pub const effect_timer_platform_id_base = runtime_effects.effect_timer_platform_id_base;
 pub const EffectAudio = runtime_effects.EffectAudio;
 pub const EffectAudioEventKind = runtime_effects.EffectAudioEventKind;
+pub const EffectAudioSource = runtime_effects.EffectAudioSource;
+pub const audioCachePath = runtime_effects.audioCachePath;
 pub const max_effect_audio_path_bytes = runtime_effects.max_effect_audio_path_bytes;
 
 const runtime_session_journal = @import("session_journal.zig");

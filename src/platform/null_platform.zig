@@ -183,12 +183,26 @@ pub const NullAudioDuration = struct {
 /// Every loaded path without a table entry reports this duration.
 pub const default_null_audio_duration_ms: u64 = 120_000;
 
+/// How many distinct URLs the fake track cache remembers. Enough for
+/// resolution-order suites; a real host's cache is the filesystem.
+pub const max_null_audio_cached_urls: usize = 8;
+
 /// The fake audio player's whole state: what a deterministic host would
 /// know. Position never advances on its own — tests move it explicitly
 /// with `advanceAudio`, mirroring how `fireTimer` drives timers.
+/// `streaming` is true while the loaded source is a URL being streamed
+/// (not a local file and not a fake-cache hit) — completing a streamed
+/// track flips its URL into the fake cache, so the next `audioLoadUrl`
+/// of the same URL resolves `.cache` deterministically.
 pub const NullAudio = struct {
     loaded: bool = false,
     playing: bool = false,
+    streaming: bool = false,
+    /// This streamed playback is filling the fake cache: its URL joins
+    /// `audio_cached_url_hashes` when it runs to completion (the real
+    /// host's atomic install at download end). Stream-only playbacks
+    /// (empty cache path) never join.
+    cache_fill: bool = false,
     position_ms: u64 = 0,
     duration_ms: u64 = 0,
     volume: f32 = 1.0,
@@ -406,6 +420,19 @@ pub const NullPlatform = struct {
     /// player-less host set it false, which nulls the services AND the
     /// feature report — the same shape as GTK/Win32 today.
     audio_playback: bool = true,
+    /// Whether this modeled host can stream URL audio sources. On by
+    /// default (paired with `audio_playback`, standing in for AVPlayer);
+    /// off models a host with a local player but no streaming path —
+    /// `audioLoadUrl` is absent and URL playback degrades to one loud
+    /// `.failed` Msg, the same explicit degrade GTK/Win32 ship.
+    audio_streaming: bool = true,
+    /// Whether the modeled filesystem holds the local audio files apps
+    /// name in `audioLoad`. On by default (loads succeed hermetically);
+    /// off models the gitignored-assets-absent machine: every local load
+    /// answers `error.AudioSourceNotFound`, which is exactly what makes
+    /// the effects layer fall through to a URL source — the
+    /// resolution-order suites pivot on this flag.
+    audio_local_files: bool = true,
     /// The deterministic fake audio player: services mutate it, tests
     /// read it and synthesize the events a live host would deliver
     /// (`takeAudioLoaded`, `advanceAudio`).
@@ -415,7 +442,14 @@ pub const NullPlatform = struct {
     audio_loaded_pending: bool = false,
     audio_durations: [max_null_audio_durations]NullAudioDuration = [_]NullAudioDuration{.{}} ** max_null_audio_durations,
     audio_duration_count: usize = 0,
+    /// The fake track cache: hashes of URLs whose streamed playback ran
+    /// to completion. `audioLoadUrl` answers `.cache` for these — the
+    /// deterministic stand-in for a verified on-disk cache entry, so the
+    /// "second play is local" story tests hermetically.
+    audio_cached_url_hashes: [max_null_audio_cached_urls]u64 = @splat(0),
+    audio_cached_url_count: usize = 0,
     audio_load_count: usize = 0,
+    audio_load_url_count: usize = 0,
     audio_play_count: usize = 0,
     audio_pause_count: usize = 0,
     audio_stop_count: usize = 0,
@@ -539,6 +573,7 @@ pub const NullPlatform = struct {
                 .start_timer_fn = startTimer,
                 .cancel_timer_fn = cancelTimer,
                 .audio_load_fn = if (self.audio_playback) audioLoad else null,
+                .audio_load_url_fn = if (self.audio_playback and self.audio_streaming) audioLoadUrl else null,
                 .audio_play_fn = if (self.audio_playback) audioPlay else null,
                 .audio_pause_fn = if (self.audio_playback) audioPause else null,
                 .audio_stop_fn = if (self.audio_playback) audioStop else null,
@@ -589,6 +624,7 @@ pub const NullPlatform = struct {
             // lie the first adopt call exposes.
             .view_surface_adoption => false,
             .audio_playback => self.audio_playback,
+            .audio_streaming => self.audio_playback and self.audio_streaming,
         };
     }
 
@@ -1163,13 +1199,44 @@ pub const NullPlatform = struct {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         self.audio_load_count += 1;
         if (path.len > self.audio.path_storage.len) return error.AudioPathTooLarge;
+        // Model the assets-absent machine: the local file is not there,
+        // exactly the synchronous refusal a real host's open gives.
+        if (!self.audio_local_files) return error.AudioSourceNotFound;
         @memcpy(self.audio.path_storage[0..path.len], path);
         self.audio.path_len = path.len;
         self.audio.loaded = true;
         self.audio.playing = false;
+        self.audio.streaming = false;
         self.audio.position_ms = 0;
         self.audio.duration_ms = self.audioDurationFor(path);
         self.audio_loaded_pending = true;
+    }
+
+    /// URL sources, deterministically: a URL whose streamed playback has
+    /// completed before answers `.cache` (the fake stand-in for a
+    /// verified on-disk entry — no network, plays as a local file);
+    /// anything else "streams" (`.stream`) and joins the fake cache when
+    /// `advanceAudio` runs it to completion. `cache_path` gates caching
+    /// like the real seam: empty means stream-only, never cached.
+    /// Durations come from the same suffix table local loads use — URLs
+    /// end in the same track file names.
+    fn audioLoadUrl(context: ?*anyopaque, url: []const u8, cache_path: []const u8, expected_bytes: u64) anyerror!types.AudioLoadResolution {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        _ = expected_bytes;
+        self.audio_load_url_count += 1;
+        if (url.len > self.audio.path_storage.len) return error.AudioPathTooLarge;
+        const caching = cache_path.len > 0;
+        const cached = caching and self.audioUrlCached(url);
+        @memcpy(self.audio.path_storage[0..url.len], url);
+        self.audio.path_len = url.len;
+        self.audio.loaded = true;
+        self.audio.playing = false;
+        self.audio.streaming = !cached;
+        self.audio.cache_fill = caching and !cached;
+        self.audio.position_ms = 0;
+        self.audio.duration_ms = self.audioDurationFor(url);
+        self.audio_loaded_pending = true;
+        return if (cached) .cache else .stream;
     }
 
     fn audioPlay(context: ?*anyopaque) anyerror!void {
@@ -1203,6 +1270,29 @@ pub const NullPlatform = struct {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         self.audio_volume_count += 1;
         self.audio.volume = volume;
+    }
+
+    fn audioUrlHash(url: []const u8) u64 {
+        return std.hash.Wyhash.hash(0, url);
+    }
+
+    fn audioUrlCached(self: *const NullPlatform, url: []const u8) bool {
+        const hash = audioUrlHash(url);
+        for (self.audio_cached_url_hashes[0..self.audio_cached_url_count]) |cached| {
+            if (cached == hash) return true;
+        }
+        return false;
+    }
+
+    /// Flip a completed stream's URL into the fake cache — the
+    /// deterministic analog of the host's verify-then-rename install. A
+    /// full table drops the entry (the next play streams again), which
+    /// is also an honest cache behavior.
+    fn audioRecordCached(self: *NullPlatform, url: []const u8) void {
+        if (self.audioUrlCached(url)) return;
+        if (self.audio_cached_url_count >= max_null_audio_cached_urls) return;
+        self.audio_cached_url_hashes[self.audio_cached_url_count] = audioUrlHash(url);
+        self.audio_cached_url_count += 1;
     }
 
     fn audioDurationFor(self: *const NullPlatform, path: []const u8) u64 {
@@ -1254,6 +1344,12 @@ pub const NullPlatform = struct {
         if (self.audio.position_ms >= self.audio.duration_ms) {
             self.audio.playing = false;
             self.audio.position_ms = self.audio.duration_ms;
+            // A cache-filling stream that ran to completion installs its
+            // cache entry — the next `audioLoadUrl` of this URL answers
+            // `.cache`, deterministically modeling "faster next time".
+            if (self.audio.streaming and self.audio.cache_fill) {
+                self.audioRecordCached(self.audio.path());
+            }
             return .{ .audio = .{
                 .kind = .completed,
                 .position_ms = self.audio.position_ms,
@@ -1266,6 +1362,22 @@ pub const NullPlatform = struct {
             .position_ms = self.audio.position_ms,
             .duration_ms = self.audio.duration_ms,
             .playing = true,
+        } };
+    }
+
+    /// Test helper: synthesize a mid-stream stall — the `.position`
+    /// event a live host's tick delivers while the stream waits for
+    /// network bytes (`buffering = true`, position held). Only a
+    /// streaming playback can stall; local files and cache hits never
+    /// buffer, so anything else answers null.
+    pub fn stallAudio(self: *NullPlatform) ?Event {
+        if (!self.audio.loaded or !self.audio.playing or !self.audio.streaming) return null;
+        return .{ .audio = .{
+            .kind = .position,
+            .position_ms = self.audio.position_ms,
+            .duration_ms = self.audio.duration_ms,
+            .playing = true,
+            .buffering = true,
         } };
     }
 

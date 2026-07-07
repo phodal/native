@@ -38,6 +38,7 @@ const bridge = @import("../bridge/root.zig");
 const extensions = @import("../extensions/root.zig");
 const app_manifest = @import("app_manifest");
 const platform = @import("../platform/root.zig");
+const runtime_effects = @import("effects.zig");
 const security = @import("../security/root.zig");
 
 const max_async_bridge_responses = runtime_async_bridge.max_async_bridge_responses;
@@ -197,6 +198,15 @@ pub const Runtime = struct {
     audio_active: bool = false,
     audio_key: u64 = 0,
     audio_playing: bool = false,
+    /// A streamed source is stalled waiting for network bytes —
+    /// snapshot-visible so automation can pin the honest buffering
+    /// state apart from playing (a stream is silent while buffering
+    /// even though the transport is not paused).
+    audio_buffering: bool = false,
+    /// Where the playback's bytes come from — the resolved end of the
+    /// `playAudio` source cascade (local file, verified cache entry,
+    /// network stream).
+    audio_source: runtime_effects.EffectAudioSource = .local,
     audio_position_ms: u64 = 0,
     audio_duration_ms: u64 = 0,
     shell_layouts: [platform.max_windows]RuntimeShellLayout = undefined,

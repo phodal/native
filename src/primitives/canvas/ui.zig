@@ -2584,10 +2584,10 @@ fn findWidgetIn(widget: Widget, id: ObjectId) ?Widget {
 }
 
 fn isTextEntryWidget(widget: Widget) bool {
-    return switch (widget.kind) {
-        .input, .text_field, .search_field, .combobox, .textarea => true,
-        else => false,
-    };
+    // The one text-entry kind set, shared with the ui-app key-fallback
+    // gate (`canvas.isWidgetTextEntry`) — one definition is what makes
+    // the "typing must stay typing" rule structural instead of assumed.
+    return canvas.isWidgetTextEntry(widget);
 }
 
 fn isSubmitKeyboard(widget: Widget, keyboard: canvas.WidgetKeyboardEvent) bool {

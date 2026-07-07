@@ -321,6 +321,34 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             if (widget_keyboard_event) |keyboard_event| {
                 try CanvasWidgetEventMethods().dispatchCanvasWidgetCommandFromKeyboard(self, app, keyboard_event);
                 try self.dispatchEvent(app, .{ .canvas_widget_keyboard = keyboard_event });
+            } else if (input_event.kind == .key_down and !widget_surface_dismissed) {
+                // No focused widget routed this key_down (nothing is
+                // focused, or the focused id is gone from the tree): the
+                // key still reaches the app, as a TARGET-LESS keyboard
+                // event. This is the app-level key-fallback seam — the
+                // honest home for unmodified media keys (a bare-space
+                // transport toggle), which chrome shortcuts deliberately
+                // refuse (`validateShortcut` demands a modifier so global
+                // registration can never steal typing). The ui-app layer
+                // maps it through `Options.on_key`; with a target present
+                // the routed event above carries the same fallback duty
+                // once widget dispatch declines the key. A key that just
+                // dismissed a surface was consumed by the dismissal and
+                // never falls through.
+                if (runtimeFindViewIndex(self, input_event.window_id, input_event.label)) |index| {
+                    if (self.views[index].kind == .gpu_surface and self.views[index].focused) {
+                        try self.dispatchEvent(app, .{ .canvas_widget_keyboard = .{
+                            .window_id = input_event.window_id,
+                            .view_label = self.views[index].label,
+                            .keyboard = .{
+                                .phase = .key_down,
+                                .key = input_event.key,
+                                .text = input_event.text,
+                                .modifiers = canvas_frame_helpers.canvasWidgetKeyboardModifiers(input_event.modifiers),
+                            },
+                        } });
+                    }
+                }
             }
             if (widget_text_input_event) |text_input_event| {
                 try self.dispatchEvent(app, .{ .canvas_widget_keyboard = text_input_event });

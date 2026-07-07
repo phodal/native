@@ -564,6 +564,7 @@ pub const semanticActions = event_model.semanticActions;
 pub const widgetSemanticControlIntent = event_model.widgetSemanticControlIntent;
 pub const widgetSemanticControlIntentWithActions = event_model.widgetSemanticControlIntentWithActions;
 pub const isWidgetActivationKey = event_model.isWidgetActivationKey;
+pub const isWidgetTextEntry = event_model.isWidgetTextEntry;
 pub const isWidgetMenuOpenArrowKey = event_model.isWidgetMenuOpenArrowKey;
 pub const widgetSliderKeyboardValue = event_model.widgetSliderKeyboardValue;
 pub const widgetScrollKeyboardIntent = event_model.widgetScrollKeyboardIntent;

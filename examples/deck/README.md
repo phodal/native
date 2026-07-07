@@ -74,6 +74,8 @@ Playback is real, but the analyzer is not an FFT — it visualizes the *playback
 
 Registered app shortcuts (`app.zon`, delivered as command events): `primary+P` play/pause, `primary+←`/`primary+→` previous/next, `primary+L` toggle the playlist window, `Escape` clears the search. The seek fader takes arrow-key steps when focused (the widget keyboard path).
 
+`Space` toggles play/pause from anywhere — the media-app convention, carried by the app-level key fallback (`on_key`) rather than a chrome shortcut (unmodified space cannot be one, by design). A focused widget always wins first: a focused transport key presses itself, and a focused search field keeps typing spaces (`primary+P` is the works-while-typing chord).
+
 ## Fixed capacities
 
 - The committed manifest's albums and tracks (comptime-derived tables; per-album counts VARY — the model derives `track_start`/`track_count` per album and never assumes a stride).

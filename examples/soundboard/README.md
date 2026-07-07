@@ -40,6 +40,8 @@ native dev
 
 Right/ctrl-click a track row for the native context menu; Copy Title pipes the title through `pbcopy`. The theme follows the system appearance live — flip the OS to dark and the studio palette follows.
 
+`Space` toggles play/pause from anywhere — the media-app convention, carried by the app-level key fallback (`on_key`). A focused widget always wins first: space on a focused track row plays that row, a focused tab segment switches tabs, and a focused search field keeps typing spaces (the text-entry exception is structural, by widget kind).
+
 Run the deterministic suite (dispatch and playback through the fake effects executor, the cover decode/register/draw path, theming, markup engine parity, layout budgets — hermetic, no audio files needed):
 
 ```sh

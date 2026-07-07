@@ -456,6 +456,20 @@ pub fn isWidgetActivationKey(key: []const u8) bool {
     return std.ascii.eqlIgnoreCase(key, "space") or std.ascii.eqlIgnoreCase(key, "enter");
 }
 
+/// The editable text-entry widget kinds: a focused one of these owns
+/// typing outright. Key routing treats the set STRUCTURALLY — a focused
+/// text entry consumes character keys whether or not the app bound
+/// `on_input`, so an app-level key fallback (a bare-space transport
+/// toggle, single-letter accelerators) can never fire while the user is
+/// typing. One definition serves the typed-dispatch path (`Ui.Tree`)
+/// and the ui-app fallback gate.
+pub fn isWidgetTextEntry(widget: Widget) bool {
+    return switch (widget.kind) {
+        .input, .text_field, .search_field, .combobox, .textarea => true,
+        else => false,
+    };
+}
+
 /// The arrow keys that open a closed select/combobox trigger's picker
 /// (and, once it is mounted, walk into it).
 pub fn isWidgetMenuOpenArrowKey(key: []const u8) bool {

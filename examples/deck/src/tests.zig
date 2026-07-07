@@ -193,6 +193,19 @@ const LiveApp = struct {
         try self.harness.runtime.dispatchAutomationCommand(self.app_state.app(), line);
     }
 
+    /// One raw key_down through the REAL gpu input path on a chosen
+    /// window/view — the same event a physical key press produces (key
+    /// name plus the inserted text, when the key types one).
+    fn keyDown(self: LiveApp, window_id: u64, canvas_label: []const u8, name: []const u8, text: []const u8) !void {
+        try self.harness.runtime.dispatchPlatformEvent(self.app_state.app(), .{ .gpu_surface_input = .{
+            .window_id = window_id,
+            .label = canvas_label,
+            .kind = .key_down,
+            .key = name,
+            .text = text,
+        } });
+    }
+
     /// The pointer path for widgets that are pressable but not focus
     /// targets (the ledger's panel rows).
     fn widgetClick(self: LiveApp, canvas_label: []const u8, id: canvas.ObjectId) !void {
@@ -1052,6 +1065,51 @@ test "automation click-through: the transport drives the deck" {
     // Pause through the play key again.
     try live.widgetAction(main.canvas_label, try live.widgetIdByLabel(main.canvas_label, 1, .button, "Play or pause"), "press");
     try testing.expect(!app_state.model.playing);
+}
+
+test "space is the app-wide transport key; focused widgets outrank it" {
+    // The media-app convention through the raw key path (the exact gpu
+    // input a physical spacebar produces), both windows. Precedence:
+    //   1. a focused interactive widget consumes space for its OWN
+    //      activation (a focused transport key presses itself);
+    //   2. a focused editable field keeps typing — structural, by
+    //      widget kind (the playlist's search field, unnamed here);
+    //   3. otherwise space falls through to the app-level toggle —
+    //      `primary+P` stays the works-while-typing chord.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+
+    // (3) From idle with NOTHING focused: space starts the catalog's
+    // first track through the fallback, then pauses it in place.
+    try live.keyDown(1, main.canvas_label, "space", " ");
+    try testing.expect(app_state.model.playing);
+    try testing.expectEqual(@as(?u8, first_track.id), app_state.model.now);
+    try live.keyDown(1, main.canvas_label, "space", " ");
+    try testing.expect(!app_state.model.playing);
+
+    // (1) Focus the Next-track key: space presses THAT key — the deck
+    // advances instead of resuming, so the widget outranked the toggle.
+    const album_tracks = model_mod.albumTracks(first_track.album);
+    const next_id = try live.widgetIdByLabel(main.canvas_label, 1, .button, "Next track");
+    try live.widgetAction(main.canvas_label, next_id, "focus");
+    try live.keyDown(1, main.canvas_label, "space", " ");
+    try testing.expectEqual(@as(?u8, album_tracks[1].id), app_state.model.now);
+
+    // (2) Open the playlist rack and focus its search field: a space
+    // keystroke is TYPING — the character lands in the query and the
+    // transport does not move. Structural by widget kind: no per-field
+    // wiring exists in the app for this.
+    try live.dispatch(.toggle_playlist);
+    const info = live.playlistWindowInfo() orelse return error.TestUnexpectedResult;
+    try live.installPlaylistCanvas(info.id, 2);
+    const playing_before = app_state.model.playing;
+    const field_id = try live.widgetIdByLabel(main.playlist_canvas_label, info.id, .search_field, "Search library");
+    try live.widgetAction(main.playlist_canvas_label, field_id, "focus");
+    try live.keyDown(info.id, main.playlist_canvas_label, "space", " ");
+    try testing.expectEqualStrings(" ", app_state.model.search());
+    try testing.expectEqual(playing_before, app_state.model.playing);
+    try testing.expectEqual(@as(?u8, album_tracks[1].id), app_state.model.now);
 }
 
 test "the chrome pass holds its exact command counts across model states" {

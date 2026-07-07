@@ -130,9 +130,27 @@ pub fn soundboardOptions() SoundboardApp.Options {
         .tokens_fn = tokensFromModel,
         .on_appearance = onAppearance,
         .on_chrome = onChrome,
+        .on_key = onKey,
         .animations = animations,
         .sync = sync,
     };
+}
+
+/// The media-app space convention: SPACE toggles the transport from
+/// anywhere in the app. This is the app-level key FALLBACK (`on_key`),
+/// so the framework's precedence rule applies before it ever fires:
+/// a focused track row consumes space to play THAT row, a focused
+/// button activates itself, and a focused editable field keeps typing
+/// spaces — the text-entry exception is structural (checked by widget
+/// kind in the runtime), so the header's search field today and any
+/// future text field block the toggle without this function knowing
+/// they exist. Everything else — header chrome, an empty grid, the
+/// seek slider, plain scroll focus, or no focus at all — falls through
+/// here and toggles play/pause.
+pub fn onKey(keyboard: canvas.WidgetKeyboardEvent) ?Msg {
+    if (keyboard.modifiers.hasNavigationModifier() or keyboard.modifiers.shift) return null;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "space")) return .toggle_play;
+    return null;
 }
 
 /// Chrome overlay geometry flows into the model (tall hidden-inset

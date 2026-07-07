@@ -119,6 +119,40 @@ const LiveApp = struct {
     fn wake(self: LiveApp) !void {
         try self.harness.runtime.dispatchPlatformEvent(self.app_state.app(), .wake);
     }
+
+    /// One raw key_down through the REAL gpu input path — the same event
+    /// a physical key press produces (key name plus the inserted text,
+    /// when the key types one).
+    fn keyDown(self: LiveApp, name: []const u8, text: []const u8) !void {
+        try self.harness.runtime.dispatchPlatformEvent(self.app_state.app(), .{ .gpu_surface_input = .{
+            .label = main.canvas_label,
+            .kind = .key_down,
+            .key = name,
+            .text = text,
+        } });
+    }
+
+    /// Resolve a live widget id by kind plus semantics label (falling
+    /// back to the widget's text when the label is empty, the way tab
+    /// segments carry only text). Ids can change across rebuilds:
+    /// re-resolve after each dispatch.
+    fn widgetIdByLabel(self: LiveApp, kind: canvas.WidgetKind, label: []const u8) !canvas.ObjectId {
+        const layout = try self.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+        for (layout.nodes) |node| {
+            if (node.widget.kind != kind) continue;
+            if (std.mem.eql(u8, node.widget.semantics.label, label)) return node.widget.id;
+            if (node.widget.semantics.label.len == 0 and std.mem.eql(u8, node.widget.text, label)) return node.widget.id;
+        }
+        return error.WidgetNotFound;
+    }
+
+    /// Move keyboard focus onto a widget through the automation verb —
+    /// what `native automate widget-action <view> <id> focus` does.
+    fn focusWidget(self: LiveApp, id: canvas.ObjectId) !void {
+        var command_buffer: [96]u8 = undefined;
+        const line = try std.fmt.bufPrint(&command_buffer, "widget-action {s} {d} focus", .{ main.canvas_label, id });
+        try self.harness.runtime.dispatchAutomationCommand(self.app_state.app(), line);
+    }
 };
 
 // ------------------------------------------------------------------ tests
@@ -341,6 +375,72 @@ test "the seek bar's rendered value advances with position events" {
         const expected_fraction = @as(f32, @floatFromInt(position_ms)) / duration;
         try testing.expectApproxEqAbs(expected_fraction, slider_value.?, 0.0001);
     }
+}
+
+test "space is the app-wide transport key; focused widgets outrank it" {
+    // The media-app convention, pinned end-to-end through the raw key
+    // path (the exact gpu input events a physical spacebar produces).
+    // The precedence rule under test, in order:
+    //   1. a focused interactive widget consumes space for its OWN
+    //      activation (a focused track row plays that row, a focused
+    //      tab segment switches tabs);
+    //   2. a focused editable field keeps typing — structural, by
+    //      widget kind, so any future text field inherits it;
+    //   3. otherwise — nothing focused, a slider, a bare scroll region —
+    //      space falls through to the app-level transport toggle.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+
+    // (3) From idle with NOTHING focused: space starts the catalog's
+    // first track through the fallback — no widget was involved.
+    try live.keyDown("space", " ");
+    try testing.expect(app_state.model.playing);
+    try testing.expectEqual(@as(?u8, model_mod.tracks[0].id), app_state.model.now);
+
+    // ... and the next bare space pauses in place.
+    try live.keyDown("space", " ");
+    try testing.expect(!app_state.model.playing);
+
+    // (1) Focus a DIFFERENT track row in the songs list: space plays
+    // THAT row — activation outranks the global toggle.
+    try live.dispatch(.show_songs);
+    const other = &model_mod.tracks[2];
+    try live.focusWidget(try live.widgetIdByLabel(.list_item, other.title));
+    try live.keyDown("space", " ");
+    try testing.expectEqual(@as(?u8, other.id), app_state.model.now);
+    try testing.expect(app_state.model.playing);
+
+    // (1) Focus the header's Albums tab segment: space activates the
+    // tab (widget wins again) and the transport does not move.
+    try live.focusWidget(try live.widgetIdByLabel(.segmented_control, "Albums"));
+    try live.keyDown("space", " ");
+    try testing.expectEqual(model_mod.Tab.albums, app_state.model.tab);
+    try testing.expect(app_state.model.playing);
+
+    // (2) Focus the search field: a space keystroke is TYPING — the
+    // character lands in the query and playback is untouched. The
+    // exception is structural (widget kind), so it needs no per-field
+    // wiring in the app.
+    try live.focusWidget(try live.widgetIdByLabel(.search_field, "Search library"));
+    try live.keyDown("space", " ");
+    try testing.expectEqualStrings(" ", app_state.model.search());
+    try testing.expect(app_state.model.playing);
+    try testing.expectEqual(@as(?u8, other.id), app_state.model.now);
+    try live.dispatch(.{ .search_edit = .clear });
+
+    // (3) Focus the seek slider: space is not one of the slider's keys
+    // (arrows step, home/end jump), so it falls through and pauses.
+    try live.focusWidget(try live.widgetIdByLabel(.slider, "Seek"));
+    try live.keyDown("space", " ");
+    try testing.expect(!app_state.model.playing);
+
+    // (3) Focus the album grid's scroll region: space is not a scroll
+    // key either (arrows and page keys are), so it resumes from there
+    // too — "anywhere" includes plain content focus.
+    try live.focusWidget(try live.widgetIdByLabel(.scroll_view, "Album grid"));
+    try live.keyDown("space", " ");
+    try testing.expect(app_state.model.playing);
 }
 
 test "controlled scroll: the album grid keeps its offset through playback rebuilds" {

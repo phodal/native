@@ -129,6 +129,23 @@ pub fn command(name: []const u8) ?Msg {
     return null;
 }
 
+/// The media-app space convention: SPACE toggles the transport from
+/// anywhere — both windows, focused or not. Bare space cannot be a
+/// chrome shortcut (unmodified character keys and space are rejected by
+/// `validateShortcut` so registration can never steal typing), so it
+/// rides the app-level key FALLBACK instead: the framework's precedence
+/// rule runs first, meaning a focused ledger row consumes space to play
+/// THAT row, a focused transport button activates itself, and a focused
+/// editable field keeps typing spaces — the text-entry exception is
+/// structural (by widget kind), so the playlist's search field blocks
+/// the toggle without this function naming it. `primary+P` (the chrome
+/// shortcut above) stays the works-even-while-typing chord.
+pub fn onKey(keyboard: canvas.WidgetKeyboardEvent) ?Msg {
+    if (keyboard.modifiers.hasNavigationModifier() or keyboard.modifiers.shift) return null;
+    if (std.ascii.eqlIgnoreCase(keyboard.key, "space")) return .toggle_play;
+    return null;
+}
+
 // -------------------------------------------------------------------- app
 
 pub const DeckApp = native_sdk.UiApp(Model, Msg);
@@ -157,6 +174,7 @@ pub fn deckOptions() DeckApp.Options {
         .on_appearance = onAppearance,
         .on_chrome = onChrome,
         .on_command = command,
+        .on_key = onKey,
         .sync = sync,
     };
 }

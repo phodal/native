@@ -466,6 +466,27 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// Optional mapping from shell command events (menus, shortcuts,
             /// native controls) into messages.
             on_command: ?*const fn (name: []const u8) ?MsgT = null,
+            /// Optional app-level key FALLBACK for canvas keyboard
+            /// input: consulted for a key_down only after widget
+            /// routing declines it. The precedence rule (enforced in
+            /// `handleKeyboard`, in this order):
+            ///   1. A focused widget's bound handler wins — space on a
+            ///      focused row activates THAT row, never the fallback.
+            ///   2. A focused widget that structurally consumes the key
+            ///      — an activation/step intent it answers to, or any
+            ///      editable text widget, where typing must stay typing
+            ///      (`canvas.isWidgetTextEntry`, checked by KIND so an
+            ///      unbound `on_input` changes nothing) — eats it
+            ///      silently.
+            ///   3. Only then does the key fall through here, including
+            ///      when nothing is focused at all.
+            /// This is the honest home for unmodified media keys (the
+            /// bare-space play/pause convention): chrome shortcuts
+            /// (`Shortcut`/`on_command`) deliberately REQUIRE a modifier
+            /// on character keys and space, precisely so registration
+            /// can never steal typing — a fallback that yields to every
+            /// consuming widget can carry them safely.
+            on_key: ?*const fn (keyboard: canvas.WidgetKeyboardEvent) ?MsgT = null,
             /// Optional mapping from runtime timer events (started via
             /// `runtime.startTimer`) into messages. Framework-reserved timer
             /// ids (>= `platform.reserved_timer_id_base`) are handled
@@ -2875,20 +2896,45 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
 
         fn handleKeyboard(self: *Self, runtime: *Runtime, keyboard_event: core.CanvasWidgetKeyboardEvent) anyerror!void {
             const tree = self.treeForViewLabel(keyboard_event.view_label) orelse return;
-            const target = keyboard_event.target orelse return;
-            // Keyboard activation (Enter/Space) of a synthesized fallback
-            // menu item is a context-menu selection, same as the pointer
-            // path.
-            if (self.context_menu_fallback_target != 0) {
-                if (tree.findWidget(target.id)) |widget| {
-                    if (canvas.widgetKeyboardControlIntent(widget, keyboard_event.keyboard)) |intent| {
-                        if (intent.kind == .press or intent.kind == .select) {
-                            if (try self.dispatchContextMenuFallbackItem(runtime, tree, keyboard_event.window_id, target.id)) return;
+            // Key precedence, top to bottom — the focused widget always
+            // outranks the app-level fallback:
+            //   1. a focused widget's bound handler consumes the key
+            //      (space on a focused track row plays THAT row);
+            //   2. a focused widget that structurally answers the key —
+            //      a control intent it maps, or any editable text
+            //      widget, where typing must stay typing (checked by
+            //      widget KIND, never by whether a handler is bound) —
+            //      consumes it silently;
+            //   3. only an unclaimed key_down falls through to
+            //      `Options.on_key` (a target-less event — nothing
+            //      focused — skips straight here).
+            if (keyboard_event.target) |target| {
+                // Keyboard activation (Enter/Space) of a synthesized fallback
+                // menu item is a context-menu selection, same as the pointer
+                // path.
+                if (self.context_menu_fallback_target != 0) {
+                    if (tree.findWidget(target.id)) |widget| {
+                        if (canvas.widgetKeyboardControlIntent(widget, keyboard_event.keyboard)) |intent| {
+                            if (intent.kind == .press or intent.kind == .select) {
+                                if (try self.dispatchContextMenuFallbackItem(runtime, tree, keyboard_event.window_id, target.id)) return;
+                            }
                         }
                     }
                 }
+                if (tree.msgForKeyboard(target.id, keyboard_event.keyboard)) |msg| {
+                    try self.dispatch(runtime, keyboard_event.window_id, msg);
+                    return;
+                }
+                if (tree.findWidget(target.id)) |widget| {
+                    if (!widget.state.disabled) {
+                        if (canvas.isWidgetTextEntry(widget)) return;
+                        if (canvas.widgetKeyboardControlIntent(widget, keyboard_event.keyboard) != null) return;
+                    }
+                }
             }
-            if (tree.msgForKeyboard(target.id, keyboard_event.keyboard)) |msg| {
+            const map = self.options.on_key orelse return;
+            if (keyboard_event.keyboard.phase != .key_down) return;
+            if (map(keyboard_event.keyboard)) |msg| {
                 try self.dispatch(runtime, keyboard_event.window_id, msg);
             }
         }

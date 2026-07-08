@@ -158,20 +158,17 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      # Publishing is gated on the NPM_TOKEN secret (an npm automation
-      # token with publish rights on the @native-sdk scope, configured in
-      # the Release environment). Fail loudly before touching the registry
-      # so a missing token never half-publishes a release.
-      - name: Verify npm token is configured
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "error: NPM_TOKEN secret is not configured (Release environment)."
-            echo "Create an npm automation token with publish access to the @native-sdk scope"
-            echo "and store it as the NPM_TOKEN secret."
-            exit 1
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Publishing uses npm trusted publishing (OIDC): the job's id-token
+      # permission lets npm mint short-lived credentials, so no npm token
+      # secret exists anywhere in this repo. All nine packages —
+      # @native-sdk/cli plus the eight @native-sdk/cli-* platform packages
+      # under packages/native-sdk/npm/ — must each be configured on
+      # npmjs.com with a GitHub Actions trusted publisher pointing at
+      # repository vercel-labs/zero-native, workflow release.yml,
+      # environment Release. If a package is missing that configuration,
+      # npm publish fails loudly with an OIDC authentication error before
+      # anything is uploaded for that package. Trusted publishing requires
+      # npm >= 11.5.1, satisfied by the npm bundled with Node 24.
 
       - name: Check version sync
         run: npm --prefix packages/native-sdk run version:check
@@ -212,12 +209,6 @@ jobs:
 
       - name: Publish to npm
         run: |
-          if [ "${{ github.event.repository.visibility }}" = "public" ]; then
-            PROVENANCE="--provenance"
-          else
-            PROVENANCE=""
-          fi
-
           VERSION="${{ needs.check-release.outputs.version }}"
 
           # Platform packages first, so the main package's
@@ -230,12 +221,10 @@ jobs:
               echo "$name@$VERSION already published, skipping"
               return 0
             fi
-            (cd "$dir" && npm publish $PROVENANCE --access public)
+            (cd "$dir" && npm publish --provenance --access public)
           }
 
           for dir in packages/native-sdk/npm/*/; do
             publish_dir "${dir%/}"
           done
           publish_dir packages/native-sdk
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

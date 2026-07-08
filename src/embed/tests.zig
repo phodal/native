@@ -1167,6 +1167,58 @@ test "mobile UiApp host delivers safe areas through the window-chrome channel" {
     try std.testing.expectEqual(@as(f32, 21), self.ui.model.chrome.insets.bottom);
 }
 
+test "android-shaped insets ride the same viewport and chrome contracts" {
+    // The chrome channel and keyboard residual are host-agnostic: the
+    // Android host reports status-bar/cutout/gesture-nav bands as the
+    // safe area and the IME inset as the keyboard, in density-independent
+    // points, exactly like the iOS host reports notch and home-indicator
+    // bands — pinned here with Android-shaped geometry (412x915 @2.625,
+    // 28pt status band over a cutout, 24pt gesture nav, 322pt IME).
+    var surface_token: u8 = 0;
+
+    // Unsubscribed app: the automatic runtime inset keeps layout clear of
+    // the bands and combines the keyboard edge-wise, byte-identically to
+    // the iOS-shaped run above.
+    const counter_app = MobileCounterApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileCounterApi.native_sdk_app_destroy(counter_app);
+    MobileCounterApi.native_sdk_app_start(counter_app);
+    MobileCounterApi.native_sdk_app_viewport(counter_app, 412, 915, 2.625, &surface_token, 28, 0, 24, 0, 0, 0, 0, 0);
+    MobileCounterApi.native_sdk_app_frame(counter_app);
+    try expectNoUiHostError(counter_app);
+    var root: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_at(counter_app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 28), root.y);
+    try std.testing.expectEqual(@as(f32, 915 - 28 - 24), root.height);
+    MobileCounterApi.native_sdk_app_viewport(counter_app, 412, 915, 2.625, &surface_token, 28, 0, 24, 0, 0, 0, 322, 0);
+    MobileCounterApi.native_sdk_app_frame(counter_app);
+    try std.testing.expectEqual(@as(c_int, 1), MobileCounterApi.native_sdk_app_widget_semantics_at(counter_app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 915 - 28 - 322), root.height);
+
+    // Chrome-subscribed app: the safe area arrives over the window-chrome
+    // channel, the IME stays out of the report, and the runtime insets
+    // layout by the keyboard's residual overlap beyond the app-owned
+    // gesture-nav band (322 - 24 = 298).
+    const chrome_app = MobileChromeApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileChromeApi.native_sdk_app_destroy(chrome_app);
+    const chrome_self: *MobileChromeHost = @ptrCast(@alignCast(chrome_app));
+    MobileChromeApi.native_sdk_app_start(chrome_app);
+    MobileChromeApi.native_sdk_app_viewport(chrome_app, 412, 915, 2.625, &surface_token, 28, 0, 24, 0, 0, 0, 322, 0);
+    MobileChromeApi.native_sdk_app_frame(chrome_app);
+    try std.testing.expectEqual(@as(f32, 28), chrome_self.ui.model.chrome.insets.top);
+    try std.testing.expectEqual(@as(f32, 24), chrome_self.ui.model.chrome.insets.bottom);
+    try std.testing.expectEqual(@as(c_int, 1), MobileChromeApi.native_sdk_app_widget_semantics_at(chrome_app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 0), root.y);
+    try std.testing.expectEqual(@as(f32, 915 - 298), root.height);
+
+    // Rotation with a corner cutout: landscape moves the cutout band to
+    // one side only (Android reports asymmetric cutout insets).
+    MobileChromeApi.native_sdk_app_viewport(chrome_app, 915, 412, 2.625, &surface_token, 0, 0, 24, 28, 0, 0, 0, 0);
+    MobileChromeApi.native_sdk_app_frame(chrome_app);
+    try std.testing.expectEqual(@as(f32, 28), chrome_self.ui.model.chrome.insets.left);
+    try std.testing.expectEqual(@as(f32, 0), chrome_self.ui.model.chrome.insets.right);
+    try std.testing.expectEqual(@as(f32, 24), chrome_self.ui.model.chrome.insets.bottom);
+}
+
 fn mobileChromeSemanticsByRole(app: ?*anyopaque, role: MobileWidgetRole) !MobileWidgetSemantics {
     const count = MobileChromeApi.native_sdk_app_widget_semantics_count(app);
     var index: usize = 0;

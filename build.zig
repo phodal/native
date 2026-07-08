@@ -169,9 +169,11 @@ pub fn build(b: *std.Build) void {
     // down the cross-compiled CLI).
     const app_icon_mod = module(b, target, optimize, "src/primitives/canvas/app_icon.zig");
     app_icon_mod.addImport("geometry", geometry_mod);
-    // The iOS host sources as embedded bytes: the tooling module writes
-    // and compiles them for `native dev|package --target ios`.
+    // The iOS and Android host sources as embedded bytes: the tooling
+    // module writes and compiles them for `native dev|package --target
+    // ios|android`.
     const ios_host_mod = module(b, target, optimize, "src/platform/ios/files.zig");
+    const android_host_mod = module(b, target, optimize, "src/platform/android/files.zig");
     const tooling_mod = module(b, target, optimize, "src/tooling/root.zig");
     tooling_mod.addImport("assets", assets_mod);
     tooling_mod.addImport("app_dirs", app_dirs_mod);
@@ -182,6 +184,7 @@ pub fn build(b: *std.Build) void {
     tooling_mod.addImport("trace", trace_mod);
     tooling_mod.addImport("app_icon", app_icon_mod);
     tooling_mod.addImport("ios_host", ios_host_mod);
+    tooling_mod.addImport("android_host", android_host_mod);
     const tooling_tests = testArtifact(b, tooling_mod);
 
     // Ejected-component identity proofs: a separate test module because
@@ -242,6 +245,7 @@ pub fn build(b: *std.Build) void {
     const host_app_icon_mod = module(b, host_target, optimize, "src/primitives/canvas/app_icon.zig");
     host_app_icon_mod.addImport("geometry", host_geometry_mod);
     const host_ios_host_mod = module(b, host_target, optimize, "src/platform/ios/files.zig");
+    const host_android_host_mod = module(b, host_target, optimize, "src/platform/android/files.zig");
     const host_tooling_mod = module(b, host_target, optimize, "src/tooling/root.zig");
     host_tooling_mod.addImport("assets", host_assets_mod);
     host_tooling_mod.addImport("app_dirs", host_app_dirs_mod);
@@ -252,6 +256,7 @@ pub fn build(b: *std.Build) void {
     host_tooling_mod.addImport("trace", host_trace_mod);
     host_tooling_mod.addImport("app_icon", host_app_icon_mod);
     host_tooling_mod.addImport("ios_host", host_ios_host_mod);
+    host_tooling_mod.addImport("android_host", host_android_host_mod);
     const host_ui_markup_mod = module(b, host_target, optimize, "src/primitives/canvas/ui_markup.zig");
     const host_markup_lsp_mod = module(b, host_target, optimize, "tools/native-sdk/markup_lsp.zig");
     host_markup_lsp_mod.addImport("ui_markup", host_ui_markup_mod);
@@ -779,6 +784,54 @@ pub fn build(b: *std.Build) void {
         check.addArg(check_value.pattern);
         check.step.dependOn(&package_ios_layout_run.step);
         package_ios_layout_step.dependOn(&check.step);
+        mobile_examples_step.dependOn(&check.step);
+    }
+    // Host-tier packaged project pin, Android: `native package --target
+    // android` must keep emitting the complete generated host project
+    // (toolkit host sources, app.zon-derived manifest, launcher icons) —
+    // drift is caught here. --binary stubs the embed library with the
+    // fixed-shell lib so the check needs no Android cross-compile, and
+    // ANDROID_HOME points at a nonexistent SDK so the deterministic
+    // project-only path runs everywhere (the APK assembly is exercised
+    // by the live loops, not CI).
+    const package_android_layout_run = b.addRunArtifact(host_cli_exe);
+    package_android_layout_run.setCwd(b.path("examples/calculator"));
+    package_android_layout_run.setEnvironmentVariable("NATIVE_SDK_PATH", b.pathFromRoot("."));
+    package_android_layout_run.setEnvironmentVariable("ANDROID_HOME", b.pathFromRoot("zig-out/no-android-sdk"));
+    package_android_layout_run.addArgs(&.{ "package", "--target", "android", "--output", "zig-out/package/test-android-layout", "--binary" });
+    package_android_layout_run.addFileArg(embed_lib.getEmittedBin());
+    package_android_layout_run.has_side_effects = true;
+    const package_android_layout_step = b.step("test-package-android-layout", "Verify the generated Android host project layout");
+    const package_android_layout_paths = [_][]const u8{
+        "examples/calculator/zig-out/package/test-android-layout/AndroidManifest.xml",
+        "examples/calculator/zig-out/package/test-android-layout/Host/NativeSdkActivity.java",
+        "examples/calculator/zig-out/package/test-android-layout/Host/android_host.c",
+        "examples/calculator/zig-out/package/test-android-layout/Host/native_sdk_app.h",
+        "examples/calculator/zig-out/package/test-android-layout/res/mipmap-mdpi/ic_launcher.png",
+        "examples/calculator/zig-out/package/test-android-layout/res/mipmap-xxxhdpi/ic_launcher.png",
+        "examples/calculator/zig-out/package/test-android-layout/Libraries/libnative-sdk.a",
+        "examples/calculator/zig-out/package/test-android-layout/README.md",
+        "examples/calculator/zig-out/package/test-android-layout/package-manifest.zon",
+    };
+    for (package_android_layout_paths) |path| {
+        const check = b.addSystemCommand(&.{ "test", "-f", path });
+        check.step.dependOn(&package_android_layout_run.step);
+        package_android_layout_step.dependOn(&check.step);
+        mobile_examples_step.dependOn(&check.step);
+    }
+    const package_android_layout_contents = [_]FileContainsCheck{
+        .{ .path = "examples/calculator/zig-out/package/test-android-layout/AndroidManifest.xml", .pattern = "package=\"dev.native_sdk.calculator\"" },
+        .{ .path = "examples/calculator/zig-out/package/test-android-layout/AndroidManifest.xml", .pattern = "dev.native_sdk.host.NativeSdkActivity" },
+        .{ .path = "examples/calculator/zig-out/package/test-android-layout/Host/NativeSdkActivity.java", .pattern = "InputMethodManager" },
+        .{ .path = "examples/calculator/zig-out/package/test-android-layout/Host/android_host.c", .pattern = "native_sdk_app_render_pixels" },
+    };
+    for (package_android_layout_contents) |check_value| {
+        const check = b.addRunArtifact(file_contains_checker);
+        check.setCwd(b.path("."));
+        check.addArg(check_value.path);
+        check.addArg(check_value.pattern);
+        check.step.dependOn(&package_android_layout_run.step);
+        package_android_layout_step.dependOn(&check.step);
         mobile_examples_step.dependOn(&check.step);
     }
     addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-mobile-shell-metadata", "Verify shared mobile-shell metadata values", &.{
@@ -1997,7 +2050,7 @@ pub fn build(b: *std.Build) void {
 
     const package_android_run = b.addRunArtifact(host_cli_exe);
     package_android_run.addArgs(&.{ "package-android", "--output", b.fmt("zig-out/mobile/native-sdk-{s}-android-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
-    const package_android_step = b.step("package-android", "Create local Android host skeleton");
+    const package_android_step = b.step("package-android", "Create local Android host project");
     package_android_step.dependOn(&package_android_run.step);
 
     // Default app icon: rendered from vector geometry (tools/

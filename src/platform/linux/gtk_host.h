@@ -28,6 +28,7 @@ typedef enum {
     NATIVE_SDK_GTK_EVENT_WAKE = 14,
     NATIVE_SDK_GTK_EVENT_TIMER = 15,
     NATIVE_SDK_GTK_EVENT_APPEARANCE = 16,
+    NATIVE_SDK_GTK_EVENT_AUDIO = 17,
 } native_sdk_gtk_event_kind_t;
 
 typedef struct {
@@ -75,6 +76,15 @@ typedef struct {
     int color_scheme;
     int reduce_motion;
     int high_contrast;
+    /* Audio player report payload (kind == AUDIO): the report kind
+     * ordinal plus the live transport readout. audio_buffering is the
+     * honest stream-stall mirror (an un-paused stream waiting for
+     * bytes), distinct from audio_playing (the transport intent). */
+    int audio_kind;
+    uint64_t audio_position_ms;
+    uint64_t audio_duration_ms;
+    int audio_playing;
+    int audio_buffering;
 } native_sdk_gtk_event_t;
 
 typedef void (*native_sdk_gtk_event_callback_t)(void *context, const native_sdk_gtk_event_t *event);
@@ -190,6 +200,22 @@ int native_sdk_gtk_credentials_available(native_sdk_gtk_host_t *host);
 int native_sdk_gtk_set_credential(native_sdk_gtk_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len, const char *secret, size_t secret_len);
 size_t native_sdk_gtk_get_credential(native_sdk_gtk_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len, char *buffer, size_t buffer_len);
 int native_sdk_gtk_delete_credential(native_sdk_gtk_host_t *host, const char *service, size_t service_len, const char *account, size_t account_len);
+/* Audio playback (GStreamer playbin, runtime-loaded like libsecret).
+ * native_sdk_gtk_audio_available answers whether the library resolved
+ * at runtime; when it did not, every load below answers 3 (no backend)
+ * and the transport calls no-op — degrade, never crash. Load results:
+ * audio_load 0 = loading (the asynchronous LOADED acknowledgment
+ * follows on the main loop), 1 = missing file, 2 = unusable source,
+ * 3 = no backend; audio_load_url additionally answers 1 for a verified
+ * cache entry now playing as a local file (0 = a stream started). */
+int native_sdk_gtk_audio_available(native_sdk_gtk_host_t *host);
+int native_sdk_gtk_audio_load(native_sdk_gtk_host_t *host, const char *path, size_t path_len);
+int native_sdk_gtk_audio_load_url(native_sdk_gtk_host_t *host, const char *url, size_t url_len, const char *cache_path, size_t cache_path_len, uint64_t expected_bytes);
+int native_sdk_gtk_audio_play(native_sdk_gtk_host_t *host);
+int native_sdk_gtk_audio_pause(native_sdk_gtk_host_t *host);
+int native_sdk_gtk_audio_stop(native_sdk_gtk_host_t *host);
+int native_sdk_gtk_audio_seek(native_sdk_gtk_host_t *host, uint64_t position_ms);
+int native_sdk_gtk_audio_set_volume(native_sdk_gtk_host_t *host, double volume);
 size_t native_sdk_gtk_clipboard_read(native_sdk_gtk_host_t *host, char *buffer, size_t buffer_len);
 void native_sdk_gtk_clipboard_write(native_sdk_gtk_host_t *host, const char *text, size_t text_len);
 size_t native_sdk_gtk_clipboard_read_data(native_sdk_gtk_host_t *host, const char *mime_type, size_t mime_type_len, char *buffer, size_t buffer_len);

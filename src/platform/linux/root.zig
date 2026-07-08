@@ -31,6 +31,7 @@ const GtkEventKind = enum(c_int) {
     wake = 14,
     timer = 15,
     appearance = 16,
+    audio = 17,
 };
 
 const GtkEvent = extern struct {
@@ -77,6 +78,15 @@ const GtkEvent = extern struct {
     color_scheme: c_int,
     reduce_motion: c_int,
     high_contrast: c_int,
+    /// Audio player report payload (`kind == .audio`): the report kind
+    /// ordinal plus the live transport readout. `audio_buffering` is the
+    /// honest stream-stall mirror (an un-paused stream waiting for
+    /// bytes), distinct from `audio_playing` (the transport intent).
+    audio_kind: c_int,
+    audio_position_ms: u64,
+    audio_duration_ms: u64,
+    audio_playing: c_int,
+    audio_buffering: c_int,
 };
 
 const GtkCallback = *const fn (context: ?*anyopaque, event: *const GtkEvent) callconv(.c) void;
@@ -134,6 +144,14 @@ extern fn native_sdk_gtk_credentials_available(host: *GtkHost) c_int;
 extern fn native_sdk_gtk_set_credential(host: *GtkHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize, secret: [*]const u8, secret_len: usize) c_int;
 extern fn native_sdk_gtk_get_credential(host: *GtkHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize, buffer: [*]u8, buffer_len: usize) usize;
 extern fn native_sdk_gtk_delete_credential(host: *GtkHost, service: [*]const u8, service_len: usize, account: [*]const u8, account_len: usize) c_int;
+extern fn native_sdk_gtk_audio_available(host: *GtkHost) c_int;
+extern fn native_sdk_gtk_audio_load(host: *GtkHost, path: [*]const u8, path_len: usize) c_int;
+extern fn native_sdk_gtk_audio_load_url(host: *GtkHost, url: [*]const u8, url_len: usize, cache_path: [*]const u8, cache_path_len: usize, expected_bytes: u64) c_int;
+extern fn native_sdk_gtk_audio_play(host: *GtkHost) c_int;
+extern fn native_sdk_gtk_audio_pause(host: *GtkHost) c_int;
+extern fn native_sdk_gtk_audio_stop(host: *GtkHost) c_int;
+extern fn native_sdk_gtk_audio_seek(host: *GtkHost, position_ms: u64) c_int;
+extern fn native_sdk_gtk_audio_set_volume(host: *GtkHost, volume: f64) c_int;
 extern fn native_sdk_gtk_clipboard_read(host: *GtkHost, buffer: [*]u8, buffer_len: usize) usize;
 extern fn native_sdk_gtk_clipboard_write(host: *GtkHost, text: [*]const u8, text_len: usize) void;
 extern fn native_sdk_gtk_clipboard_read_data(host: *GtkHost, mime_type: [*]const u8, mime_type_len: usize, buffer: [*]u8, buffer_len: usize) usize;
@@ -269,6 +287,13 @@ pub const LinuxPlatform = struct {
                 .set_credential_fn = setCredential,
                 .get_credential_fn = getCredential,
                 .delete_credential_fn = deleteCredential,
+                .audio_load_fn = audioLoad,
+                .audio_load_url_fn = audioLoadUrl,
+                .audio_play_fn = audioPlay,
+                .audio_pause_fn = audioPause,
+                .audio_stop_fn = audioStop,
+                .audio_seek_fn = audioSeek,
+                .audio_set_volume_fn = audioSetVolume,
                 .create_tray_fn = createTray,
                 .update_tray_menu_fn = updateTrayMenu,
                 .remove_tray_fn = removeTray,
@@ -307,14 +332,17 @@ pub const LinuxPlatform = struct {
             .gpu_surfaces,
             => self.web_engine == .system,
             .credentials => self.web_engine == .system and credentialsAvailable(self.host),
+            // Audio rides GStreamer (playbin), runtime-loaded like
+            // libsecret: the report is a live probe, so a host without
+            // the library honestly answers false and playback degrades
+            // to one explicit failed Msg instead of pretending.
+            .audio_playback, .audio_streaming => self.web_engine == .system and audioAvailable(self.host),
             .tray => false,
-            // Native scroll drivers, native context menus, app-owned
-            // view-surface adoption, and audio playback are macOS-only
-            // today; GTK keeps the engine's wheel physics, has no
-            // popover-menu presenter yet (documented in the skill), and
-            // wires no audio services — every audio call answers
-            // `error.UnsupportedService` instead of pretending.
-            .gpu_surface_scroll_drivers, .context_menus, .view_surface_adoption, .audio_playback, .audio_streaming => false,
+            // Native scroll drivers, native context menus, and app-owned
+            // view-surface adoption are macOS-only today; GTK keeps the
+            // engine's wheel physics and has no popover-menu presenter
+            // yet (documented in the skill).
+            .gpu_surface_scroll_drivers, .context_menus, .view_surface_adoption => false,
         };
     }
 
@@ -322,6 +350,15 @@ pub const LinuxPlatform = struct {
         if (comptime @import("builtin").is_test) return false;
         if (@import("builtin").target.os.tag != .linux) return false;
         return native_sdk_gtk_credentials_available(host) != 0;
+    }
+
+    /// Runtime probe for the GStreamer-backed audio player, the same
+    /// shape as `credentialsAvailable`: hermetic builds (tests, non-Linux
+    /// hosts) answer false without touching the extern.
+    fn audioAvailable(host: *GtkHost) bool {
+        if (comptime @import("builtin").is_test) return false;
+        if (@import("builtin").target.os.tag != .linux) return false;
+        return native_sdk_gtk_audio_available(host) != 0;
     }
 
     fn run(context: *anyopaque, handler: platform_mod.EventHandler, handler_context: *anyopaque) anyerror!void {
@@ -454,7 +491,27 @@ fn gtkCallback(context: ?*anyopaque, event: *const GtkEvent) callconv(.c) void {
             .reduce_motion = event.reduce_motion != 0,
             .high_contrast = event.high_contrast != 0,
         } }),
+        .audio => state.emit(.{ .audio = .{
+            .kind = audioEventKindFromInt(event.audio_kind),
+            .position_ms = event.audio_position_ms,
+            .duration_ms = event.audio_duration_ms,
+            .playing = event.audio_playing != 0,
+            .buffering = event.audio_buffering != 0,
+        } }),
     }
+}
+
+/// Ordinals match the audio report kinds in gtk_host.c (the same set the
+/// macOS and Windows hosts use); anything unknown degrades to `.failed`
+/// so a host/SDK skew is loud in the app instead of undefined behavior
+/// here.
+fn audioEventKindFromInt(value: c_int) platform_mod.AudioEventKind {
+    return switch (value) {
+        0 => .loaded,
+        1 => .position,
+        2 => .completed,
+        else => .failed,
+    };
 }
 
 fn gpuSurfaceInputEventFromGtkEvent(event: *const GtkEvent) platform_mod.GpuSurfaceInputEvent {
@@ -981,6 +1038,64 @@ fn deleteCredential(context: ?*anyopaque, key: platform_mod.CredentialKey) anyer
     if (result == 0) return error.CredentialNotFound;
 }
 
+/// Map the audio host's synchronous load result: 0 loading (the
+/// asynchronous `.loaded` acknowledgment with the decoded duration
+/// follows on the main loop), 1 the file is missing, 2 an unusable
+/// source, 3 no backend — GStreamer is runtime-loaded, so its absence
+/// answers `error.UnsupportedService` here, matching the capability
+/// report.
+fn audioLoad(context: ?*anyopaque, path: []const u8) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    if (self.web_engine != .system) return error.UnsupportedService;
+    return switch (native_sdk_gtk_audio_load(self.host, path.ptr, path.len)) {
+        0 => {},
+        1 => error.AudioSourceNotFound,
+        3 => error.UnsupportedService,
+        else => error.AudioDecodeFailed,
+    };
+}
+
+/// Map the streaming host's synchronous result: 1 a verified cache entry
+/// is playing locally, 0 a progressive stream started (the `.loaded`
+/// acknowledgment follows at preroll), 3 no backend, anything else the
+/// URL itself was unusable. Network failures after this point are
+/// asynchronous and arrive as `.audio`/`.failed` events.
+fn audioLoadUrl(context: ?*anyopaque, url: []const u8, cache_path: []const u8, expected_bytes: u64) anyerror!platform_mod.AudioLoadResolution {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    if (self.web_engine != .system) return error.UnsupportedService;
+    return switch (native_sdk_gtk_audio_load_url(self.host, url.ptr, url.len, cache_path.ptr, cache_path.len, expected_bytes)) {
+        0 => .stream,
+        1 => .cache,
+        3 => error.UnsupportedService,
+        else => error.InvalidAudioOptions,
+    };
+}
+
+fn audioPlay(context: ?*anyopaque) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    if (native_sdk_gtk_audio_play(self.host) == 0) return error.InvalidAudioOptions;
+}
+
+fn audioPause(context: ?*anyopaque) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    _ = native_sdk_gtk_audio_pause(self.host);
+}
+
+fn audioStop(context: ?*anyopaque) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    _ = native_sdk_gtk_audio_stop(self.host);
+}
+
+fn audioSeek(context: ?*anyopaque, position_ms: u64) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    if (native_sdk_gtk_audio_seek(self.host, position_ms) == 0) return error.InvalidAudioOptions;
+}
+
+fn audioSetVolume(context: ?*anyopaque, volume: f32) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    _ = native_sdk_gtk_audio_set_volume(self.host, volume);
+}
+
 fn createTray(context: ?*anyopaque, options: platform_mod.TrayOptions) anyerror!void {
     _ = context;
     _ = options;
@@ -1258,6 +1373,26 @@ test "linux chromium reports unsupported desktop features" {
     try std.testing.expect(!LinuxPlatform.supportsFeature(&chromium, .native_control_commands));
     try std.testing.expect(!LinuxPlatform.supportsFeature(&chromium, .menus));
     try std.testing.expect(!LinuxPlatform.supportsFeature(&chromium, .dialogs));
+    // Audio (like credentials) is a runtime probe on the system engine —
+    // the hermetic build answers false without touching the extern — and
+    // categorically unsupported on the chromium engine.
+    try std.testing.expect(!LinuxPlatform.supportsFeature(&chromium, .audio_playback));
+    try std.testing.expect(!LinuxPlatform.supportsFeature(&chromium, .audio_streaming));
+}
+
+test "linux audio event maps kinds and payload" {
+    var event = std.mem.zeroes(GtkEvent);
+    event.audio_kind = 1;
+    event.audio_position_ms = 1_500;
+    event.audio_duration_ms = 120_000;
+    event.audio_playing = 1;
+    event.audio_buffering = 1;
+    try std.testing.expectEqual(platform_mod.AudioEventKind.position, audioEventKindFromInt(event.audio_kind));
+    try std.testing.expectEqual(platform_mod.AudioEventKind.loaded, audioEventKindFromInt(0));
+    try std.testing.expectEqual(platform_mod.AudioEventKind.completed, audioEventKindFromInt(2));
+    // Unknown ordinals degrade loudly to failed, never to silence.
+    try std.testing.expectEqual(platform_mod.AudioEventKind.failed, audioEventKindFromInt(3));
+    try std.testing.expectEqual(platform_mod.AudioEventKind.failed, audioEventKindFromInt(99));
 }
 
 fn testPlatformWithEngine(web_engine: platform_mod.WebEngine) LinuxPlatform {

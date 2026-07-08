@@ -137,6 +137,46 @@ typedef struct native_sdk_gtk_app_timer {
     int in_use;
 } native_sdk_gtk_app_timer_t;
 
+/* The app's single audio player (see the audio section further down for
+ * the backend rationale). All fields are main-loop-thread state: the
+ * pipeline's bus messages arrive through a bus signal watch, which is a
+ * GSource on the default GLib main context — the same loop GTK runs —
+ * so unlike the other desktop hosts no explicit cross-thread
+ * marshalling is needed. The one worker, the cache-fill download
+ * thread, touches only files, the network, and its own GCancellable. */
+typedef struct native_sdk_gtk_audio {
+    int active;
+    int url_source;
+    /* Preroll complete (the pipeline's first async-done): transport
+     * calls apply directly; before this they queue as pending_play /
+     * pending seek. */
+    int ready;
+    /* Transport intent (un-paused), the `playing` flag events carry. */
+    int playing;
+    /* The honest buffering mirror: true from a stream's load until the
+     * pipeline actually reaches PLAYING, and across mid-stream refills. */
+    int buffering;
+    /* A queue refill is in progress (buffering < 100% seen): the
+     * pipeline is held paused internally — transport intent unchanged —
+     * until the 100% report, the canonical streaming discipline. */
+    int refilling;
+    int loaded_emitted;
+    int pending_play;
+    int has_pending_seek;
+    uint64_t pending_seek_ms;
+    uint64_t duration_ms;
+    double volume;
+    guint position_timer;
+    /* When a verified cache entry is playing, its path: a right-sized
+     * entry that then fails to play is corrupt and is deleted before
+     * the FAILED report so it never fools the next lookup. */
+    char *cache_entry_path;
+    void *playbin; /* GstElement* */
+    void *bus;     /* GstBus* */
+    gulong bus_handlers[5];
+    GCancellable *download_cancel;
+} native_sdk_gtk_audio_t;
+
 typedef struct native_sdk_gtk_window {
     uint64_t id;
     GtkWindow *gtk_window;
@@ -218,12 +258,14 @@ struct native_sdk_gtk_host {
     GMenuModel *menu_model;
     native_sdk_gtk_menu_action_t menu_actions[NATIVE_SDK_MAX_MENU_ITEMS];
     int menu_action_count;
+    native_sdk_gtk_audio_t audio;
 };
 
 static void native_sdk_emit(native_sdk_gtk_host_t *host, native_sdk_gtk_event_t event);
 static gboolean native_sdk_on_file_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer data);
 static GtkWindow *native_sdk_parent_window(native_sdk_gtk_host_t *host);
 static const char *native_sdk_shortcut_key_for_keyval(guint keyval, char *buffer, size_t buffer_len, int *uses_implicit_shift);
+static void native_sdk_audio_release(native_sdk_gtk_host_t *host, int cancel_download);
 
 static char *native_sdk_strndup(const char *s, size_t len) {
     char *out = malloc(len + 1);
@@ -2401,6 +2443,9 @@ native_sdk_gtk_host_t *native_sdk_gtk_create(
 
 void native_sdk_gtk_destroy(native_sdk_gtk_host_t *host) {
     if (!host) return;
+    /* Retire the audio pipeline (and cancel its cache download) before
+     * anything else goes away; everything runs on this thread. */
+    native_sdk_audio_release(host, 1);
     if (host->frame_timer) g_source_remove(host->frame_timer);
     for (int i = 0; i < NATIVE_SDK_MAX_TIMERS; i++) {
         if (host->timers[i].in_use && host->timers[i].source) g_source_remove(host->timers[i].source);
@@ -3664,6 +3709,686 @@ int native_sdk_gtk_delete_credential(native_sdk_gtk_host_t *host, const char *se
         return -1;
     }
     return ok ? 1 : 0;
+}
+
+/* ---------------------------------------------------------------- audio
+ *
+ * Backend: the GStreamer PLAYBIN pipeline (gst-1.0). One in-box element
+ * covers the whole contract the other desktop hosts implement: local
+ * MP3 decode, progressive HTTP(S) streaming (audible before the
+ * download finishes, with honest buffering reports), pause/resume,
+ * accurate seek, per-pipeline volume, duration, and natural-end EOS.
+ * The library is runtime-loaded with dlopen exactly like libsecret
+ * above, so the toolkit's build inputs and link surface stay GTK +
+ * WebKitGTK only; a host without GStreamer reports the audio
+ * capabilities unsupported and every call degrades to the explicit
+ * unsupported answer — never a crash.
+ *
+ * Contract mirror of the macOS and Windows hosts: one player for the
+ * whole app; URL sources resolve verified-cache-first, then stream
+ * while a PARALLEL download fills the cache (part file beside the final
+ * name, size-verified against the manifest, atomic same-directory
+ * rename — a partial file never occupies the cache name, even across a
+ * crash); LOADED is asynchronous (preroll complete), position ticks
+ * ride a 500 ms GLib timer armed only while playing, completion and
+ * failure are single terminal reports. Threading is simpler here than
+ * on the other hosts: the bus signal watch is a GSource on the default
+ * GLib main context — the same loop GTK runs — so every pipeline
+ * message already arrives on the loop thread and host state stays
+ * loop-thread-owned with no marshalling layer.
+ *
+ * The cache fill downloads over libsoup (session_send + GInputStream),
+ * also dlopen-loaded: WebKitGTK links libsoup-3.0, so the library is
+ * present wherever this host runs, and it handles TLS, redirects, and
+ * chunked transfer that a hand-rolled socket client would have to
+ * rebuild. No fill download runs when it is unavailable — the stream
+ * still plays; the next play streams again. */
+
+#define NATIVE_SDK_AUDIO_EVENT_LOADED 0
+#define NATIVE_SDK_AUDIO_EVENT_POSITION 1
+#define NATIVE_SDK_AUDIO_EVENT_COMPLETED 2
+#define NATIVE_SDK_AUDIO_EVENT_FAILED 3
+
+/* 500 ms is the shared coarse position cadence (macOS, Windows, and the
+ * null platform tick the same), so frame-clock scrubber interpolation
+ * behaves identically across hosts. */
+#define NATIVE_SDK_AUDIO_POSITION_INTERVAL_MS 500
+
+/* GStreamer core constants, mirrored from the stable public API (the
+ * same hand-mirroring the libsecret schema above uses): element states,
+ * the time format, and the flushing/accurate seek flags. */
+#define NATIVE_SDK_GST_STATE_NULL 1
+#define NATIVE_SDK_GST_STATE_PAUSED 3
+#define NATIVE_SDK_GST_STATE_PLAYING 4
+#define NATIVE_SDK_GST_STATE_CHANGE_FAILURE 0
+#define NATIVE_SDK_GST_FORMAT_TIME 3
+#define NATIVE_SDK_GST_SEEK_FLAG_FLUSH (1 << 0)
+#define NATIVE_SDK_GST_SEEK_FLAG_ACCURATE (1 << 1)
+/* playbin "flags": decode audio with software volume only — no video
+ * sink is ever built (the deselected-non-audio-streams discipline the
+ * other hosts apply); BUFFERING additionally emits buffering messages
+ * while a stream's queue fills, the honest stall signal. */
+#define NATIVE_SDK_GST_PLAY_FLAG_AUDIO (1u << 1)
+#define NATIVE_SDK_GST_PLAY_FLAG_SOFT_VOLUME (1u << 4)
+#define NATIVE_SDK_GST_PLAY_FLAG_BUFFERING (1u << 8)
+
+typedef int (*native_sdk_gst_init_check_fn)(int *argc, char ***argv, GError **error);
+typedef void *(*native_sdk_gst_element_factory_find_fn)(const char *factory_name);
+typedef void *(*native_sdk_gst_element_factory_make_fn)(const char *factory_name, const char *name);
+typedef int (*native_sdk_gst_element_set_state_fn)(void *element, int state);
+typedef int (*native_sdk_gst_element_query_position_fn)(void *element, int format, int64_t *cur);
+typedef int (*native_sdk_gst_element_query_duration_fn)(void *element, int format, int64_t *dur);
+typedef int (*native_sdk_gst_element_seek_simple_fn)(void *element, int format, int seek_flags, int64_t seek_pos);
+typedef void *(*native_sdk_gst_element_get_bus_fn)(void *element);
+typedef void (*native_sdk_gst_bus_add_signal_watch_fn)(void *bus);
+typedef void (*native_sdk_gst_bus_remove_signal_watch_fn)(void *bus);
+typedef void (*native_sdk_gst_message_parse_buffering_fn)(void *message, int *percent);
+typedef void (*native_sdk_gst_message_parse_state_changed_fn)(void *message, int *old_state, int *new_state, int *pending_state);
+
+typedef struct native_sdk_gst_api {
+    int attempted;
+    int ready;
+    void *handle;
+    native_sdk_gst_init_check_fn init_check;
+    native_sdk_gst_element_factory_find_fn element_factory_find;
+    native_sdk_gst_element_factory_make_fn element_factory_make;
+    native_sdk_gst_element_set_state_fn element_set_state;
+    native_sdk_gst_element_query_position_fn element_query_position;
+    native_sdk_gst_element_query_duration_fn element_query_duration;
+    native_sdk_gst_element_seek_simple_fn element_seek_simple;
+    native_sdk_gst_element_get_bus_fn element_get_bus;
+    native_sdk_gst_bus_add_signal_watch_fn bus_add_signal_watch;
+    native_sdk_gst_bus_remove_signal_watch_fn bus_remove_signal_watch;
+    native_sdk_gst_message_parse_buffering_fn message_parse_buffering;
+    native_sdk_gst_message_parse_state_changed_fn message_parse_state_changed;
+} native_sdk_gst_api_t;
+
+static native_sdk_gst_api_t native_sdk_gst_api = {0};
+
+static native_sdk_gst_api_t *native_sdk_load_gst_api(void) {
+    if (native_sdk_gst_api.attempted) return native_sdk_gst_api.ready ? &native_sdk_gst_api : NULL;
+    native_sdk_gst_api.attempted = 1;
+
+    void *handle = dlopen("libgstreamer-1.0.so.0", RTLD_NOW | RTLD_LOCAL);
+    if (!handle) handle = dlopen("libgstreamer-1.0.so", RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return NULL;
+
+    native_sdk_gst_api.init_check = (native_sdk_gst_init_check_fn)native_sdk_dlsym(handle, "gst_init_check");
+    native_sdk_gst_api.element_factory_find = (native_sdk_gst_element_factory_find_fn)native_sdk_dlsym(handle, "gst_element_factory_find");
+    native_sdk_gst_api.element_factory_make = (native_sdk_gst_element_factory_make_fn)native_sdk_dlsym(handle, "gst_element_factory_make");
+    native_sdk_gst_api.element_set_state = (native_sdk_gst_element_set_state_fn)native_sdk_dlsym(handle, "gst_element_set_state");
+    native_sdk_gst_api.element_query_position = (native_sdk_gst_element_query_position_fn)native_sdk_dlsym(handle, "gst_element_query_position");
+    native_sdk_gst_api.element_query_duration = (native_sdk_gst_element_query_duration_fn)native_sdk_dlsym(handle, "gst_element_query_duration");
+    native_sdk_gst_api.element_seek_simple = (native_sdk_gst_element_seek_simple_fn)native_sdk_dlsym(handle, "gst_element_seek_simple");
+    native_sdk_gst_api.element_get_bus = (native_sdk_gst_element_get_bus_fn)native_sdk_dlsym(handle, "gst_element_get_bus");
+    native_sdk_gst_api.bus_add_signal_watch = (native_sdk_gst_bus_add_signal_watch_fn)native_sdk_dlsym(handle, "gst_bus_add_signal_watch");
+    native_sdk_gst_api.bus_remove_signal_watch = (native_sdk_gst_bus_remove_signal_watch_fn)native_sdk_dlsym(handle, "gst_bus_remove_signal_watch");
+    native_sdk_gst_api.message_parse_buffering = (native_sdk_gst_message_parse_buffering_fn)native_sdk_dlsym(handle, "gst_message_parse_buffering");
+    native_sdk_gst_api.message_parse_state_changed = (native_sdk_gst_message_parse_state_changed_fn)native_sdk_dlsym(handle, "gst_message_parse_state_changed");
+    const int resolved = native_sdk_gst_api.init_check && native_sdk_gst_api.element_factory_find &&
+        native_sdk_gst_api.element_factory_make &&
+        native_sdk_gst_api.element_set_state && native_sdk_gst_api.element_query_position &&
+        native_sdk_gst_api.element_query_duration && native_sdk_gst_api.element_seek_simple &&
+        native_sdk_gst_api.element_get_bus && native_sdk_gst_api.bus_add_signal_watch &&
+        native_sdk_gst_api.bus_remove_signal_watch && native_sdk_gst_api.message_parse_buffering &&
+        native_sdk_gst_api.message_parse_state_changed;
+    if (!resolved) {
+        dlclose(handle);
+        memset(&native_sdk_gst_api, 0, sizeof(native_sdk_gst_api));
+        native_sdk_gst_api.attempted = 1;
+        return NULL;
+    }
+    /* One-time library bring-up (registry scan). A failed init leaves
+     * the handle open — the library may hold global state by now — and
+     * simply reports the backend unavailable. */
+    if (!native_sdk_gst_api.init_check(NULL, NULL, NULL)) return NULL;
+    /* The library alone is not a player: playbin ships in the base
+     * plugin set, which distros package separately (the core library is
+     * even a transitive WebKitGTK dependency, so it is nearly always
+     * present). Probe the actual runtime variable — a host whose plugin
+     * set cannot build a playbin answers unsupported up front instead of
+     * failing every load. */
+    void *playbin_factory = native_sdk_gst_api.element_factory_find("playbin");
+    if (!playbin_factory) return NULL;
+    g_object_unref(playbin_factory);
+    native_sdk_gst_api.handle = handle;
+    native_sdk_gst_api.ready = 1;
+    return &native_sdk_gst_api;
+}
+
+typedef void *(*native_sdk_soup_session_new_fn)(void);
+typedef void *(*native_sdk_soup_message_new_fn)(const char *method, const char *uri_string);
+typedef void *(*native_sdk_soup_session_send_fn)(void *session, void *message, GCancellable *cancellable, GError **error);
+typedef unsigned (*native_sdk_soup_message_get_status_fn)(void *message);
+
+typedef struct native_sdk_soup_api {
+    int attempted;
+    void *handle;
+    native_sdk_soup_session_new_fn session_new;
+    native_sdk_soup_message_new_fn message_new;
+    native_sdk_soup_session_send_fn session_send;
+    native_sdk_soup_message_get_status_fn message_get_status;
+} native_sdk_soup_api_t;
+
+static native_sdk_soup_api_t native_sdk_soup_api = {0};
+
+static native_sdk_soup_api_t *native_sdk_load_soup_api(void) {
+    if (native_sdk_soup_api.attempted) return native_sdk_soup_api.handle ? &native_sdk_soup_api : NULL;
+    native_sdk_soup_api.attempted = 1;
+
+    void *handle = dlopen("libsoup-3.0.so.0", RTLD_NOW | RTLD_LOCAL);
+    if (!handle) handle = dlopen("libsoup-3.0.so", RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return NULL;
+
+    native_sdk_soup_api.session_new = (native_sdk_soup_session_new_fn)native_sdk_dlsym(handle, "soup_session_new");
+    native_sdk_soup_api.message_new = (native_sdk_soup_message_new_fn)native_sdk_dlsym(handle, "soup_message_new");
+    native_sdk_soup_api.session_send = (native_sdk_soup_session_send_fn)native_sdk_dlsym(handle, "soup_session_send");
+    native_sdk_soup_api.message_get_status = (native_sdk_soup_message_get_status_fn)native_sdk_dlsym(handle, "soup_message_get_status");
+    if (!native_sdk_soup_api.session_new || !native_sdk_soup_api.message_new || !native_sdk_soup_api.session_send || !native_sdk_soup_api.message_get_status) {
+        dlclose(handle);
+        memset(&native_sdk_soup_api, 0, sizeof(native_sdk_soup_api));
+        native_sdk_soup_api.attempted = 1;
+        return NULL;
+    }
+    native_sdk_soup_api.handle = handle;
+    return &native_sdk_soup_api;
+}
+
+/* The cache fill is a PARALLEL download, not a tee off the pipeline's
+ * own network source: a partially buffered stream must never masquerade
+ * as a cache entry. One extra request on a track's first (uncached)
+ * play buys a stock streaming path and a cache whose entries are whole
+ * files by construction: downloaded beside the final name,
+ * size-verified against the manifest, and renamed into place — a
+ * same-directory rename, so a partial file never occupies the cache
+ * name even across a crash. Detached GLib thread, file and network work
+ * only, never host state; a failed or cancelled download simply leaves
+ * no cache entry (the next play streams again). */
+typedef struct native_sdk_audio_download {
+    char *url;
+    char *cache_path;
+    uint64_t expected_bytes;
+    GCancellable *cancel; /* the job owns one reference */
+} native_sdk_audio_download_t;
+
+static gpointer native_sdk_audio_download_thread(gpointer data) {
+    native_sdk_audio_download_t *job = data;
+    native_sdk_soup_api_t *soup = native_sdk_load_soup_api();
+    char *part_path = g_strdup_printf("%s.part", job->cache_path);
+    int ok = 0;
+    if (soup && part_path) {
+        char *directory = g_path_get_dirname(job->cache_path);
+        if (directory) {
+            g_mkdir_with_parents(directory, 0700);
+            g_free(directory);
+        }
+        g_remove(part_path);
+        void *session = soup->session_new();
+        void *message = session ? soup->message_new("GET", job->url) : NULL;
+        GInputStream *stream = message ? (GInputStream *)soup->session_send(session, message, job->cancel, NULL) : NULL;
+        FILE *file = NULL;
+        /* Only a 200 installs bytes — an error page must never
+         * masquerade as a track. */
+        if (stream && soup->message_get_status(message) == 200) file = g_fopen(part_path, "wb");
+        if (file) {
+            char buffer[64 * 1024];
+            for (;;) {
+                gssize count = g_input_stream_read(stream, buffer, sizeof(buffer), job->cancel, NULL);
+                if (count < 0) break; /* network error or cancelled */
+                if (count == 0) {
+                    ok = 1;
+                    break;
+                }
+                if (fwrite(buffer, 1, (size_t)count, file) != (size_t)count) break;
+            }
+            if (fclose(file) != 0) ok = 0;
+        }
+        if (stream) {
+            g_input_stream_close(stream, NULL, NULL);
+            g_object_unref(stream);
+        }
+        if (message) g_object_unref(message);
+        if (session) g_object_unref(session);
+    }
+    if (ok && part_path && !g_cancellable_is_cancelled(job->cancel)) {
+        GStatBuf stat_buf;
+        /* Truncated or wrong content: never installed. */
+        ok = g_stat(part_path, &stat_buf) == 0 &&
+            (job->expected_bytes == 0 || (uint64_t)stat_buf.st_size == job->expected_bytes);
+        if (ok) {
+            g_remove(job->cache_path);
+            ok = g_rename(part_path, job->cache_path) == 0;
+        }
+    } else {
+        ok = 0;
+    }
+    if (!ok && part_path) g_remove(part_path);
+    g_free(part_path);
+    free(job->url);
+    free(job->cache_path);
+    g_object_unref(job->cancel);
+    free(job);
+    return NULL;
+}
+
+static void native_sdk_audio_emit_report(native_sdk_gtk_host_t *host, int kind, uint64_t position_ms, uint64_t duration_ms, int playing, int buffering) {
+    native_sdk_emit(host, (native_sdk_gtk_event_t){
+        .kind = NATIVE_SDK_GTK_EVENT_AUDIO,
+        .timestamp_ns = native_sdk_gpu_timestamp_ns(),
+        .audio_kind = kind,
+        .audio_position_ms = position_ms,
+        .audio_duration_ms = duration_ms,
+        .audio_playing = playing,
+        .audio_buffering = buffering,
+    });
+}
+
+/* Live position off the pipeline clock; unanswerable (pre-preroll) reads
+ * report 0. Nanoseconds to ms. */
+static uint64_t native_sdk_audio_position_ms(native_sdk_gtk_host_t *host) {
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    if (!gst || !host->audio.playbin) return 0;
+    int64_t position = 0;
+    if (!gst->element_query_position(host->audio.playbin, NATIVE_SDK_GST_FORMAT_TIME, &position) || position < 0) return 0;
+    return (uint64_t)position / 1000000ull;
+}
+
+static void native_sdk_audio_emit_event(native_sdk_gtk_host_t *host, int kind) {
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_audio_emit_report(host, kind, native_sdk_audio_position_ms(host), audio->duration_ms, audio->playing ? 1 : 0, audio->buffering ? 1 : 0);
+}
+
+/* WM-timer analog for the audio position tick: one position report per
+ * interval while a playback is live; a straggler after teardown retires
+ * itself. Streams may learn their real duration late — re-query while
+ * it is still unknown so the tick's readout converges on the truth. */
+static gboolean native_sdk_audio_position_tick(gpointer data) {
+    native_sdk_gtk_host_t *host = data;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    if (!audio->active) {
+        audio->position_timer = 0;
+        return G_SOURCE_REMOVE;
+    }
+    if (audio->duration_ms == 0) {
+        native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+        int64_t duration = 0;
+        if (gst && audio->playbin && gst->element_query_duration(audio->playbin, NATIVE_SDK_GST_FORMAT_TIME, &duration) && duration > 0) {
+            audio->duration_ms = (uint64_t)duration / 1000000ull;
+        }
+    }
+    native_sdk_audio_emit_event(host, NATIVE_SDK_AUDIO_EVENT_POSITION);
+    return G_SOURCE_CONTINUE;
+}
+
+static void native_sdk_audio_stop_position_timer(native_sdk_gtk_host_t *host) {
+    if (host->audio.position_timer) {
+        g_source_remove(host->audio.position_timer);
+        host->audio.position_timer = 0;
+    }
+}
+
+static void native_sdk_audio_start_position_timer(native_sdk_gtk_host_t *host) {
+    if (host->audio.position_timer) return;
+    host->audio.position_timer = g_timeout_add(NATIVE_SDK_AUDIO_POSITION_INTERVAL_MS, native_sdk_audio_position_tick, host);
+}
+
+/* Release the whole pipeline. The bus watch comes off first, so no
+ * message outlives the player it belonged to. The cache download is
+ * cancelled when the caller says so (replacement, explicit stop,
+ * failure — a skipped track should not keep burning bandwidth) but
+ * ORPHANED on natural completion: it is usually already done, and
+ * letting a straggler finish installs the cache entry the completed
+ * play earned. */
+static void native_sdk_audio_release(native_sdk_gtk_host_t *host, int cancel_download) {
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    native_sdk_audio_stop_position_timer(host);
+    if (audio->bus) {
+        for (size_t i = 0; i < G_N_ELEMENTS(audio->bus_handlers); i++) {
+            if (audio->bus_handlers[i]) g_signal_handler_disconnect(audio->bus, audio->bus_handlers[i]);
+            audio->bus_handlers[i] = 0;
+        }
+        if (gst) gst->bus_remove_signal_watch(audio->bus);
+        g_object_unref(audio->bus);
+        audio->bus = NULL;
+    }
+    if (audio->playbin) {
+        if (gst) gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_NULL);
+        g_object_unref(audio->playbin);
+        audio->playbin = NULL;
+    }
+    if (audio->download_cancel) {
+        if (cancel_download) g_cancellable_cancel(audio->download_cancel);
+        g_object_unref(audio->download_cancel);
+        audio->download_cancel = NULL;
+    }
+    free(audio->cache_entry_path);
+    memset(audio, 0, sizeof(*audio));
+    audio->volume = 1.0;
+}
+
+/* Bus signal handlers. All of these run on the GLib main loop (the bus
+ * signal watch is a main-context GSource), so they touch host state
+ * directly — the loop-thread-ownership rule the other hosts enforce
+ * with an explicit marshalling hop holds here by construction. */
+
+/* Preroll complete: the pipeline knows its duration and accepts
+ * transport calls. Apply the queued intent (seek, play), THEN
+ * acknowledge with LOADED so the event carries the honest playing flag
+ * — the runtime issues play immediately after load, before readiness,
+ * exactly like the other hosts. Later async-done messages (each
+ * flushing seek produces one) change nothing here. */
+static void native_sdk_audio_on_async_done(void *bus, void *message, gpointer data) {
+    (void)bus;
+    (void)message;
+    native_sdk_gtk_host_t *host = data;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    if (!gst || !audio->active || !audio->playbin || audio->ready) return;
+    audio->ready = 1;
+    int64_t duration = 0;
+    if (gst->element_query_duration(audio->playbin, NATIVE_SDK_GST_FORMAT_TIME, &duration) && duration > 0) {
+        audio->duration_ms = (uint64_t)duration / 1000000ull;
+    }
+    if (audio->has_pending_seek) {
+        audio->has_pending_seek = 0;
+        gst->element_seek_simple(audio->playbin, NATIVE_SDK_GST_FORMAT_TIME, NATIVE_SDK_GST_SEEK_FLAG_FLUSH | NATIVE_SDK_GST_SEEK_FLAG_ACCURATE, (int64_t)audio->pending_seek_ms * 1000000);
+    }
+    if (audio->pending_play) {
+        audio->pending_play = 0;
+        if (!audio->refilling) gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PLAYING);
+    }
+    if (!audio->loaded_emitted) {
+        audio->loaded_emitted = 1;
+        native_sdk_audio_emit_event(host, NATIVE_SDK_AUDIO_EVENT_LOADED);
+    }
+}
+
+/* The pipeline actually reached PLAYING: a fresh stream's optimistic
+ * buffering flag drops here and is emitted immediately (not at the next
+ * tick), the same transition report the other hosts make when their
+ * transport starts rolling. */
+static void native_sdk_audio_on_state_changed(void *bus, void *message, gpointer data) {
+    (void)bus;
+    native_sdk_gtk_host_t *host = data;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    if (!gst || !audio->active || !audio->buffering || audio->refilling) return;
+    int old_state = 0;
+    int new_state = 0;
+    int pending_state = 0;
+    gst->message_parse_state_changed(message, &old_state, &new_state, &pending_state);
+    if (new_state != NATIVE_SDK_GST_STATE_PLAYING) return;
+    audio->buffering = 0;
+    native_sdk_audio_emit_event(host, NATIVE_SDK_AUDIO_EVENT_POSITION);
+}
+
+/* Stream buffering reports. Below 100% the queue is refilling: hold the
+ * pipeline paused internally (transport intent unchanged — the events
+ * keep saying playing+buffering, the honest stall shape) until the
+ * 100% report resumes it. */
+static void native_sdk_audio_on_buffering(void *bus, void *message, gpointer data) {
+    (void)bus;
+    native_sdk_gtk_host_t *host = data;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    if (!gst || !audio->active || !audio->playbin) return;
+    int percent = 0;
+    gst->message_parse_buffering(message, &percent);
+    if (percent < 100) {
+        audio->refilling = 1;
+        if (!audio->buffering) {
+            audio->buffering = 1;
+            native_sdk_audio_emit_event(host, NATIVE_SDK_AUDIO_EVENT_POSITION);
+        }
+        if (audio->playing && audio->ready) gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PAUSED);
+    } else {
+        audio->refilling = 0;
+        if (audio->playing && audio->ready) {
+            /* The flag itself drops at the PLAYING transition. */
+            gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PLAYING);
+        } else if (audio->buffering && !audio->playing) {
+            audio->buffering = 0;
+            native_sdk_audio_emit_event(host, NATIVE_SDK_AUDIO_EVENT_POSITION);
+        }
+    }
+}
+
+/* Natural end of the track. Retire-before-emit discipline (mirroring
+ * the other hosts): the completion Msg routinely starts the NEXT track
+ * from inside its own dispatch, and tearing down afterwards would
+ * destroy the player that load just installed. The duration is captured
+ * first so the event carries the honest terminal position. The cache
+ * download is orphaned, not cancelled — completion is what earned the
+ * cache entry. */
+static void native_sdk_audio_on_eos(void *bus, void *message, gpointer data) {
+    (void)bus;
+    (void)message;
+    native_sdk_gtk_host_t *host = data;
+    if (!host->audio.active) return;
+    const uint64_t duration_ms = host->audio.duration_ms;
+    native_sdk_audio_release(host, 0);
+    native_sdk_audio_emit_report(host, NATIVE_SDK_AUDIO_EVENT_COMPLETED, duration_ms, duration_ms, 0, 0);
+}
+
+/* A load that never became playable or a pipeline that died mid-flight:
+ * one FAILED report, player retired first. The cache download dies too
+ * — bytes from a failing source are not trustworthy — and a verified
+ * cache entry that failed to play is corrupt: deleted here so it never
+ * fools the next lookup (that play streams and refills). */
+static void native_sdk_audio_on_error(void *bus, void *message, gpointer data) {
+    (void)bus;
+    (void)message;
+    native_sdk_gtk_host_t *host = data;
+    if (!host->audio.active) return;
+    if (host->audio.cache_entry_path) g_remove(host->audio.cache_entry_path);
+    native_sdk_audio_release(host, 1);
+    native_sdk_audio_emit_report(host, NATIVE_SDK_AUDIO_EVENT_FAILED, 0, 0, 0, 0);
+}
+
+/* Build one playbin around a URI, arm the bus watch, and start the
+ * asynchronous preroll (LOADED follows at async-done). */
+static int native_sdk_audio_attach(native_sdk_gtk_host_t *host, const char *uri, int streaming) {
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    if (!gst) return 0;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    void *playbin = gst->element_factory_make("playbin", "native-sdk-audio");
+    if (!playbin) return 0;
+    unsigned int flags = NATIVE_SDK_GST_PLAY_FLAG_AUDIO | NATIVE_SDK_GST_PLAY_FLAG_SOFT_VOLUME;
+    if (streaming) flags |= NATIVE_SDK_GST_PLAY_FLAG_BUFFERING;
+    g_object_set(playbin, "uri", uri, "flags", flags, "volume", audio->volume, NULL);
+    void *bus = gst->element_get_bus(playbin);
+    if (!bus) {
+        g_object_unref(playbin);
+        return 0;
+    }
+    gst->bus_add_signal_watch(bus);
+    audio->bus_handlers[0] = g_signal_connect(bus, "message::eos", G_CALLBACK(native_sdk_audio_on_eos), host);
+    audio->bus_handlers[1] = g_signal_connect(bus, "message::error", G_CALLBACK(native_sdk_audio_on_error), host);
+    audio->bus_handlers[2] = g_signal_connect(bus, "message::buffering", G_CALLBACK(native_sdk_audio_on_buffering), host);
+    audio->bus_handlers[3] = g_signal_connect(bus, "message::async-done", G_CALLBACK(native_sdk_audio_on_async_done), host);
+    audio->bus_handlers[4] = g_signal_connect(bus, "message::state-changed", G_CALLBACK(native_sdk_audio_on_state_changed), host);
+    audio->playbin = playbin;
+    audio->bus = bus;
+    if (gst->element_set_state(playbin, NATIVE_SDK_GST_STATE_PAUSED) == NATIVE_SDK_GST_STATE_CHANGE_FAILURE) {
+        native_sdk_audio_release(host, 0);
+        return 0;
+    }
+    return 1;
+}
+
+/* Synchronous local-file load: 0 loading (the asynchronous LOADED
+ * acknowledgment follows at preroll), 1 missing file, 2 unusable, 3 no
+ * backend — the shared result contract, with the runtime-dependency
+ * value on top. An undecodable-but-present file surfaces as one
+ * asynchronous FAILED report (resolution here is asynchronous by
+ * design). */
+static int native_sdk_audio_load_path_internal(native_sdk_gtk_host_t *host, const char *path) {
+    native_sdk_audio_release(host, 1);
+    if (!native_sdk_load_gst_api()) return 3;
+    if (!g_file_test(path, G_FILE_TEST_IS_REGULAR)) return 1;
+    char *absolute = g_canonicalize_filename(path, NULL);
+    char *uri = g_filename_to_uri(absolute ? absolute : path, NULL, NULL);
+    g_free(absolute);
+    if (!uri) return 2;
+    const int attached = native_sdk_audio_attach(host, uri, 0);
+    g_free(uri);
+    if (!attached) {
+        native_sdk_audio_release(host, 0);
+        return 2;
+    }
+    host->audio.active = 1;
+    return 0;
+}
+
+/* URL sources: verified cache entry first (plays as a plain local file,
+ * no network), then a progressive stream with a parallel cache-filling
+ * download. Returns 1 for the cache hit, 0 for a started stream, 2 when
+ * the URL cannot be used, 3 without the backend; everything
+ * asynchronous — readiness, stalls, natural end, network death —
+ * arrives as audio reports. */
+static int native_sdk_audio_load_url_internal(native_sdk_gtk_host_t *host, const char *url, const char *cache_path, uint64_t expected_bytes) {
+    native_sdk_audio_release(host, 1);
+    if (!native_sdk_load_gst_api()) return 3;
+    if (!strstr(url, "://")) return 2;
+    if (cache_path && cache_path[0]) {
+        GStatBuf stat_buf;
+        if (g_stat(cache_path, &stat_buf) == 0) {
+            if (expected_bytes == 0 || (uint64_t)stat_buf.st_size == expected_bytes) {
+                if (native_sdk_audio_load_path_internal(host, cache_path) == 0) {
+                    host->audio.cache_entry_path = native_sdk_strndup(cache_path, strlen(cache_path));
+                    return 1;
+                }
+            }
+            /* Partial or stale: a bad cache entry never plays, and
+             * never survives to fool the next lookup. */
+            g_remove(cache_path);
+        }
+    }
+    if (!native_sdk_audio_attach(host, url, 1)) {
+        native_sdk_audio_release(host, 0);
+        return 2;
+    }
+    host->audio.active = 1;
+    host->audio.url_source = 1;
+    /* A fresh stream has no bytes yet: buffering starts true and drops
+     * when the pipeline actually starts rolling. */
+    host->audio.buffering = 1;
+    if (cache_path && cache_path[0]) {
+        native_sdk_audio_download_t *job = calloc(1, sizeof(*job));
+        if (job) {
+            job->url = native_sdk_strndup(url, strlen(url));
+            job->cache_path = native_sdk_strndup(cache_path, strlen(cache_path));
+            job->expected_bytes = expected_bytes;
+            if (job->url && job->cache_path) {
+                host->audio.download_cancel = g_cancellable_new();
+                job->cancel = g_object_ref(host->audio.download_cancel);
+                GThread *thread = g_thread_new("native-sdk-audio-cache", native_sdk_audio_download_thread, job);
+                g_thread_unref(thread); /* detached: the job owns its state */
+            } else {
+                free(job->url);
+                free(job->cache_path);
+                free(job);
+            }
+        }
+    }
+    return 0;
+}
+
+/* Audio entry points. All loop-thread only, like every other service
+ * call: the runtime dispatches them from inside the main loop's event
+ * callback. */
+
+int native_sdk_gtk_audio_available(native_sdk_gtk_host_t *host) {
+    (void)host;
+    return native_sdk_load_gst_api() ? 1 : 0;
+}
+
+int native_sdk_gtk_audio_load(native_sdk_gtk_host_t *host, const char *path, size_t path_len) {
+    if (!host || !path || path_len == 0) return 2;
+    char *copy = native_sdk_strndup(path, path_len);
+    if (!copy) return 2;
+    const int result = native_sdk_audio_load_path_internal(host, copy);
+    free(copy);
+    return result;
+}
+
+int native_sdk_gtk_audio_load_url(native_sdk_gtk_host_t *host, const char *url, size_t url_len, const char *cache_path, size_t cache_path_len, uint64_t expected_bytes) {
+    if (!host || !url || url_len == 0) return 2;
+    char *url_copy = native_sdk_strndup(url, url_len);
+    char *cache_copy = cache_path_len > 0 ? native_sdk_strndup(cache_path, cache_path_len) : NULL;
+    if (!url_copy) {
+        free(cache_copy);
+        return 2;
+    }
+    const int result = native_sdk_audio_load_url_internal(host, url_copy, cache_copy ? cache_copy : "", expected_bytes);
+    free(url_copy);
+    free(cache_copy);
+    return result;
+}
+
+int native_sdk_gtk_audio_play(native_sdk_gtk_host_t *host) {
+    if (!host || !host->audio.active) return 0;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    audio->playing = 1;
+    if (audio->ready) {
+        /* Mid-refill the intent is recorded and the 100% buffering
+         * report flips the pipeline to PLAYING. */
+        if (!audio->refilling && gst && audio->playbin) gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PLAYING);
+    } else {
+        /* Applied at preroll; readiness and stalls report through the
+         * event stream, so play always "applies" — the same
+         * asynchronous-by-nature contract as the other hosts. */
+        audio->pending_play = 1;
+    }
+    native_sdk_audio_start_position_timer(host);
+    return 1;
+}
+
+int native_sdk_gtk_audio_pause(native_sdk_gtk_host_t *host) {
+    if (!host || !host->audio.active) return 0;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    audio->playing = 0;
+    audio->pending_play = 0;
+    if (audio->ready && gst && audio->playbin) gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PAUSED);
+    native_sdk_audio_stop_position_timer(host);
+    return 1;
+}
+
+int native_sdk_gtk_audio_stop(native_sdk_gtk_host_t *host) {
+    if (!host) return 0;
+    const int had_player = host->audio.active ? 1 : 0;
+    /* Replacement or explicit stop: the cache download dies with the
+     * playback (its next play streams and fills again). */
+    native_sdk_audio_release(host, 1);
+    return had_player;
+}
+
+int native_sdk_gtk_audio_seek(native_sdk_gtk_host_t *host, uint64_t position_ms) {
+    if (!host || !host->audio.active) return 0;
+    native_sdk_gtk_audio_t *audio = &host->audio;
+    native_sdk_gst_api_t *gst = native_sdk_load_gst_api();
+    if (audio->duration_ms > 0 && position_ms > audio->duration_ms) position_ms = audio->duration_ms;
+    if (audio->ready && gst && audio->playbin) {
+        /* A flushing seek repositions a paused transport in place —
+         * the scrub lands paused at the new position. */
+        gst->element_seek_simple(audio->playbin, NATIVE_SDK_GST_FORMAT_TIME, NATIVE_SDK_GST_SEEK_FLAG_FLUSH | NATIVE_SDK_GST_SEEK_FLAG_ACCURATE, (int64_t)position_ms * 1000000);
+    } else {
+        audio->has_pending_seek = 1;
+        audio->pending_seek_ms = position_ms;
+    }
+    return 1;
+}
+
+int native_sdk_gtk_audio_set_volume(native_sdk_gtk_host_t *host, double volume) {
+    if (!host || !host->audio.active) return 0;
+    host->audio.volume = volume;
+    /* Pipeline-local software volume (the SOFT_VOLUME flag above) — the
+     * system mixer entry is never mutated. */
+    if (host->audio.playbin) g_object_set(host->audio.playbin, "volume", volume, NULL);
+    return 1;
 }
 
 typedef struct native_sdk_clipboard_read_state {

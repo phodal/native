@@ -125,9 +125,9 @@ const Harness = struct {
     app: core.App,
 
     const Config = struct {
-        /// false models a host without an audio player (GTK/Win32
-        /// today): the services are nulled BEFORE the platform value is
-        /// captured, the same shape a real player-less host wires.
+        /// false models a host without an audio player (a GTK host
+        /// without runtime GStreamer): the services are nulled BEFORE the
+        /// platform value is captured, the same shape a real player-less host wires.
         audio_playback: bool = true,
         /// false models a host with a local player but no streaming
         /// path: `audioLoadUrl` is absent and URL playback degrades to
@@ -333,7 +333,8 @@ test "real executor drives the platform player and events round-trip" {
 }
 
 test "a platform without audio playback degrades to one failed event" {
-    // Model GTK/Win32 today: the services are absent and the feature
+    // Model a player-less host (a GTK host whose runtime-loaded
+    // GStreamer is absent): the services are absent and the feature
     // reports false, so playback fails loudly through the Msg loop
     // instead of crashing or silently no-opping.
     var h = try Harness.createConfigured(.{ .audio_playback = false });

@@ -1047,6 +1047,137 @@ test "mobile UiApp host insets widget layout by safe-area and keyboard viewport 
     try std.testing.expectEqual(@as(f32, 844), root.height);
 }
 
+// Chrome-subscribed app: `on_chrome` maps the window-chrome channel into
+// the model, and the view pads by the delivered insets — the identical
+// code path a desktop hidden-titlebar app pads its header with.
+const MobileChromeDef = struct {
+    pub const Model = struct {
+        chrome: platform.WindowChrome = .{},
+        chrome_deliveries: u32 = 0,
+    };
+
+    pub const Msg = union(enum) {
+        chrome_changed: platform.WindowChrome,
+    };
+
+    const App = runtime.UiApp(Model, Msg);
+
+    pub fn initModel() Model {
+        return .{};
+    }
+
+    pub fn mobileOptions() App.Options {
+        return .{
+            .name = "mobile-chrome",
+            .scene = ui_host.mobile_shell_scene,
+            .canvas_label = mobile_gpu_surface_label,
+            .update = update,
+            .view = view,
+            .on_chrome = onChrome,
+        };
+    }
+
+    fn onChrome(chrome: platform.WindowChrome) ?Msg {
+        return .{ .chrome_changed = chrome };
+    }
+
+    fn update(model: *Model, msg: Msg) void {
+        switch (msg) {
+            .chrome_changed => |chrome| {
+                model.chrome = chrome;
+                model.chrome_deliveries += 1;
+            },
+        }
+    }
+
+    fn view(ui: *App.Ui, model: *const Model) App.Ui.Node {
+        // Fixed-height bands sized by the delivered chrome stand in for
+        // the safe-area padding a real app derives the same way.
+        return ui.column(.{}, .{
+            ui.el(.column, .{ .height = model.chrome.insets.top }, .{}),
+            ui.text(.{}, "Safe content"),
+            ui.spacer(1),
+            ui.el(.column, .{ .height = model.chrome.insets.bottom }, .{}),
+        });
+    }
+};
+
+const MobileChromeHost = ui_host.UiAppHost(MobileChromeDef);
+const MobileChromeApi = c_api.MobileCApi(MobileChromeHost);
+
+test "mobile UiApp host delivers safe areas through the window-chrome channel" {
+    const app = MobileChromeApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileChromeApi.native_sdk_app_destroy(app);
+    const self: *MobileChromeHost = @ptrCast(@alignCast(app));
+
+    MobileChromeApi.native_sdk_app_start(app);
+    try std.testing.expectEqualStrings("", std.mem.span(MobileChromeApi.native_sdk_app_last_error_name(app)));
+
+    // Portrait with a notch and home indicator: the chrome Msg arrives
+    // before the first view build carrying exactly the safe-area insets,
+    // and — because the app subscribed — widget layout keeps the FULL
+    // surface bounds (the app's own padding is the inset now).
+    var surface_token: u8 = 0;
+    MobileChromeApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 59, 0, 34, 0, 0, 0, 0, 0);
+    MobileChromeApi.native_sdk_app_frame(app);
+    try std.testing.expectEqualStrings("", std.mem.span(MobileChromeApi.native_sdk_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(f32, 59), self.ui.model.chrome.insets.top);
+    try std.testing.expectEqual(@as(f32, 34), self.ui.model.chrome.insets.bottom);
+    try std.testing.expectEqual(@as(f32, 0), self.ui.model.chrome.insets.left);
+    const deliveries_after_install = self.ui.model.chrome_deliveries;
+    try std.testing.expect(deliveries_after_install >= 1);
+
+    var root: MobileWidgetSemantics = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileChromeApi.native_sdk_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 0), root.x);
+    try std.testing.expectEqual(@as(f32, 0), root.y);
+    try std.testing.expectEqual(@as(f32, 390), root.width);
+    try std.testing.expectEqual(@as(f32, 844), root.height);
+
+    // The view's model-derived padding places content below the notch —
+    // the app-owned equivalent of the unsubscribed automatic inset.
+    const text = try mobileChromeSemanticsByRole(app, .text);
+    try std.testing.expect(text.y >= 59);
+
+    // An identical viewport re-report does not re-deliver (change-gated,
+    // same dedupe the macOS fullscreen transitions rely on).
+    MobileChromeApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 59, 0, 34, 0, 0, 0, 0, 0);
+    MobileChromeApi.native_sdk_app_frame(app);
+    try std.testing.expectEqual(deliveries_after_install, self.ui.model.chrome_deliveries);
+
+    // The keyboard is not chrome: it must not change the report, and the
+    // runtime keeps insetting layout by its residual overlap beyond the
+    // app-owned safe area (336 keyboard - 34 home indicator = 302).
+    MobileChromeApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 59, 0, 34, 0, 0, 0, 336, 0);
+    MobileChromeApi.native_sdk_app_frame(app);
+    try std.testing.expectEqual(@as(f32, 34), self.ui.model.chrome.insets.bottom);
+    try std.testing.expectEqual(deliveries_after_install, self.ui.model.chrome_deliveries);
+    try std.testing.expectEqual(@as(c_int, 1), MobileChromeApi.native_sdk_app_widget_semantics_at(app, 0, &root));
+    try std.testing.expectEqual(@as(f32, 0), root.y);
+    try std.testing.expectEqual(@as(f32, 844 - 302), root.height);
+
+    // Rotation moves the notch to the sides: one new delivery with the
+    // landscape insets.
+    MobileChromeApi.native_sdk_app_viewport(app, 844, 390, 1, &surface_token, 0, 59, 21, 59, 0, 0, 0, 0);
+    MobileChromeApi.native_sdk_app_frame(app);
+    try std.testing.expectEqual(deliveries_after_install + 1, self.ui.model.chrome_deliveries);
+    try std.testing.expectEqual(@as(f32, 0), self.ui.model.chrome.insets.top);
+    try std.testing.expectEqual(@as(f32, 59), self.ui.model.chrome.insets.left);
+    try std.testing.expectEqual(@as(f32, 59), self.ui.model.chrome.insets.right);
+    try std.testing.expectEqual(@as(f32, 21), self.ui.model.chrome.insets.bottom);
+}
+
+fn mobileChromeSemanticsByRole(app: ?*anyopaque, role: MobileWidgetRole) !MobileWidgetSemantics {
+    const count = MobileChromeApi.native_sdk_app_widget_semantics_count(app);
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        var node: MobileWidgetSemantics = .{};
+        try std.testing.expectEqual(@as(c_int, 1), MobileChromeApi.native_sdk_app_widget_semantics_at(app, index, &node));
+        if (node.role == @intFromEnum(role)) return node;
+    }
+    return error.TestUnexpectedResult;
+}
+
 /// Fake shim text measurement: every UTF-8 byte is `size` wide — far wider
 /// than any estimator advance factor (max 0.91), so measured layout
 /// visibly diverges from the estimator baseline. Counts calls through the

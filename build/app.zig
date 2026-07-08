@@ -99,7 +99,15 @@ pub fn addMobileLib(b: *std.Build, dep: *std.Build.Dependency, options: MobileLi
     const target = nativeSdkTarget(b);
     const optimize_request = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size");
     const optimize = exampleOptimizeMode(b, optimize_request, .Debug);
+    addMobileLibWithTarget(b, dep, target, optimize, options);
+}
 
+/// The mobile-lib wiring behind `addMobileLib`, for builds that already
+/// resolved `target`/`optimize` (`addAppArtifacts` registers the `lib`
+/// step through this for iOS/Android targets, so every standard app —
+/// generated graph or ejected `addApp` — can produce the embed library
+/// with nothing but `-Dtarget`).
+fn addMobileLibWithTarget(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, options: MobileLibOptions) void {
     const native_sdk_mod = nativeSdkModule(b, dep, target, optimize);
     // Android hosts load the embed lib inside a shared object
     // (System.loadLibrary / NativeActivity), so every object must be PIC —
@@ -163,6 +171,18 @@ pub fn addAppArtifacts(b: *std.Build, dep: *std.Build.Dependency, app_options: A
     const optimize_request = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size");
     const optimize = exampleOptimizeMode(b, optimize_request, .Debug);
     const app_optimize = exampleOptimizeMode(b, optimize_request, .ReleaseFast);
+
+    // Mobile targets get the embed static library as a `lib` step: the
+    // artifact the toolkit-owned iOS host (and any hand-written shim)
+    // links, so `native dev|package --target ios` works against every
+    // standard app build — generated graph or ejected — with nothing but
+    // `-Dtarget`. Desktop targets keep the step absent.
+    if (target.result.os.tag == .ios or target.result.abi.isAndroid()) {
+        addMobileLibWithTarget(b, dep, target, optimize, .{
+            .name = app_options.name,
+            .main = appPath(b, app_options.app_root, app_options.main),
+        });
+    }
     const platform_option = b.option(PlatformOption, "platform", "Desktop backend: auto, null, macos, linux, windows") orelse .auto;
     const trace_option = b.option(TraceOption, "trace", "Trace output: off, events, runtime, all") orelse .events;
     const debug_overlay = b.option(bool, "debug-overlay", "Enable debug overlay output") orelse false;

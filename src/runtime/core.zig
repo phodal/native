@@ -616,6 +616,16 @@ pub const Runtime = struct {
         return shell_layout.combinedViewportInsets(self.surface);
     }
 
+    /// The safe-area share of `viewportInsetsForWindow`: what the platform
+    /// reported as OS overlay (notch, status bar, home indicator) without
+    /// the keyboard's contribution. Apps that subscribe to window chrome
+    /// take ownership of exactly this share (see `UiApp.on_chrome`), so
+    /// the runtime needs it split out to keep insetting only the rest.
+    pub fn safeAreaInsetsForWindow(self: *const Runtime, window_id: platform.WindowId) geometry.InsetsF {
+        if (self.surface.id != window_id) return .{};
+        return self.surface.safe_area_insets;
+    }
+
     pub fn listCommands(self: *const Runtime, output: []Command) []const Command {
         const count = @min(output.len, self.options.commands.len);
         for (self.options.commands[0..count], 0..) |command, index| {

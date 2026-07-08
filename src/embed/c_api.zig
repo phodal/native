@@ -81,6 +81,7 @@ pub fn MobileCApi(comptime Host: type) type {
 
         pub fn native_sdk_app_resize(app: ?*anyopaque, width: f32, height: f32, scale: f32, surface: ?*anyopaque) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
+            host.publishViewportChrome(self, .{});
             self.embedded.resize(mobileSurface(width, height, scale, surface, .{}, .{})) catch |err| recordError(self, err);
         }
 
@@ -100,12 +101,17 @@ pub fn MobileCApi(comptime Host: type) type {
             keyboard_left: f32,
         ) callconv(.c) void {
             const self = hostApp(Host, app) orelse return;
+            const safe_area = geometry.InsetsF.init(safe_top, safe_right, safe_bottom, safe_left);
+            // Safe areas ride the window-chrome channel too (see
+            // host.publishViewportChrome) before the resize dispatch, so
+            // the chrome re-query the resize triggers reads fresh insets.
+            host.publishViewportChrome(self, safe_area);
             self.embedded.resize(mobileSurface(
                 width,
                 height,
                 scale,
                 surface,
-                geometry.InsetsF.init(safe_top, safe_right, safe_bottom, safe_left),
+                safe_area,
                 geometry.InsetsF.init(keyboard_top, keyboard_right, keyboard_bottom, keyboard_left),
             )) catch |err| recordError(self, err);
         }

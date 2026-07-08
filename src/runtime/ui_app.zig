@@ -514,6 +514,14 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// (fullscreen transitions). Main canvas window only —
             /// declared secondary windows have no chrome hook yet (same
             /// scope note as `sync`).
+            ///
+            /// Mobile hosts answer the same channel with the viewport's
+            /// safe-area insets (notch, status bar, home indicator), so
+            /// the padding an app derives here is the one code path on
+            /// every platform. Subscribing takes ownership of that
+            /// padding: the runtime stops pre-insetting widget layout by
+            /// the safe area (it keeps the keyboard's residual overlap),
+            /// so an unsubscribed app keeps today's automatic insets.
             on_chrome: ?*const fn (chrome: platform.WindowChrome) ?MsgT = null,
             /// Optional mapping from presented gpu frames (carrying the
             /// renderer diagnostics the runtime recorded) into messages.
@@ -1113,7 +1121,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             // (safe areas + keyboard on mobile, zero on desktop); the
             // canvas itself stays surface-sized so chrome and the clear
             // color still paint edge to edge under notches and bars.
-            const bounds = geometry.RectF.fromSize(self.canvas_size).deflate(runtime.viewportInsetsForWindow(window_id));
+            const bounds = geometry.RectF.fromSize(self.canvas_size).deflate(self.layoutViewportInsets(runtime, window_id));
             var window_source = VirtualWindowResolver{
                 .runtime = runtime,
                 .window_id = window_id,
@@ -1937,7 +1945,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             }
 
             fn load(context: *const anyopaque, arena: std.mem.Allocator, path: []const u8) ?[]const u8 {
-                const self: *HashingLoader = @constCast(@ptrCast(@alignCast(context)));
+                const self: *HashingLoader = @ptrCast(@alignCast(@constCast(context)));
                 const source = self.inner.load(self.inner.context, arena, path) orelse return null;
                 var hashed_path = path;
                 if (self.strip_prefix.len > 0 and path.len > self.strip_prefix.len and
@@ -2762,6 +2770,28 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 return;
             }
             try self.rebuild(runtime, resize_event.window_id);
+        }
+
+        /// Layout insets for the main canvas: the runtime's viewport
+        /// chrome, minus the safe-area share when the app subscribed to
+        /// `on_chrome`. A chrome subscriber owns safe-area padding — the
+        /// same contract the macOS hidden-titlebar band delivers over the
+        /// identical channel — so mobile surfaces hand it the notch,
+        /// status bar, and home indicator bands instead of pre-insetting
+        /// layout (which would pad the same band twice). The keyboard is
+        /// input avoidance, not chrome: the runtime keeps insetting by
+        /// its residual overlap beyond the safe area, so a padded app's
+        /// effective clearance still totals max(safe, keyboard) per edge.
+        fn layoutViewportInsets(self: *const Self, runtime: *const Runtime, window_id: platform.WindowId) geometry.InsetsF {
+            const combined = runtime.viewportInsetsForWindow(window_id);
+            if (self.options.on_chrome == null) return combined;
+            const safe = runtime.safeAreaInsetsForWindow(window_id);
+            return .{
+                .top = @max(combined.top - safe.top, 0),
+                .right = @max(combined.right - safe.right, 0),
+                .bottom = @max(combined.bottom - safe.bottom, 0),
+                .left = @max(combined.left - safe.left, 0),
+            };
         }
 
         /// The `on_chrome` delivery gate: query the platform's chrome

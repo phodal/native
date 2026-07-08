@@ -178,8 +178,15 @@ pub fn main(init: std.process.Init) !void {
         };
         const output_dir = try flagValue(args, "--output") orelse if (args.len >= 3 and args[2].len > 0 and args[2][0] != '-') args[2] else default_output;
         const archive = flagBool(args, "--archive");
-        const binary_path = try flagValue(args, "--binary") orelse try discoverAppBinary(allocator, init.io, metadata.name, target);
-        if (binary_path == null) {
+        // iOS packages an archive-ready Xcode project, so the library
+        // must exist: the release-shaped default is ReleaseFast (the
+        // desktop package expects a prebuilt ReleaseFast binary too).
+        const optimize_value = try flagValue(args, "--optimize") orelse if (target == .ios) "ReleaseFast" else "Debug";
+        const binary_path = try flagValue(args, "--binary") orelse switch (target) {
+            .ios => try iosPackageLibrary(allocator, init.io, init.environ_map, metadata.name, optimize_value),
+            else => try discoverAppBinary(allocator, init.io, metadata.name, target),
+        };
+        if (binary_path == null and target != .ios) {
             std.debug.print("warning[package.no-binary]: no app binary at zig-out/bin/{s} and no --binary flag - the package will not contain an executable\n" ++
                 "  build the app first (`zig build`) or pass --binary <path>\n", .{metadata.name});
         }
@@ -189,7 +196,7 @@ pub fn main(init: std.process.Init) !void {
         const stats = try tooling.package.createPackage(allocator, init.io, .{
             .metadata = metadata,
             .target = target,
-            .optimize = try flagValue(args, "--optimize") orelse "Debug",
+            .optimize = optimize_value,
             .output_path = output_dir,
             .binary_path = binary_path,
             .assets_dir = try flagValue(args, "--assets") orelse if (metadata.frontend) |frontend| frontend.dist else "assets",
@@ -202,12 +209,27 @@ pub fn main(init: std.process.Init) !void {
         tooling.package.printDiagnostic(stats);
     } else if (std.mem.eql(u8, command, "dev")) {
         checkVerbFlags("dev", args[2..], .{
-            .usage = "dev [dir] [--yes] [--url url] [--command \"npm run dev\"] [--timeout-ms n] [-D... zig build flags]\n       native dev [--manifest app.zon] --binary path [--url url] [--command \"npm run dev\"] [--timeout-ms n]",
-            .value_flags = &.{ "--url", "--command", "--timeout-ms", "--binary", "--manifest" },
+            .usage = "dev [dir] [--yes] [--target ios] [--device name] [--url url] [--command \"npm run dev\"] [--timeout-ms n] [-D... zig build flags]\n       native dev [--manifest app.zon] --binary path [--url url] [--command \"npm run dev\"] [--timeout-ms n]",
+            .value_flags = &.{ "--url", "--command", "--timeout-ms", "--binary", "--manifest", "--target", "--device" },
             .bool_flags = &.{"--yes"},
             .forwards_build_flags = true,
         });
-        if ((try flagValue(args, "--binary")) != null) {
+        if (try flagValue(args, "--target")) |dev_target| {
+            // The mobile dev loop: build the embed library for the
+            // simulator, wrap it in the toolkit-owned host, install +
+            // launch via simctl, and stream the app log.
+            if (!std.mem.eql(u8, dev_target, "ios")) {
+                fail("`native dev --target` supports: ios (desktop is the default without --target)");
+            }
+            const verb_args = parseVerbArgs(allocator, args[2..], &.{ "--target", "--device", "--url", "--command", "--timeout-ms" }) catch fail("usage: native dev [dir] --target ios [--device name] [--yes] [-D... zig build flags]");
+            try enterAppDir(init.io, verb_args.dir);
+            tooling.ios.runDev(allocator, init.io, .{
+                .base_env = init.environ_map,
+                .assume_yes = verb_args.assume_yes,
+                .forwarded_args = verb_args.forwarded,
+                .device = try flagValue(args, "--device"),
+            }) catch |err| return failVerb(err);
+        } else if ((try flagValue(args, "--binary")) != null) {
             // Legacy shape (`--binary` provided): the caller already built
             // the shell — e.g. the expanded template's `zig build dev` step —
             // so only run the frontend-server + shell flow. Unchanged.
@@ -245,11 +267,13 @@ pub fn main(init: std.process.Init) !void {
         checkPackageShortcutFlags(command, args[2..]);
         const metadata = try tooling.manifest.readMetadata(allocator, init.io, try flagValue(args, "--manifest") orelse "app.zon");
         const web_engine = try tooling.web_engine.resolve(.{ .web_engine = metadata.web_engine, .cef = metadata.cef }, .{});
+        const binary_path = try flagValue(args, "--binary") orelse try iosPackageLibrary(allocator, init.io, init.environ_map, metadata.name, "ReleaseFast");
         const stats = try tooling.package.createPackage(allocator, init.io, .{
             .metadata = metadata,
             .target = .ios,
+            .optimize = "ReleaseFast",
             .output_path = try flagValue(args, "--output") orelse if (args.len >= 3 and args[2].len > 0 and args[2][0] != '-') args[2] else "zig-out/mobile/ios",
-            .binary_path = try flagValue(args, "--binary"),
+            .binary_path = binary_path,
             .assets_dir = try flagValue(args, "--assets") orelse if (metadata.frontend) |frontend| frontend.dist else "assets",
             .frontend = metadata.frontend,
             .web_engine = web_engine.engine,
@@ -292,6 +316,7 @@ fn usage() void {
         \\commands:
         \\  init [path] [--frontend <native|next|vite|react|svelte|vue>] [--framework <sdk path>] [--full]   (default: native)
         \\  dev [dir] [--yes] [-D... zig build flags]      build a Debug binary and run it (markup hot reload)
+        \\  dev [dir] --target ios [--device name]         build for the iOS simulator, install + launch, stream the log
         \\  build [dir] [--yes] [-D... zig build flags]    build a ReleaseFast binary into zig-out/bin/
         \\  test [dir] [--yes] [-D... zig build flags]     run the app's test suite
         \\  check [dir] [--strict]                         validate src/*.native markup and app.zon (uses zig-out/model-contract.zon when fresh)
@@ -301,7 +326,7 @@ fn usage() void {
         \\  doctor [--strict] [--manifest app.zon] [--web-engine system|chromium] [--cef-dir path] [--cef-auto-install]
         \\  validate [app.zon]
         \\  bundle-assets [app.zon] [assets] [output]
-        \\  package [--target macos] [--output path] [--binary path] [--assets path] [--web-engine system|chromium] [--cef-dir path] [--cef-auto-install] [--signing none|adhoc|identity] [--identity name] [--entitlements path] [--team-id id] [--archive]
+        \\  package [--target macos|windows|linux|ios|android] [--output path] [--binary path] [--assets path] [--web-engine system|chromium] [--cef-dir path] [--cef-auto-install] [--signing none|adhoc|identity] [--identity name] [--entitlements path] [--team-id id] [--archive]
         \\  dev [--manifest app.zon] --binary path [--url http://127.0.0.1:5173/] [--command "npm run dev"] [--timeout-ms 30000]
         \\  package-windows [--output path] [--binary path]
         \\  package-linux [--output path] [--binary path]
@@ -380,6 +405,9 @@ fn failVerb(err: anyerror) anyerror!void {
         error.ZigBuildFailed,
         error.InvalidManifest,
         error.MarkupCheckFailed,
+        error.HostCompileFailed,
+        error.SimulatorUnavailable,
+        error.SimulatorCommandFailed,
         => std.process.exit(1),
         else => return err,
     }
@@ -574,6 +602,29 @@ fn initAppName(allocator: std.mem.Allocator, io: std.Io, destination: []const u8
     return .{ try allocator.dupe(u8, basename), true };
 }
 
+/// `native package --target ios` without --binary: build the DEVICE
+/// slice through the app's `zig build lib` step — always a fresh build,
+/// never a zig-out/lib discovery, because the dev loop installs the
+/// SIMULATOR slice at the same path and a stale wrong-slice library
+/// would silently break the archive. A failed build degrades to a
+/// libraryless project with a teaching warning (the repo-shaped webview
+/// apps have no mobile UiApp to compile) instead of aborting packaging.
+fn iosPackageLibrary(allocator: std.mem.Allocator, io: std.Io, env_map: *std.process.Environ.Map, app_name: []const u8, optimize: []const u8) !?[]const u8 {
+    std.debug.print("info[package.ios]: building the embed static library ({s}, {s})\n", .{ tooling.ios.LibSlice.device.zigTriple(), optimize });
+    return tooling.ios.buildEmbedLib(allocator, io, app_name, .{
+        .base_env = env_map,
+        .slice = .device,
+        .optimize = optimize,
+    }) catch |err| switch (err) {
+        error.ZigBuildFailed, error.MissingFramework => {
+            std.debug.print("warning[package.no-binary]: could not build the embed library - the project will not contain Libraries/libnative-sdk.a\n" ++
+                "  build it first (`zig build lib -Dtarget={s}`) or pass --binary <path>; the app must expose a mobile UiApp (`mobileOptions`)\n", .{tooling.ios.LibSlice.device.zigTriple()});
+            return null;
+        },
+        else => return err,
+    };
+}
+
 /// `native package` without --binary: the scaffolded build installs the
 /// app binary at zig-out/bin/<manifest name>, so look there before
 /// falling back to a binaryless bundle.
@@ -643,7 +694,8 @@ fn positionalArg(args: []const []const u8) ?[]const u8 {
                 std.mem.eql(u8, arg, "--team-id") or
                 std.mem.eql(u8, arg, "--command") or
                 std.mem.eql(u8, arg, "--url") or
-                std.mem.eql(u8, arg, "--timeout-ms"))
+                std.mem.eql(u8, arg, "--timeout-ms") or
+                std.mem.eql(u8, arg, "--device"))
             {
                 skip_next = true;
             }

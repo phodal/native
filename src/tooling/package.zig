@@ -4,13 +4,18 @@ const assets_tool = @import("assets.zig");
 const cef = @import("cef.zig");
 const codesign = @import("codesign.zig");
 const diagnostics = @import("diagnostics");
+const ios_tool = @import("ios.zig");
 const manifest_tool = @import("manifest.zig");
 const web_engine_tool = @import("web_engine.zig");
+const xcodeproj_tool = @import("xcodeproj.zig");
 
 /// The SDK's default app icon (kept in sync by `zig build generate-icon`):
 /// what a bundle ships when app.zon configures no usable icon at all, so
 /// a fresh package is never a text placeholder pretending to be an icon.
 const default_icon_icns = @embedFile("default_icon.icns");
+/// The same default as a PNG source, for targets whose icons re-render
+/// from a square source (the iOS asset catalog).
+const default_icon_png = @embedFile("default_icon.png");
 
 pub const PackageTarget = enum {
     macos,
@@ -182,21 +187,6 @@ pub fn createMacosApp(allocator: std.mem.Allocator, io: std.Io, options: Package
     };
 }
 
-pub fn createIosSkeleton(io: std.Io, output_path: []const u8) !PackageStats {
-    var cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(io, output_path);
-    var dir = try cwd.openDir(io, output_path, .{});
-    defer dir.close(io);
-    try dir.createDirPath(io, "Libraries");
-    try dir.createDirPath(io, "native-sdkHost");
-    try writeFile(dir, io, "README.md", iosReadme());
-    try writeFile(dir, io, "Info.plist", iosInfoPlist());
-    try writeFile(dir, io, "native-sdkHost/NativeSdkShellConfig.swift", iosDefaultShellConfig());
-    try writeFile(dir, io, "native-sdkHost/NativeSdkHostViewController.swift", iosViewController());
-    try writeFile(dir, io, "native-sdkHost/native_sdk.h", embedHeader());
-    return .{ .path = output_path, .target = .ios };
-}
-
 pub fn createAndroidSkeleton(io: std.Io, output_path: []const u8) !PackageStats {
     var cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, output_path);
@@ -279,25 +269,92 @@ fn createDesktopArtifact(allocator: std.mem.Allocator, io: std.Io, options: Pack
     return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = options.target, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine };
 }
 
+/// The iOS host tier: a COMPLETE Xcode project the user never edits —
+/// the toolkit-owned UIKit host sources, the generated Info.plist and
+/// asset catalog, the bundled app assets, and the embed static library,
+/// tied together by a deterministic project file (xcodeproj.zig) so
+/// `xcodebuild archive` works with zero edits. Everything app-specific
+/// comes from app.zon. Code signing stays manual, like macOS
+/// notarization.
 fn createIosArtifact(allocator: std.mem.Allocator, io: std.Io, options: PackageOptions) !PackageStats {
-    _ = try createIosSkeleton(io, options.output_path);
-    var dir = try std.Io.Dir.cwd().openDir(io, options.output_path, .{});
+    var cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, options.output_path);
+    var dir = try cwd.openDir(io, options.output_path, .{});
     defer dir.close(io);
-    try dir.createDirPath(io, "Libraries");
-    const info_plist = try iosInfoPlistForMetadata(allocator, options.metadata);
+
+    // iOS bundle identifiers allow only alphanumerics, hyphens, and
+    // periods; underscores in app.zon ids normalize to hyphens (the
+    // mirror of the Android hyphen-to-underscore mapping).
+    const bundle_id = try ios_tool.bundleIdAlloc(allocator, options.metadata.id);
+    defer allocator.free(bundle_id);
+    const project = xcodeproj_tool.ProjectModel{
+        .name = options.metadata.name,
+        .bundle_id = bundle_id,
+        .version = options.metadata.version,
+    };
+
+    // The project file and its shared scheme (headless xcodebuild needs
+    // an on-disk scheme; Xcode only auto-creates them interactively).
+    const project_dir = try std.fmt.allocPrint(allocator, "{s}.xcodeproj", .{options.metadata.name});
+    defer allocator.free(project_dir);
+    const schemes_dir = try std.fmt.allocPrint(allocator, "{s}/xcshareddata/xcschemes", .{project_dir});
+    defer allocator.free(schemes_dir);
+    try dir.createDirPath(io, schemes_dir);
+    const pbxproj = try xcodeproj_tool.pbxprojAlloc(allocator, project);
+    defer allocator.free(pbxproj);
+    const pbxproj_path = try std.fmt.allocPrint(allocator, "{s}/project.pbxproj", .{project_dir});
+    defer allocator.free(pbxproj_path);
+    try writeFile(dir, io, pbxproj_path, pbxproj);
+    const scheme = try xcodeproj_tool.schemeAlloc(allocator, project);
+    defer allocator.free(scheme);
+    const scheme_path = try std.fmt.allocPrint(allocator, "{s}/{s}.xcscheme", .{ schemes_dir, options.metadata.name });
+    defer allocator.free(scheme_path);
+    try writeFile(dir, io, scheme_path, scheme);
+
+    // The toolkit host sources and the app.zon-derived Info.plist.
+    try dir.createDirPath(io, "Host");
+    try writeFile(dir, io, "Host/" ++ ios_tool.host_source_name, ios_tool.host_source);
+    try writeFile(dir, io, "Host/" ++ ios_tool.host_header_name, ios_tool.host_header);
+    const info_plist = try ios_tool.infoPlistAlloc(allocator, options.metadata);
     defer allocator.free(info_plist);
-    try writeFile(dir, io, "Info.plist", info_plist);
-    const shell_model = mobileShellModel(options.metadata);
-    const shell_config = try iosShellConfigAlloc(allocator, shell_model);
-    defer allocator.free(shell_config);
-    try writeFile(dir, io, "native-sdkHost/NativeSdkShellConfig.swift", shell_config);
+    try writeFile(dir, io, "Host/Info.plist", info_plist);
+
+    // App icon (single-source pipeline) and bundled assets. The bundled
+    // folder is named "Assets", NOT "Resources": a bundle-root directory
+    // named Resources makes CFBundle read the .app as a deep
+    // (macOS-layout) bundle, and xcodebuild's archive stamping then fails
+    // to find the Info.plist ("Archive Missing Bundle Identifier").
     try writeIosIcon(allocator, io, dir, options.metadata);
-    const assets_output = try assetOutputPath(allocator, options.output_path, "Resources", options);
+    const assets_output = try assetOutputPath(allocator, options.output_path, "Assets", options);
     defer allocator.free(assets_output);
     const bundle_stats = try assets_tool.bundle(allocator, io, options.assets_dir, assets_output);
+
+    // The app's embed static library (device arm64 slice — built by the
+    // CLI before packaging, or passed via --binary).
+    try dir.createDirPath(io, "Libraries");
     if (options.binary_path) |binary_path| try copyFileToDir(allocator, io, dir, binary_path, "Libraries/libnative-sdk.a");
+
+    const readme = try iosProjectReadme(allocator, options.metadata);
+    defer allocator.free(readme);
+    try writeFile(dir, io, "README.md", readme);
     try writeReport(allocator, dir, io, "package-manifest.zon", options, "libnative-sdk.a", bundle_stats.asset_count);
     return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = .ios, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine };
+}
+
+fn iosProjectReadme(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
+    return std.fmt.allocPrint(allocator,
+        \\# {s} — iOS host project
+        \\
+        \\Generated by `native package --target ios`. Everything here is toolkit-owned output derived from app.zon — regenerate instead of editing.
+        \\
+        \\- `{s}.xcodeproj` — deterministic project with a shared scheme; `xcodebuild -scheme {s} archive` works with zero edits (for an unsigned verification pass add `CODE_SIGNING_ALLOWED=NO`).
+        \\- `Host/` — the toolkit UIKit host (canvas presentation, touch/keyboard/IME, safe areas) and the generated Info.plist.
+        \\- `Libraries/libnative-sdk.a` — the app compiled as the embed static library (device arm64 slice). The simulator loop is `native dev --target ios`, which rebuilds the library for the simulator.
+        \\- `Assets.xcassets`, `Assets/` — the app icon rendered from the single-source icon pipeline, and the bundled app assets.
+        \\
+        \\Code signing stays manual, like macOS notarization: open the project once in Xcode to pick a team, or pass `DEVELOPMENT_TEAM=<id> CODE_SIGN_IDENTITY="Apple Development"` to xcodebuild.
+        \\
+    , .{ metadata.displayName(), metadata.name, metadata.name });
 }
 
 fn createAndroidArtifact(allocator: std.mem.Allocator, io: std.Io, options: PackageOptions) !PackageStats {
@@ -624,49 +681,6 @@ fn embedHeader() []const u8 {
     ;
 }
 
-fn iosReadme() []const u8 {
-    return "iOS native-sdk host skeleton. Link Libraries/libnative-sdk.a and call the functions in native-sdkHost/native_sdk.h from the native UIKit shell.\n";
-}
-
-fn iosInfoPlist() []const u8 {
-    return
-    \\<?xml version="1.0" encoding="UTF-8"?>
-    \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    \\<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.native_sdk.ios</string><key>CFBundleName</key><string>native-sdkHost</string></dict></plist>
-    \\
-    ;
-}
-
-fn iosInfoPlistForMetadata(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
-    const bundle_id = try xmlEscapeAlloc(allocator, metadata.id);
-    defer allocator.free(bundle_id);
-    const name = try xmlEscapeAlloc(allocator, metadata.name);
-    defer allocator.free(name);
-    const display_name = try xmlEscapeAlloc(allocator, metadata.displayName());
-    defer allocator.free(display_name);
-    const version = try xmlEscapeAlloc(allocator, metadata.version);
-    defer allocator.free(version);
-    return std.fmt.allocPrint(allocator,
-        \\<?xml version="1.0" encoding="UTF-8"?>
-        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        \\<plist version="1.0">
-        \\<dict>
-        \\  <key>CFBundleIdentifier</key>
-        \\  <string>{s}</string>
-        \\  <key>CFBundleName</key>
-        \\  <string>{s}</string>
-        \\  <key>CFBundleDisplayName</key>
-        \\  <string>{s}</string>
-        \\  <key>CFBundleShortVersionString</key>
-        \\  <string>{s}</string>
-        \\  <key>CFBundleVersion</key>
-        \\  <string>{s}</string>
-        \\</dict>
-        \\</plist>
-        \\
-    , .{ bundle_id, name, display_name, version, version });
-}
-
 const MobileShellModel = struct {
     title: []const u8,
     status: []const u8,
@@ -744,544 +758,6 @@ fn sourceStringLiteralAlloc(allocator: std.mem.Allocator, value: []const u8, tar
     }
     try out.append(allocator, '"');
     return out.toOwnedSlice(allocator);
-}
-
-fn iosDefaultShellConfig() []const u8 {
-    return
-    \\enum NativeSdkShellConfig {
-    \\    static let title = "native-sdk"
-    \\    static let status = "Native commands ready"
-    \\    static let primaryButtonTitle = "Back"
-    \\    static let primaryCommand = "mobile.back"
-    \\    static let secondaryButtonTitle = "Refresh"
-    \\    static let secondaryCommand = "mobile.refresh"
-    \\    static let assetRootSubdirectory = ""
-    \\    static let assetEntryPath = "index.html"
-    \\}
-    \\
-    ;
-}
-
-fn iosShellConfigAlloc(allocator: std.mem.Allocator, model: MobileShellModel) ![]const u8 {
-    const title = try sourceStringLiteralAlloc(allocator, model.title, .swift);
-    defer allocator.free(title);
-    const status = try sourceStringLiteralAlloc(allocator, model.status, .swift);
-    defer allocator.free(status);
-    const primary_title = try sourceStringLiteralAlloc(allocator, model.primary_button_title, .swift);
-    defer allocator.free(primary_title);
-    const primary_command = try sourceStringLiteralAlloc(allocator, model.primary_command, .swift);
-    defer allocator.free(primary_command);
-    const secondary_title = try sourceStringLiteralAlloc(allocator, model.secondary_button_title, .swift);
-    defer allocator.free(secondary_title);
-    const secondary_command = try sourceStringLiteralAlloc(allocator, model.secondary_command, .swift);
-    defer allocator.free(secondary_command);
-    const asset_root = try sourceStringLiteralAlloc(allocator, model.asset_root_subdirectory, .swift);
-    defer allocator.free(asset_root);
-    const asset_entry = try sourceStringLiteralAlloc(allocator, model.asset_entry_path, .swift);
-    defer allocator.free(asset_entry);
-
-    return std.fmt.allocPrint(allocator,
-        \\enum NativeSdkShellConfig {{
-        \\    static let title = {s}
-        \\    static let status = {s}
-        \\    static let primaryButtonTitle = {s}
-        \\    static let primaryCommand = {s}
-        \\    static let secondaryButtonTitle = {s}
-        \\    static let secondaryCommand = {s}
-        \\    static let assetRootSubdirectory = {s}
-        \\    static let assetEntryPath = {s}
-        \\}}
-        \\
-    , .{ title, status, primary_title, primary_command, secondary_title, secondary_command, asset_root, asset_entry });
-}
-
-fn iosViewController() []const u8 {
-    return
-    \\import UIKit
-    \\import WebKit
-    \\
-    \\final class NativeSdkHostViewController: UIViewController {
-    \\    private let headerView = UIView()
-    \\    private let titleLabel = UILabel()
-    \\    private let statusLabel = UILabel()
-    \\    private let backButton = UIButton(type: .system)
-    \\    private let refreshButton = UIButton(type: .system)
-    \\    private let webView = WKWebView(frame: .zero)
-    \\    private var webViewBottomConstraint: NSLayoutConstraint?
-    \\    private var nativeApp: UnsafeMutableRawPointer?
-    \\    private var keyboardBottomInset: CGFloat = 0
-    \\    private var widgetAccessibilityElements: [UIAccessibilityElement] = []
-    \\
-    \\    private struct WidgetSemantics {
-    \\        let id: UInt64
-    \\        let parentId: UInt64
-    \\        let role: Int32
-    \\        let flags: UInt32
-    \\        let actions: UInt32
-    \\        let bounds: CGRect
-    \\        let value: Float?
-    \\        let label: String
-    \\        let text: String
-    \\        let placeholder: String
-    \\        let textSelectionStart: Int
-    \\        let textSelectionEnd: Int
-    \\        let textCompositionStart: Int
-    \\        let textCompositionEnd: Int
-    \\        let gridRowIndex: Int
-    \\        let gridColumnIndex: Int
-    \\        let gridRowCount: Int
-    \\        let gridColumnCount: Int
-    \\        let listItemIndex: Int
-    \\        let listItemCount: Int
-    \\        let scrollOffset: Float
-    \\        let scrollViewportExtent: Float
-    \\        let scrollContentExtent: Float
-    \\        let hasScroll: Bool
-    \\    }
-    \\
-    \\    private struct WidgetTextGeometry {
-    \\        let id: UInt64
-    \\        let caretBounds: CGRect?
-    \\        let selectionBounds: CGRect?
-    \\        let selectionRectCount: Int
-    \\        let compositionBounds: CGRect?
-    \\        let compositionRectCount: Int
-    \\    }
-    \\
-    \\    private final class WidgetAccessibilityElement: UIAccessibilityElement {
-    \\        private weak var owner: NativeSdkHostViewController?
-    \\        private let node: WidgetSemantics
-    \\
-    \\        init(accessibilityContainer container: Any, owner: NativeSdkHostViewController, node: WidgetSemantics) {
-    \\            self.owner = owner
-    \\            self.node = node
-    \\            super.init(accessibilityContainer: container)
-    \\        }
-    \\
-    \\        override func accessibilityActivate() -> Bool {
-    \\            owner?.activateWidgetAccessibilityNode(node) ?? false
-    \\        }
-    \\
-    \\        override func accessibilityIncrement() {
-    \\            _ = owner?.incrementWidgetAccessibilityNode(node)
-    \\        }
-    \\
-    \\        override func accessibilityDecrement() {
-    \\            _ = owner?.decrementWidgetAccessibilityNode(node)
-    \\        }
-    \\
-    \\        override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
-    \\            switch direction {
-    \\            case .down, .right:
-    \\                return owner?.incrementWidgetAccessibilityNode(node) ?? false
-    \\            case .up, .left:
-    \\                return owner?.decrementWidgetAccessibilityNode(node) ?? false
-    \\            default:
-    \\                return false
-    \\            }
-    \\        }
-    \\
-    \\        override func accessibilityPerformEscape() -> Bool {
-    \\            owner?.dismissWidgetAccessibilityNode(node) ?? false
-    \\        }
-    \\    }
-    \\
-    \\    override func viewDidLoad() {
-    \\        super.viewDidLoad()
-    \\        view.backgroundColor = .systemBackground
-    \\        configureHeader()
-    \\
-    \\        headerView.translatesAutoresizingMaskIntoConstraints = false
-    \\        webView.translatesAutoresizingMaskIntoConstraints = false
-    \\        view.addSubview(headerView)
-    \\        view.addSubview(webView)
-    \\        let bottom = webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-    \\        webViewBottomConstraint = bottom
-    \\        NSLayoutConstraint.activate([
-    \\            headerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-    \\            headerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-    \\            headerView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-    \\            headerView.heightAnchor.constraint(equalToConstant: 92),
-    \\            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-    \\            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-    \\            webView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
-    \\            bottom,
-    \\        ])
-    \\        NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameWillChange), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-    \\        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
-    \\
-    \\        nativeApp = native_sdk_app_create()
-    \\        if let nativeApp {
-    \\            configureNativeAssetRoot(nativeApp)
-    \\            native_sdk_app_start(nativeApp)
-    \\            refreshWidgetAccessibility()
-    \\        }
-    \\        loadWorkspace()
-    \\    }
-    \\
-    \\    private func packagedAssetRootURL() -> URL? {
-    \\        guard let resourceURL = Bundle.main.resourceURL else { return nil }
-    \\        let resourcesURL = resourceURL.appendingPathComponent("Resources", isDirectory: true)
-    \\        let roots: [URL]
-    \\        if NativeSdkShellConfig.assetRootSubdirectory.isEmpty {
-    \\            roots = [resourceURL, resourcesURL]
-    \\        } else {
-    \\            roots = [
-    \\                resourceURL.appendingPathComponent(NativeSdkShellConfig.assetRootSubdirectory, isDirectory: true),
-    \\                resourcesURL.appendingPathComponent(NativeSdkShellConfig.assetRootSubdirectory, isDirectory: true),
-    \\            ]
-    \\        }
-    \\        for rootURL in roots {
-    \\            let entryURL = rootURL.appendingPathComponent(NativeSdkShellConfig.assetEntryPath, isDirectory: false)
-    \\            if FileManager.default.fileExists(atPath: entryURL.path) { return rootURL }
-    \\        }
-    \\        return roots.first
-    \\    }
-    \\
-    \\    private func configureNativeAssetRoot(_ nativeApp: UnsafeMutableRawPointer) {
-    \\        guard let rootURL = packagedAssetRootURL() else { return }
-    \\        let path = rootURL.path
-    \\        path.withCString { pointer in
-    \\            native_sdk_app_set_asset_root(nativeApp, pointer, UInt(path.utf8.count))
-    \\        }
-    \\        NativeSdkShellConfig.assetEntryPath.withCString { pointer in
-    \\            native_sdk_app_set_asset_entry(nativeApp, pointer, UInt(NativeSdkShellConfig.assetEntryPath.utf8.count))
-    \\        }
-    \\    }
-    \\
-    \\    private func loadWorkspace() {
-    \\        if let rootURL = packagedAssetRootURL() {
-    \\            let entryURL = rootURL.appendingPathComponent(NativeSdkShellConfig.assetEntryPath, isDirectory: false)
-    \\            if FileManager.default.fileExists(atPath: entryURL.path) {
-    \\                webView.loadFileURL(entryURL, allowingReadAccessTo: rootURL)
-    \\                return
-    \\            }
-    \\        }
-    \\        webView.loadHTMLString(Self.html, baseURL: nil)
-    \\    }
-    \\
-    \\    private func configureHeader() {
-    \\        headerView.backgroundColor = .secondarySystemBackground
-    \\        titleLabel.text = NativeSdkShellConfig.title
-    \\        titleLabel.font = .preferredFont(forTextStyle: .title2)
-    \\        titleLabel.adjustsFontForContentSizeCategory = true
-    \\        statusLabel.text = NativeSdkShellConfig.status
-    \\        statusLabel.font = .preferredFont(forTextStyle: .caption1)
-    \\        statusLabel.textColor = .secondaryLabel
-    \\        backButton.setTitle(NativeSdkShellConfig.primaryButtonTitle, for: .normal)
-    \\        backButton.addTarget(self, action: #selector(sendBackCommand), for: .touchUpInside)
-    \\        refreshButton.setTitle(NativeSdkShellConfig.secondaryButtonTitle, for: .normal)
-    \\        refreshButton.addTarget(self, action: #selector(sendRefreshCommand), for: .touchUpInside)
-    \\        [titleLabel, statusLabel, backButton, refreshButton].forEach {
-    \\            $0.translatesAutoresizingMaskIntoConstraints = false
-    \\            headerView.addSubview($0)
-    \\        }
-    \\        NSLayoutConstraint.activate([
-    \\            titleLabel.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 20),
-    \\            titleLabel.topAnchor.constraint(equalTo: headerView.topAnchor, constant: 16),
-    \\            statusLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-    \\            statusLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6),
-    \\            refreshButton.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -20),
-    \\            refreshButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-    \\            backButton.trailingAnchor.constraint(equalTo: refreshButton.leadingAnchor, constant: -12),
-    \\            backButton.centerYAnchor.constraint(equalTo: refreshButton.centerYAnchor),
-    \\        ])
-    \\    }
-    \\
-    \\    @objc private func sendBackCommand() {
-    \\        dispatchNativeCommand(NativeSdkShellConfig.primaryCommand)
-    \\    }
-    \\
-    \\    @objc private func sendRefreshCommand() {
-    \\        dispatchNativeCommand(NativeSdkShellConfig.secondaryCommand)
-    \\    }
-    \\
-    \\    private func dispatchNativeCommand(_ command: String) {
-    \\        guard let nativeApp else { return }
-    \\        command.withCString { pointer in
-    \\            native_sdk_app_command(nativeApp, pointer, UInt(command.utf8.count))
-    \\        }
-    \\        let count = native_sdk_app_last_command_count(nativeApp)
-    \\        let name = String(cString: native_sdk_app_last_command_name(nativeApp))
-    \\        statusLabel.text = "\(name) #\(count)"
-    \\        native_sdk_app_frame(nativeApp)
-    \\        refreshWidgetAccessibility()
-    \\    }
-    \\
-    \\    @objc private func keyboardFrameWillChange(_ notification: Notification) {
-    \\        guard let value = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else { return }
-    \\        let keyboardFrame = view.convert(value.cgRectValue, from: nil)
-    \\        keyboardBottomInset = max(0, view.bounds.maxY - keyboardFrame.minY)
-    \\        webViewBottomConstraint?.constant = -keyboardBottomInset
-    \\        view.layoutIfNeeded()
-    \\        sendViewportUpdate()
-    \\    }
-    \\
-    \\    @objc private func keyboardWillHide(_ notification: Notification) {
-    \\        _ = notification
-    \\        keyboardBottomInset = 0
-    \\        webViewBottomConstraint?.constant = 0
-    \\        view.layoutIfNeeded()
-    \\        sendViewportUpdate()
-    \\    }
-    \\
-    \\    override func viewDidLayoutSubviews() {
-    \\        super.viewDidLayoutSubviews()
-    \\        sendViewportUpdate()
-    \\    }
-    \\
-    \\    private func sendViewportUpdate() {
-    \\        guard let nativeApp else { return }
-    \\        let scale = Float(view.window?.screen.scale ?? UIScreen.main.scale)
-    \\        let safe = view.safeAreaInsets
-    \\        native_sdk_app_viewport(nativeApp, Float(webView.bounds.width), Float(webView.bounds.height), scale, nil, Float(safe.top), Float(safe.right), Float(safe.bottom), Float(safe.left), 0, 0, Float(keyboardBottomInset), 0)
-    \\        native_sdk_app_frame(nativeApp)
-    \\        refreshWidgetAccessibility()
-    \\    }
-    \\
-    \\    private func widgetSemanticsSnapshot() -> [WidgetSemantics] {
-    \\        guard let nativeApp else { return [] }
-    \\        let count = Int(native_sdk_app_widget_semantics_count(nativeApp))
-    \\        var nodes: [WidgetSemantics] = []
-    \\        nodes.reserveCapacity(count)
-    \\        for index in 0..<count {
-    \\            if let node = widgetSemantics(at: index) {
-    \\                nodes.append(node)
-    \\            }
-    \\        }
-    \\        return nodes
-    \\    }
-    \\
-    \\    private func widgetSemantics(at index: Int) -> WidgetSemantics? {
-    \\        guard let nativeApp else { return nil }
-    \\        var node = native_sdk_widget_semantics_t()
-    \\        guard native_sdk_app_widget_semantics_at(nativeApp, UInt(index), &node) != 0 else { return nil }
-    \\        return widgetSemantics(from: node)
-    \\    }
-    \\
-    \\    private func widgetSemantics(id: UInt64) -> WidgetSemantics? {
-    \\        guard let nativeApp else { return nil }
-    \\        var node = native_sdk_widget_semantics_t()
-    \\        guard native_sdk_app_widget_semantics_by_id(nativeApp, id, &node) != 0 else { return nil }
-    \\        return widgetSemantics(from: node)
-    \\    }
-    \\
-    \\    private func widgetSemantics(from node: native_sdk_widget_semantics_t) -> WidgetSemantics {
-    \\        return WidgetSemantics(
-    \\            id: node.id,
-    \\            parentId: node.parent_id,
-    \\            role: Int32(node.role),
-    \\            flags: node.flags,
-    \\            actions: node.actions,
-    \\            bounds: CGRect(x: CGFloat(node.x), y: CGFloat(node.y), width: CGFloat(node.width), height: CGFloat(node.height)),
-    \\            value: node.has_value != 0 ? node.value : nil,
-    \\            label: Self.utf8String(node.label, length: node.label_len),
-    \\            text: Self.utf8String(node.text, length: node.text_len),
-    \\            placeholder: Self.utf8String(node.placeholder, length: node.placeholder_len),
-    \\            textSelectionStart: Int(node.text_selection_start),
-    \\            textSelectionEnd: Int(node.text_selection_end),
-    \\            textCompositionStart: Int(node.text_composition_start),
-    \\            textCompositionEnd: Int(node.text_composition_end),
-    \\            gridRowIndex: Int(node.grid_row_index),
-    \\            gridColumnIndex: Int(node.grid_column_index),
-    \\            gridRowCount: Int(node.grid_row_count),
-    \\            gridColumnCount: Int(node.grid_column_count),
-    \\            listItemIndex: Int(node.list_item_index),
-    \\            listItemCount: Int(node.list_item_count),
-    \\            scrollOffset: node.scroll_offset,
-    \\            scrollViewportExtent: node.scroll_viewport_extent,
-    \\            scrollContentExtent: node.scroll_content_extent,
-    \\            hasScroll: node.has_scroll != 0
-    \\        )
-    \\    }
-    \\
-    \\    private func widgetTextGeometry(id: UInt64) -> WidgetTextGeometry? {
-    \\        guard let nativeApp else { return nil }
-    \\        var geometry = native_sdk_widget_text_geometry_t()
-    \\        guard native_sdk_app_widget_text_geometry(nativeApp, id, &geometry) != 0 else { return nil }
-    \\        return WidgetTextGeometry(
-    \\            id: id,
-    \\            caretBounds: geometry.has_caret_bounds != 0 ? CGRect(x: CGFloat(geometry.caret_x), y: CGFloat(geometry.caret_y), width: CGFloat(geometry.caret_width), height: CGFloat(geometry.caret_height)) : nil,
-    \\            selectionBounds: geometry.has_selection_bounds != 0 ? CGRect(x: CGFloat(geometry.selection_x), y: CGFloat(geometry.selection_y), width: CGFloat(geometry.selection_width), height: CGFloat(geometry.selection_height)) : nil,
-    \\            selectionRectCount: Int(geometry.selection_rect_count),
-    \\            compositionBounds: geometry.has_composition_bounds != 0 ? CGRect(x: CGFloat(geometry.composition_x), y: CGFloat(geometry.composition_y), width: CGFloat(geometry.composition_width), height: CGFloat(geometry.composition_height)) : nil,
-    \\            compositionRectCount: Int(geometry.composition_rect_count)
-    \\        )
-    \\    }
-    \\
-    \\    @discardableResult
-    \\    private func dispatchWidgetAction(
-    \\        id: UInt64,
-    \\        action: Int32,
-    \\        text: String? = nil,
-    \\        selectionAnchor: UInt = 0,
-    \\        selectionFocus: UInt = 0,
-    \\        hasSelection: Bool = false
-    \\    ) -> Bool {
-    \\        guard let nativeApp else { return false }
-    \\        var request = native_sdk_widget_action_t()
-    \\        request.id = id
-    \\        request.action = action
-    \\        request.selection_anchor = selectionAnchor
-    \\        request.selection_focus = selectionFocus
-    \\        request.has_selection = hasSelection ? 1 : 0
-    \\        let ok: Int32
-    \\        if let text {
-    \\            ok = text.withCString { pointer in
-    \\                request.text = pointer
-    \\                request.text_len = UInt(text.utf8.count)
-    \\                return native_sdk_app_widget_action(nativeApp, &request)
-    \\            }
-    \\        } else {
-    \\            request.text = nil
-    \\            request.text_len = 0
-    \\            ok = native_sdk_app_widget_action(nativeApp, &request)
-    \\        }
-    \\        if ok != 0 {
-    \\            native_sdk_app_frame(nativeApp)
-    \\            refreshWidgetAccessibility()
-    \\        }
-    \\        return ok != 0
-    \\    }
-    \\
-    \\    private func refreshWidgetAccessibility() {
-    \\        let semantics = widgetSemanticsSnapshot()
-    \\        statusLabel.accessibilityValue = "Accessible items: \(semantics.count)"
-    \\        widgetAccessibilityElements = semantics.map { node in
-    \\            let element = WidgetAccessibilityElement(accessibilityContainer: webView, owner: self, node: node)
-    \\            element.accessibilityIdentifier = "native-sdk-widget-\(node.id)"
-    \\            element.accessibilityLabel = node.label.isEmpty ? node.text : node.label
-    \\            element.accessibilityValue = widgetAccessibilityValue(node)
-    \\            if !node.placeholder.isEmpty && node.text.isEmpty {
-    \\                element.accessibilityHint = node.placeholder
-    \\            }
-    \\            element.accessibilityFrameInContainerSpace = node.bounds
-    \\            element.accessibilityTraits = widgetAccessibilityTraits(node)
-    \\            return element
-    \\        }
-    \\        webView.accessibilityElements = widgetAccessibilityElements.isEmpty ? nil : widgetAccessibilityElements as [Any]
-    \\    }
-    \\
-    \\    private func widgetAccessibilityValue(_ node: WidgetSemantics) -> String? {
-    \\        var states: [String] = []
-    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_EXPANDED)) != 0 {
-    \\            states.append("Expanded")
-    \\        }
-    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_COLLAPSED)) != 0 {
-    \\            states.append("Collapsed")
-    \\        }
-    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_REQUIRED)) != 0 {
-    \\            states.append("Required")
-    \\        }
-    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_READ_ONLY)) != 0 {
-    \\            states.append("Read only")
-    \\        }
-    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_INVALID)) != 0 {
-    \\            states.append("Invalid")
-    \\        }
-    \\        if !states.isEmpty {
-    \\            return states.joined(separator: ", ")
-    \\        }
-    \\        if let value = node.value {
-    \\            switch node.role {
-    \\            case Int32(NATIVE_SDK_WIDGET_ROLE_CHECKBOX), Int32(NATIVE_SDK_WIDGET_ROLE_SWITCH):
-    \\                return value >= 0.5 ? "On" : "Off"
-    \\            case Int32(NATIVE_SDK_WIDGET_ROLE_SLIDER), Int32(NATIVE_SDK_WIDGET_ROLE_PROGRESSBAR):
-    \\                return "\(Int((value * 100).rounded()))%"
-    \\            default:
-    \\                return "\(value)"
-    \\            }
-    \\        }
-    \\        return node.text.isEmpty ? nil : node.text
-    \\    }
-    \\
-    \\    private func activateWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
-    \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        if widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_TOGGLE)) {
-    \\            return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_TOGGLE))
-    \\        }
-    \\        if widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_PRESS)) {
-    \\            return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_PRESS))
-    \\        }
-    \\        if widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_SELECT)) {
-    \\            return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_SELECT))
-    \\        }
-    \\        return false
-    \\    }
-    \\
-    \\    private func incrementWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
-    \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        guard widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_INCREMENT)) else { return false }
-    \\        return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_INCREMENT))
-    \\    }
-    \\
-    \\    private func decrementWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
-    \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        guard widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_DECREMENT)) else { return false }
-    \\        return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_DECREMENT))
-    \\    }
-    \\
-    \\    private func dismissWidgetAccessibilityNode(_ node: WidgetSemantics) -> Bool {
-    \\        let current = widgetSemantics(id: node.id) ?? node
-    \\        guard widgetSupportsAction(current, UInt32(NATIVE_SDK_WIDGET_ACTION_DISMISS)) else { return false }
-    \\        return dispatchWidgetAction(id: current.id, action: Int32(NATIVE_SDK_WIDGET_ACTION_KIND_DISMISS))
-    \\    }
-    \\
-    \\    private func widgetSupportsAction(_ node: WidgetSemantics, _ action: UInt32) -> Bool {
-    \\        return (node.actions & action) != 0
-    \\    }
-    \\
-    \\    private func widgetAccessibilityTraits(_ node: WidgetSemantics) -> UIAccessibilityTraits {
-    \\        var traits: UIAccessibilityTraits = []
-    \\        switch node.role {
-    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_BUTTON), Int32(NATIVE_SDK_WIDGET_ROLE_MENUITEM):
-    \\            traits.insert(.button)
-    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_CHECKBOX), Int32(NATIVE_SDK_WIDGET_ROLE_SWITCH), Int32(NATIVE_SDK_WIDGET_ROLE_TAB):
-    \\            traits.insert(.button)
-    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_SLIDER):
-    \\            traits.insert(.adjustable)
-    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_IMAGE):
-    \\            traits.insert(.image)
-    \\        case Int32(NATIVE_SDK_WIDGET_ROLE_TEXT), Int32(NATIVE_SDK_WIDGET_ROLE_PROGRESSBAR):
-    \\            traits.insert(.staticText)
-    \\        default:
-    \\            break
-    \\        }
-    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_SELECTED)) != 0 {
-    \\            traits.insert(.selected)
-    \\        }
-    \\        if (node.flags & UInt32(NATIVE_SDK_WIDGET_FLAG_DISABLED)) != 0 {
-    \\            traits.insert(.notEnabled)
-    \\        }
-    \\        return traits
-    \\    }
-    \\
-    \\    private static func utf8String(_ pointer: UnsafePointer<CChar>?, length: UInt) -> String {
-    \\        guard let pointer, length > 0 else { return "" }
-    \\        let bytes = UnsafeBufferPointer(start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self), count: Int(length))
-    \\        return String(decoding: bytes, as: UTF8.self)
-    \\    }
-    \\
-    \\    deinit {
-    \\        NotificationCenter.default.removeObserver(self)
-    \\        guard let nativeApp else { return }
-    \\        native_sdk_app_stop(nativeApp)
-    \\        native_sdk_app_destroy(nativeApp)
-    \\    }
-    \\
-    \\    private static let html = """
-    \\    <!doctype html>
-    \\    <meta name="viewport" content="width=device-width, initial-scale=1">
-    \\    <body style="margin:0;font-family:-apple-system,system-ui;background:#f7f8fa;color:#171717">
-    \\      <main style="padding:28px 22px;display:grid;gap:16px">
-    \\        <h1 style="margin:0;font-size:30px">Workspace</h1>
-    \\        <p style="margin:0;color:#5f6672;line-height:1.5">This content is rendered by WKWebView while the header remains native UIKit.</p>
-    \\      </main>
-    \\    </body>
-    \\    """
-    \\}
-    \\
-    ;
 }
 
 fn androidReadme() []const u8 {
@@ -2444,8 +1920,21 @@ fn writeWindowsIcon(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, m
 /// modern toolchains take, dropped next to the host skeleton sources.
 fn writeIosIcon(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, metadata: manifest_tool.Metadata) !void {
     const plan = resolveIconPlan(metadata);
-    const path = plan.source_path orelse return;
-    var source = (try loadIconSource(allocator, io, path, plan.source_kind)) orelse return;
+    var source: app_icon_tool.Source = source: {
+        if (plan.source_path) |path| {
+            if (try loadIconSource(allocator, io, path, plan.source_kind)) |loaded| break :source loaded;
+        }
+        // No usable PNG/SVG source (an .icns-only manifest, or a missing
+        // file): render the default icon — the generated Xcode project
+        // references Assets.xcassets unconditionally, so the catalog must
+        // always exist.
+        switch (try app_icon_tool.loadSource(allocator, default_icon_png, .png)) {
+            .ok => |loaded| break :source loaded,
+            // The embedded default is a valid square PNG by construction
+            // (`zig build generate-icon` regenerates it).
+            .issue => unreachable,
+        }
+    };
     defer source.deinit(allocator);
     const encoded = app_icon_tool.buildSquarePng(allocator, &source, app_icon_tool.ios_icon_size) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -3317,35 +2806,19 @@ test "mobile package templates include native command shells" {
     try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_widget_text_geometry") != null);
     try std.testing.expect(std.mem.indexOf(u8, header, "native_sdk_app_widget_action") != null);
 
-    const ios_controller = iosViewController();
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "UIButton(type: .system)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NativeSdkShellConfig.primaryCommand") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_command") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_set_asset_root") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_set_asset_entry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NativeSdkShellConfig.assetEntryPath") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "accessibilityPerformEscape") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "dismissWidgetAccessibilityNode") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NATIVE_SDK_WIDGET_FLAG_EXPANDED") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NATIVE_SDK_WIDGET_FLAG_REQUIRED") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "states.joined(separator: \", \")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "webView.loadFileURL") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "appendingPathComponent(\"Resources\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "keyboardWillChangeFrameNotification") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_viewport") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "struct WidgetSemantics") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "let placeholder: String") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "accessibilityHint = node.placeholder") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "struct WidgetTextGeometry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_semantics_count") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_semantics_by_id") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_text_geometry") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_widget_action") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "WidgetAccessibilityElement(accessibilityContainer: webView") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "override func accessibilityActivate") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "NATIVE_SDK_WIDGET_ACTION_KIND_INCREMENT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "view.safeAreaInsets") != null);
-    try std.testing.expect(std.mem.indexOf(u8, iosDefaultShellConfig(), "primaryCommand = \"mobile.back\"") != null);
+    // The iOS host tier ships the toolkit-owned UIKit host over the same
+    // ABI (canvas presentation, input, IME, safe areas, CoreText
+    // measurement, and the panic-path dyld shim the iOS SDK hides).
+    const ios_host = ios_tool.host_source;
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "native_sdk_app_viewport") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "native_sdk_app_render_pixels") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "native_sdk_app_scroll") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "native_sdk_app_text_input_state") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "native_sdk_app_set_text_measure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "native_sdk_app_set_asset_root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "native_sdk_app_widget_semantics_by_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "view.safeAreaInsets") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ios_host, "_dyld_get_image_header_containing_address") != null);
 
     const android_gradle = androidBuildGradle();
     try std.testing.expect(std.mem.indexOf(u8, android_gradle, "org.jetbrains.kotlin.android") != null);
@@ -3422,10 +2895,6 @@ test "android shell config escapes Kotlin string interpolation" {
     try std.testing.expect(std.mem.indexOf(u8, android_config, "const val title = \"Sales \\$HOME\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_config, "const val status = \"Total \\${amount}\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, android_config, "const val primaryButtonTitle = \"Back \\$1\"") != null);
-
-    const ios_config = try iosShellConfigAlloc(std.testing.allocator, model);
-    defer std.testing.allocator.free(ios_config);
-    try std.testing.expect(std.mem.indexOf(u8, ios_config, "static let title = \"Sales $HOME\"") != null);
 }
 
 test "mobile skeletons create native library drop-in directories" {
@@ -3434,13 +2903,7 @@ test "mobile skeletons create native library drop-in directories" {
     defer cwd.deleteTree(std.testing.io, ".zig-cache/test-package-mobile-skeletons") catch {};
 
     try cwd.createDirPath(std.testing.io, ".zig-cache/test-package-mobile-skeletons");
-    _ = try createIosSkeleton(std.testing.io, ".zig-cache/test-package-mobile-skeletons/ios");
     _ = try createAndroidSkeleton(std.testing.io, ".zig-cache/test-package-mobile-skeletons/android");
-
-    var ios_libs = try cwd.openDir(std.testing.io, ".zig-cache/test-package-mobile-skeletons/ios/Libraries", .{});
-    ios_libs.close(std.testing.io);
-    var ios_config = try cwd.openFile(std.testing.io, ".zig-cache/test-package-mobile-skeletons/ios/native-sdkHost/NativeSdkShellConfig.swift", .{});
-    ios_config.close(std.testing.io);
 
     var android_libs = try cwd.openDir(std.testing.io, ".zig-cache/test-package-mobile-skeletons/android/app/src/main/cpp/lib", .{});
     android_libs.close(std.testing.io);
@@ -3498,11 +2961,29 @@ test "mobile package artifacts use manifest identity metadata" {
     try std.testing.expectEqual(@as(usize, 1), ios_stats.asset_count);
     try std.testing.expectEqual(@as(usize, 1), android_stats.asset_count);
 
-    const plist = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Info.plist");
+    const plist = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Host/Info.plist");
     defer std.testing.allocator.free(plist);
     try std.testing.expect(std.mem.indexOf(u8, plist, "dev.native-sdk.mobile-app") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "Mobile Demo") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "2.3.4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "UILaunchScreen") != null);
+
+    // The generated Xcode project ties the host, library, and resources
+    // together with the app.zon identity — archive-ready with zero edits.
+    const pbxproj = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/mobile-demo.xcodeproj/project.pbxproj");
+    defer std.testing.allocator.free(pbxproj);
+    try std.testing.expect(std.mem.indexOf(u8, pbxproj, "PRODUCT_BUNDLE_IDENTIFIER = \"dev.native-sdk.mobile-app\";") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pbxproj, "PRODUCT_NAME = \"mobile-demo\";") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pbxproj, "MARKETING_VERSION = \"2.3.4\";") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pbxproj, "INFOPLIST_FILE = \"Host/Info.plist\";") != null);
+    const scheme = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/mobile-demo.xcodeproj/xcshareddata/xcschemes/mobile-demo.xcscheme");
+    defer std.testing.allocator.free(scheme);
+    try std.testing.expect(std.mem.indexOf(u8, scheme, "BuildableName = \"mobile-demo.app\"") != null);
+    const packaged_host = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Host/uikit_host.m");
+    defer std.testing.allocator.free(packaged_host);
+    try std.testing.expectEqualStrings(ios_tool.host_source, packaged_host);
+    var ios_libraries = try cwd.openDir(std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Libraries", .{});
+    ios_libraries.close(std.testing.io);
 
     const gradle = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/build.gradle");
     defer std.testing.allocator.free(gradle);
@@ -3514,18 +2995,6 @@ test "mobile package artifacts use manifest identity metadata" {
     defer std.testing.allocator.free(manifest);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "android:label=\"Mobile Demo\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, manifest, "android:name=\"dev.native_sdk.MainActivity\"") != null);
-
-    const ios_shell_config = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/native-sdkHost/NativeSdkShellConfig.swift");
-    defer std.testing.allocator.free(ios_shell_config);
-    try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let title = \"Field Console\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let status = \"Shell ready\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let primaryCommand = \"mobile.go_back\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let secondaryButtonTitle = \"Sync Now\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let assetRootSubdirectory = \"dist\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ios_shell_config, "static let assetEntryPath = \"main.html\"") != null);
-    const ios_controller = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/native-sdkHost/NativeSdkHostViewController.swift");
-    defer std.testing.allocator.free(ios_controller);
-    try std.testing.expect(std.mem.indexOf(u8, ios_controller, "native_sdk_app_set_asset_entry") != null);
 
     const android_shell_config = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/android/app/src/main/java/dev/native_sdk/NativeSdkShellConfig.kt");
     defer std.testing.allocator.free(android_shell_config);
@@ -3539,7 +3008,7 @@ test "mobile package artifacts use manifest identity metadata" {
     defer std.testing.allocator.free(android_activity);
     try std.testing.expect(std.mem.indexOf(u8, android_activity, "nativeSetAssetEntry(nativeApp, NativeSdkShellConfig.assetEntryPath)") != null);
 
-    const ios_asset = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Resources/dist/main.html");
+    const ios_asset = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-mobile-identity/ios/Assets/dist/main.html");
     defer std.testing.allocator.free(ios_asset);
     try std.testing.expectEqualStrings("<h1>Mobile</h1>", ios_asset);
 

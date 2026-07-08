@@ -406,6 +406,17 @@ pub fn mobileApp(raw: ?*anyopaque) ?*MobileHostApp {
     return @ptrCast(@alignCast(pointer));
 }
 
+/// Publish the viewport's safe-area insets as the mobile surface's window
+/// chrome — the same `windowChrome` platform channel macOS answers with
+/// its titlebar band and traffic-light cluster — so a `UiApp` subscribed
+/// to `on_chrome` pads for the notch, status bar, and home indicator with
+/// the identical code path it pads for desktop chrome. The keyboard is
+/// input avoidance, not OS chrome, so it stays out of the report (the
+/// runtime keeps insetting layout by the keyboard's residual overlap).
+pub fn publishViewportChrome(self: anytype, safe_area_insets: geometry.InsetsF) void {
+    self.null_platform.window_chrome = .{ .insets = safe_area_insets };
+}
+
 pub fn recordError(self: anytype, err: anyerror) void {
     self.last_error = err;
 }

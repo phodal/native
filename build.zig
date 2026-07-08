@@ -169,6 +169,9 @@ pub fn build(b: *std.Build) void {
     // down the cross-compiled CLI).
     const app_icon_mod = module(b, target, optimize, "src/primitives/canvas/app_icon.zig");
     app_icon_mod.addImport("geometry", geometry_mod);
+    // The iOS host sources as embedded bytes: the tooling module writes
+    // and compiles them for `native dev|package --target ios`.
+    const ios_host_mod = module(b, target, optimize, "src/platform/ios/files.zig");
     const tooling_mod = module(b, target, optimize, "src/tooling/root.zig");
     tooling_mod.addImport("assets", assets_mod);
     tooling_mod.addImport("app_dirs", app_dirs_mod);
@@ -178,6 +181,7 @@ pub fn build(b: *std.Build) void {
     tooling_mod.addImport("platform_info", platform_info_mod);
     tooling_mod.addImport("trace", trace_mod);
     tooling_mod.addImport("app_icon", app_icon_mod);
+    tooling_mod.addImport("ios_host", ios_host_mod);
     const tooling_tests = testArtifact(b, tooling_mod);
 
     // Ejected-component identity proofs: a separate test module because
@@ -237,6 +241,7 @@ pub fn build(b: *std.Build) void {
     const host_geometry_mod = module(b, host_target, optimize, "src/primitives/geometry/root.zig");
     const host_app_icon_mod = module(b, host_target, optimize, "src/primitives/canvas/app_icon.zig");
     host_app_icon_mod.addImport("geometry", host_geometry_mod);
+    const host_ios_host_mod = module(b, host_target, optimize, "src/platform/ios/files.zig");
     const host_tooling_mod = module(b, host_target, optimize, "src/tooling/root.zig");
     host_tooling_mod.addImport("assets", host_assets_mod);
     host_tooling_mod.addImport("app_dirs", host_app_dirs_mod);
@@ -246,6 +251,7 @@ pub fn build(b: *std.Build) void {
     host_tooling_mod.addImport("platform_info", host_platform_info_mod);
     host_tooling_mod.addImport("trace", host_trace_mod);
     host_tooling_mod.addImport("app_icon", host_app_icon_mod);
+    host_tooling_mod.addImport("ios_host", host_ios_host_mod);
     const host_ui_markup_mod = module(b, host_target, optimize, "src/primitives/canvas/ui_markup.zig");
     const host_markup_lsp_mod = module(b, host_target, optimize, "tools/native-sdk/markup_lsp.zig");
     host_markup_lsp_mod.addImport("ui_markup", host_ui_markup_mod);
@@ -730,6 +736,51 @@ pub fn build(b: *std.Build) void {
         "examples/mobile-shell/README.md",
         "examples/mobile-shell/app.zon",
     });
+
+    // Host-tier packaged project pin: `native package --target ios` must
+    // keep emitting the complete, deterministic Xcode project (toolkit
+    // host sources, Info.plist, asset catalog, scheme) — drift is caught
+    // here. --binary stubs the embed library with the fixed-shell lib so
+    // the check needs no iOS cross-compile.
+    const package_ios_layout_run = b.addRunArtifact(host_cli_exe);
+    package_ios_layout_run.setCwd(b.path("examples/calculator"));
+    package_ios_layout_run.setEnvironmentVariable("NATIVE_SDK_PATH", b.pathFromRoot("."));
+    package_ios_layout_run.addArgs(&.{ "package", "--target", "ios", "--output", "zig-out/package/test-ios-layout", "--binary" });
+    package_ios_layout_run.addFileArg(embed_lib.getEmittedBin());
+    package_ios_layout_run.has_side_effects = true;
+    const package_ios_layout_step = b.step("test-package-ios-layout", "Verify the generated iOS host project layout");
+    const package_ios_layout_paths = [_][]const u8{
+        "examples/calculator/zig-out/package/test-ios-layout/calculator.xcodeproj/project.pbxproj",
+        "examples/calculator/zig-out/package/test-ios-layout/calculator.xcodeproj/xcshareddata/xcschemes/calculator.xcscheme",
+        "examples/calculator/zig-out/package/test-ios-layout/Host/uikit_host.m",
+        "examples/calculator/zig-out/package/test-ios-layout/Host/native_sdk_app.h",
+        "examples/calculator/zig-out/package/test-ios-layout/Host/Info.plist",
+        "examples/calculator/zig-out/package/test-ios-layout/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+        "examples/calculator/zig-out/package/test-ios-layout/Assets.xcassets/AppIcon.appiconset/Contents.json",
+        "examples/calculator/zig-out/package/test-ios-layout/Libraries/libnative-sdk.a",
+        "examples/calculator/zig-out/package/test-ios-layout/README.md",
+        "examples/calculator/zig-out/package/test-ios-layout/package-manifest.zon",
+    };
+    for (package_ios_layout_paths) |path| {
+        const check = b.addSystemCommand(&.{ "test", "-f", path });
+        check.step.dependOn(&package_ios_layout_run.step);
+        package_ios_layout_step.dependOn(&check.step);
+        mobile_examples_step.dependOn(&check.step);
+    }
+    const package_ios_layout_contents = [_]FileContainsCheck{
+        .{ .path = "examples/calculator/zig-out/package/test-ios-layout/calculator.xcodeproj/project.pbxproj", .pattern = "PRODUCT_BUNDLE_IDENTIFIER = \"dev.native-sdk.calculator\";" },
+        .{ .path = "examples/calculator/zig-out/package/test-ios-layout/Host/Info.plist", .pattern = "UILaunchScreen" },
+        .{ .path = "examples/calculator/zig-out/package/test-ios-layout/Host/uikit_host.m", .pattern = "native_sdk_app_render_pixels" },
+    };
+    for (package_ios_layout_contents) |check_value| {
+        const check = b.addRunArtifact(file_contains_checker);
+        check.setCwd(b.path("."));
+        check.addArg(check_value.path);
+        check.addArg(check_value.pattern);
+        check.step.dependOn(&package_ios_layout_run.step);
+        package_ios_layout_step.dependOn(&check.step);
+        mobile_examples_step.dependOn(&check.step);
+    }
     addFileContainsCheckStep(b, file_contains_checker, mobile_examples_step, "test-example-mobile-shell-metadata", "Verify shared mobile-shell metadata values", &.{
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".platforms = .{ \"ios\", \"android\" }" },
         .{ .path = "examples/mobile-shell/app.zon", .pattern = ".capabilities = .{ \"webview\", \"native_views\", \"native_module\" }" },

@@ -1163,6 +1163,11 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\        app_mod.linkSystemLibrary("ole32", .{});
         \\        app_mod.linkSystemLibrary("oleacc", .{});
         \\        app_mod.linkSystemLibrary("shell32", .{});
+        \\        // The audio backend: Media Foundation (session + source resolver
+        \\        // + streaming audio renderer) and WinHTTP (the cache fill).
+        \\        app_mod.linkSystemLibrary("mf", .{});
+        \\        app_mod.linkSystemLibrary("mfplat", .{});
+        \\        app_mod.linkSystemLibrary("winhttp", .{});
         \\        if (web_engine == .chromium) app_mod.linkSystemLibrary("libcef", .{});
         \\    }
         \\}

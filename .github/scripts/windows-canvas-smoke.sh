@@ -119,9 +119,16 @@ poll 30 '4 open' || fail "widget-click did not reach '4 open'"
 echo "== open after click: $(grep -oE '[0-9]+ open' "$snap" | head -1)"
 
 # ---- 5: real X11 input through the Win32 path ------------------------------
-# Under Wine the app's X window maps 1:1 onto the Win32 client area (no
-# decoration offset), so widget snapshot bounds translate directly to root
-# coordinates relative to the window origin.
+# Root-coordinate math. Hidden-titlebar windows keep the full overlapped
+# frame and reclaim the caption band through WM_NCCALCSIZE, so the Win32
+# client area starts at the very top of the window. Under a WM-less Wine
+# the X11 driver still places (and reports) the client X window at the
+# DEFAULT frame offset - one caption band lower - so the X origin sits a
+# band BELOW where Win32 client coordinates actually map, and the reported
+# X height is short by exactly that band (measured: X window 718x489 at
+# y=30 for a 718x519 client whose clicks land at y=0). The snapshot knows
+# the true client height, so the height shortfall IS the y correction; a
+# standard-frame window reports matching heights and corrects by zero.
 win=""
 for w in $(xdotool search --name "." 2>/dev/null); do
   case "$(xdotool getwindowname "$w" 2>/dev/null)" in
@@ -130,7 +137,12 @@ for w in $(xdotool search --name "." 2>/dev/null); do
 done
 [ -n "$win" ] || fail "app X window not found"
 eval "$(xdotool getwindowgeometry --shell "$win")"
-echo "== x window $win: pos=($X,$Y) size=${WIDTH}x${HEIGHT}"
+client_h=$(grep -o 'window @w1 "[^"]*" bounds=([^)]*)' "$snap" | head -1 \
+  | sed -n 's/.*x\([0-9]*\)[^x]*$/\1/p')
+[ -n "$client_h" ] || client_h=$HEIGHT
+y_off=$((client_h - HEIGHT))
+[ "$y_off" -ge 0 ] 2>/dev/null || y_off=0
+echo "== x window $win: pos=($X,$Y) size=${WIDTH}x${HEIGHT} client_h=$client_h y_off=$y_off"
 xdotool windowactivate "$win" >/dev/null 2>&1 || xdotool windowfocus "$win" >/dev/null 2>&1
 
 draft_line=$(grep -o 'widget @w1/inbox-canvas#[0-9]* role=textbox[^|]*' "$snap" | head -1)
@@ -142,10 +154,15 @@ bw=$(echo "$bounds" | sed -n 's/.* \([0-9.]*\)x[0-9.]*).*/\1/p')
 bh=$(echo "$bounds" | sed -n 's/.* [0-9.]*x\([0-9.]*\)).*/\1/p')
 [ -n "$bx" ] && [ -n "$by" ] && [ -n "$bw" ] && [ -n "$bh" ] || fail "could not parse draft bounds: $draft_line"
 cx=$(awk "BEGIN{printf \"%d\", $X + $bx + $bw / 2}")
-cy=$(awk "BEGIN{printf \"%d\", $Y + $by + $bh / 2}")
+cy=$(awk "BEGIN{printf \"%d\", $Y - $y_off + $by + $bh / 2}")
 echo "== clicking draft field $bounds at ($cx,$cy)"
 xdotool mousemove "$cx" "$cy" click 1
-sleep 2
+# The click must move widget focus into the textbox before any keys are
+# sent: spaces in the typed string would otherwise activate whatever
+# widget held focus (a button press adds a task and the real failure -
+# input landing in the wrong widget - would read as missing text).
+poll 10 'role=textbox[^|]*focused=true' || fail "draft textbox did not take focus from the click"
+sleep 1
 xdotool type --delay 120 "hi from wine"
 poll 30 'hi from wine' || fail "typed text never appeared in the snapshot"
 echo "== draft after typing: $(grep -o 'widget @w1/inbox-canvas#[0-9]* role=textbox[^|]*' "$snap" | head -1 | cut -c1-160)"

@@ -381,17 +381,43 @@ pub const WindowTitlebarStyle = enum {
 /// system hides the band and the lights), and on platforms without the
 /// concept.
 pub const WindowChrome = struct {
-    /// The band at each edge where OS chrome overlays the content
-    /// (macOS: titlebar band height on top — ~28pt compact, ~52pt tall —
-    /// and the traffic lights' extent on the leading edge, margin
-    /// included).
+    /// The band at each edge where OS chrome overlays the content.
+    /// The window-control cluster lands on the edge its platform puts
+    /// it: macOS reports the titlebar band height on top (~28pt
+    /// compact, ~52pt tall) and the traffic lights' extent on the LEFT
+    /// (margin included); Windows reports the caption-button band
+    /// height on top and the min/max/close cluster's extent on the
+    /// RIGHT. A header that pads BOTH `insets.left` and `insets.right`
+    /// therefore clears the controls on every platform with no
+    /// per-platform code — the unused edge is honestly zero.
     insets: geometry.InsetsF = .{},
     /// The window-control cluster's bounding frame (macOS: the three
-    /// traffic lights) in content coordinates, top-left origin — the
-    /// vertical truth a header needs to center its controls against the
-    /// lights (`buttons.y + buttons.height / 2` is their centerline).
+    /// traffic lights; Windows: the DWM-drawn min/max/close buttons) in
+    /// content coordinates, top-left origin — the vertical truth a
+    /// header needs to center its controls against the cluster
+    /// (`buttons.y + buttons.height / 2` is their centerline).
     /// Zero-sized when no controls overlay the content.
     buttons: geometry.RectF = geometry.RectF.init(0, 0, 0, 0),
+};
+
+/// One rectangle of a window's DRAG-REGION mirror (`window-drag="true"`
+/// in markup / `.window_drag` on a widget), in the canvas view's local
+/// logical coordinates. The runtime pushes the mirror through
+/// `set_window_drag_regions_fn` after every layout install so platforms
+/// whose native titlebar behavior lives in a hit-test (Windows:
+/// `WM_NCHITTEST` answering `HTCAPTION`, which buys drag,
+/// double-click-to-maximize, and the right-click system menu from the
+/// OS) can answer without a round trip into the runtime. `exclusion`
+/// rectangles are the press-claiming widgets INSIDE a drag region — a
+/// button in a drag header keeps its press, exactly like the runtime's
+/// own pointer walk — and a point counts as draggable only when it is
+/// inside a region rect and outside every exclusion rect. Platforms
+/// that start drags from the live pointer gesture instead (macOS:
+/// `performWindowDragWithEvent:`) leave the service null and the
+/// runtime skips the mirror entirely.
+pub const WindowDragRegion = struct {
+    frame: geometry.RectF,
+    exclusion: bool = false,
 };
 
 /// When a created window first becomes visible.
@@ -1830,6 +1856,12 @@ pub const PlatformServices = struct {
     /// windows and platforms without the concept report the zero
     /// `WindowChrome`; the null default is the same honest zero.
     window_chrome_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) WindowChrome = null,
+    /// Replace the platform's mirror of a canvas view's window-drag
+    /// regions (see `WindowDragRegion`). Called by the runtime after
+    /// every layout install whose regions changed; an empty slice
+    /// clears the mirror. Platforms that resolve drags from the live
+    /// pointer gesture (macOS) leave this null.
+    set_window_drag_regions_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, regions: []const WindowDragRegion) anyerror!void = null,
     create_view_fn: ?*const fn (context: ?*anyopaque, options: ViewOptions) anyerror!void = null,
     update_view_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, patch: ViewPatch) anyerror!void = null,
     set_view_frame_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId, label: []const u8, frame: geometry.RectF) anyerror!void = null,
@@ -2085,6 +2117,14 @@ pub const PlatformServices = struct {
     pub fn windowChrome(self: PlatformServices, window_id: WindowId) WindowChrome {
         const chrome_fn = self.window_chrome_fn orelse return .{};
         return chrome_fn(self.context, window_id);
+    }
+
+    /// No-op on platforms without the mirror (macOS/null default):
+    /// their drag path starts from the live pointer gesture instead,
+    /// so there is nothing to keep in sync.
+    pub fn setWindowDragRegions(self: PlatformServices, window_id: WindowId, label: []const u8, regions: []const WindowDragRegion) anyerror!void {
+        const set_fn = self.set_window_drag_regions_fn orelse return;
+        return set_fn(self.context, window_id, label, regions);
     }
 
     pub fn createView(self: PlatformServices, options: ViewOptions) anyerror!void {

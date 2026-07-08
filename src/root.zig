@@ -121,6 +121,7 @@ pub const WindowState = platform.WindowState;
 pub const WindowRestorePolicy = platform.WindowRestorePolicy;
 pub const WindowTitlebarStyle = platform.WindowTitlebarStyle;
 pub const WindowChrome = platform.WindowChrome;
+pub const WindowDragRegion = platform.WindowDragRegion;
 pub const WindowShowMode = platform.WindowShowMode;
 pub const Menu = platform.Menu;
 pub const MenuItem = platform.MenuItem;

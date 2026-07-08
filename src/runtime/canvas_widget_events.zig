@@ -5,6 +5,7 @@ const platform = @import("../platform/root.zig");
 const validation = @import("validation.zig");
 const runtime_api = @import("api.zig");
 const canvas_frame_helpers = @import("canvas_frame.zig");
+const canvas_limits = @import("canvas_limits.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const widget_bridge = @import("widget_bridge.zig");
@@ -447,6 +448,35 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 self.views[view_index].label,
                 self.views[view_index].canvas_widget_cursor,
             );
+        }
+
+        /// Mirror the view's window-drag regions to the platform (see
+        /// `platform.WindowDragRegion`): recompute from the freshly
+        /// retained layout on every install and push only when the
+        /// mirror actually changed, so a hit-testing platform
+        /// (Windows answering `WM_NCHITTEST`) tracks header moves and
+        /// visibility flips without being spammed by unrelated
+        /// rebuilds. Platforms without the service (macOS, whose drag
+        /// path starts from the live pointer gesture) skip even the
+        /// collection walk. A view that never had drag regions never
+        /// pushes; one whose regions disappeared pushes the empty
+        /// mirror once to clear the platform side.
+        pub fn syncCanvasWidgetWindowDragRegionsForView(self: *Runtime, view_index: usize) anyerror!void {
+            if (view_index >= self.view_count) return;
+            if (self.views[view_index].kind != .gpu_surface) return;
+            if (self.options.platform.services.set_window_drag_regions_fn == null) return;
+            const view = &self.views[view_index];
+            var regions: [canvas_limits.max_canvas_widget_window_drag_regions_per_view]platform.WindowDragRegion = undefined;
+            const count = collectCanvasWidgetWindowDragRegions(view.widgetLayoutTree(), &regions);
+            if (view.canvas_widget_drag_regions_pushed) {
+                if (count == view.canvas_widget_drag_region_count and windowDragRegionsEqual(regions[0..count], view.canvas_widget_drag_regions[0..count])) return;
+            } else if (count == 0) {
+                return;
+            }
+            try self.options.platform.services.setWindowDragRegions(view.window_id, view.label, regions[0..count]);
+            @memcpy(view.canvas_widget_drag_regions[0..count], regions[0..count]);
+            view.canvas_widget_drag_region_count = count;
+            view.canvas_widget_drag_regions_pushed = true;
         }
 
         pub fn invalidateForCanvasWidgetRenderStateChange(self: *Runtime, view_index: usize, previous: canvas.WidgetRenderState, next: canvas.WidgetRenderState) anyerror!void {
@@ -1003,4 +1033,66 @@ fn canvasDirtyRegionForView(view_frame: geometry.RectF, local_dirty: geometry.Re
     const clipped = geometry.RectF.intersection(surface_bounds, local_dirty.normalized());
     if (clipped.isEmpty()) return null;
     return clipped.translate(.{ .dx = normalized_view.x, .dy = normalized_view.y });
+}
+
+/// Collect the layout's window-drag region mirror: every visible
+/// `window_drag` widget's frame, each followed by the frames of the
+/// press-claiming widgets inside it as `exclusion` entries — the same
+/// carve-outs `widgetWindowDragTargetIndexFromNode` applies point by
+/// point, precomputed as rectangles for platforms that answer a native
+/// hit-test (Windows `WM_NCHITTEST`). Frames are the canvas view's
+/// local logical coordinates, exactly as retained. Regions are
+/// appended transactionally: when the output fills mid-region the
+/// WHOLE region rolls back, because a drag rect without its exclusions
+/// would hand a button's press to the OS move loop, while a missing
+/// drag rect only loses dragging on that band.
+pub fn collectCanvasWidgetWindowDragRegions(layout: canvas.WidgetLayoutTree, output: []platform.WindowDragRegion) usize {
+    var count: usize = 0;
+    for (layout.nodes, 0..) |node, node_index| {
+        if (!canvas.widgetIsWindowDragRegion(node.widget)) continue;
+        if (canvas_widget_runtime.canvasWidgetLayoutNodeHidden(layout, node_index)) continue;
+        if (!canvas_widget_runtime.canvasWidgetLayoutNodeFrameVisible(layout, node_index)) continue;
+        const region_start = count;
+        if (count >= output.len) break;
+        output[count] = .{ .frame = node.frame.normalized() };
+        count += 1;
+        var overflow = false;
+        for (layout.nodes, 0..) |candidate, candidate_index| {
+            if (candidate_index == node_index) continue;
+            if (!canvas.widgetClaimsPress(candidate.widget)) continue;
+            if (canvas_widget_runtime.canvasWidgetLayoutNodeHidden(layout, candidate_index)) continue;
+            if (!canvas_widget_runtime.canvasWidgetLayoutNodeFrameVisible(layout, candidate_index)) continue;
+            if (!canvasWidgetNodeHasAncestor(layout, candidate_index, node_index)) continue;
+            if (count >= output.len) {
+                overflow = true;
+                break;
+            }
+            output[count] = .{ .frame = candidate.frame.normalized(), .exclusion = true };
+            count += 1;
+        }
+        if (overflow) {
+            count = region_start;
+            break;
+        }
+    }
+    return count;
+}
+
+fn canvasWidgetNodeHasAncestor(layout: canvas.WidgetLayoutTree, node_index: usize, ancestor_index: usize) bool {
+    if (node_index >= layout.nodes.len) return false;
+    var current: ?usize = layout.nodes[node_index].parent_index;
+    while (current) |index| {
+        if (index >= layout.nodes.len) return false;
+        if (index == ancestor_index) return true;
+        current = layout.nodes[index].parent_index;
+    }
+    return false;
+}
+
+fn windowDragRegionsEqual(a: []const platform.WindowDragRegion, b: []const platform.WindowDragRegion) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (!std.meta.eql(left, right)) return false;
+    }
+    return true;
 }

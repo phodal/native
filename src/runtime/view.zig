@@ -451,6 +451,16 @@ pub const RuntimeView = struct {
     /// down overwrites it.
     canvas_widget_multi_click_anchor: canvas.TextRange = .{},
     canvas_widget_cursor: platform.Cursor = .arrow,
+    /// The last window-drag region mirror pushed to the platform for
+    /// this view (see `platform.WindowDragRegion`): layout installs
+    /// recompute the mirror and push only when it differs, so a
+    /// hit-testing platform (Windows) is never re-sent an unchanged
+    /// header on every state rebuild. `pushed` distinguishes "nothing
+    /// pushed yet" from "pushed an empty mirror" — the first layout of
+    /// a drag-free view pushes nothing at all.
+    canvas_widget_drag_regions: [canvas_limits.max_canvas_widget_window_drag_regions_per_view]platform.WindowDragRegion = undefined,
+    canvas_widget_drag_region_count: usize = 0,
+    canvas_widget_drag_regions_pushed: bool = false,
     widget_text_bytes: [max_canvas_widget_text_bytes_per_view]u8 = undefined,
     widget_text_len: usize = 0,
     widget_span_entries: [canvas_limits.max_canvas_widget_spans_per_view]canvas.TextSpan = undefined,

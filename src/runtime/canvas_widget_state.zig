@@ -120,6 +120,10 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // Push the reconciled regions (frames, content extents,
             // diverged offsets) to the native scroll drivers.
             ScrollDriverMethods(Runtime).syncCanvasWidgetScrollDriversForView(self, index);
+            // Mirror the window-drag regions to hit-testing platforms
+            // (Windows WM_NCHITTEST); no-op wherever the service is
+            // absent, and pushes only on actual change.
+            try CanvasWidgetEventMethods(Runtime).syncCanvasWidgetWindowDragRegionsForView(self, index);
             const widget_revision_changed = self.views[index].widget_revision != previous_widget_revision;
             if (previous_cursor != self.views[index].canvas_widget_cursor) try CanvasWidgetEventMethods(Runtime).syncCanvasWidgetCursorForView(self, index);
             CanvasWidgetEventMethods(Runtime).invalidateForWidgetInvalidations(self, self.views[index].frame, invalidations);

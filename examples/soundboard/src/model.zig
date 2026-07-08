@@ -345,6 +345,11 @@ pub const Model = struct {
     /// titlebar band. Both fall back to the natural header when no band
     /// overlays the content (fullscreen, standard chrome, tests).
     chrome_leading: f32 = 0,
+    /// The trailing twin: how far OS window controls overlay the
+    /// header's END (Windows delivers the min/max/close cluster here;
+    /// macOS reports zero). The header closes with a spacer this wide
+    /// so the search field clears the caption buttons.
+    chrome_trailing: f32 = 0,
     header_height: f32 = header_natural_height,
     /// The live canvas width, from `canvas_resized`. Seeds at the window
     /// min-width floor (see `min_canvas_width`) so pre-first-frame trees
@@ -738,7 +743,11 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         .show_songs => model.tab = .songs,
         .set_appearance => |appearance| model.appearance = appearance,
         .chrome_changed => |chrome| {
+            // Pad whichever edge the platform puts its window controls
+            // on (macOS: traffic lights leading; Windows: min/max/close
+            // trailing) — the unused edge arrives as an honest zero.
             model.chrome_leading = chrome.insets.left;
+            model.chrome_trailing = chrome.insets.right;
             // Match the header to the titlebar band so its centered
             // controls share the traffic lights' centerline; the natural
             // height is the floor when no band overlays the content.

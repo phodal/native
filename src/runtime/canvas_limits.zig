@@ -162,6 +162,15 @@ pub const max_canvas_widget_spans_per_view: usize = 1024;
 // because a menu nobody can scan is a design bug, while this budget
 // bounds the retained declarations across all widgets of the view.
 pub const max_canvas_widget_context_menu_items_per_view: usize = 512;
+// Window-drag region mirror per view (the Windows WM_NCHITTEST seam):
+// drag-region rects plus the press-claiming exclusions inside them. A
+// hidden-titlebar app has ONE header band and a handful of controls in
+// it; 32 leaves room for split headers without retaining a second
+// widget tree. Overflow drops the drag REGION rects beyond the cap
+// (never the exclusions inside kept rects — see the collector), so a
+// too-busy tree degrades to fewer draggable bands, never to stolen
+// widget presses.
+pub const max_canvas_widget_window_drag_regions_per_view: usize = 32;
 // Chart series and points retained across all `.chart` widgets of a
 // view. `Ui.chart` downsamples every series to
 // `canvas.max_chart_points_per_series` (256) before it reaches the

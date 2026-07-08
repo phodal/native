@@ -1771,6 +1771,7 @@ test "chrome geometry pads the header and matches its height to the tall band" {
     const msg = main.onChrome(chrome) orelse return error.TestUnexpectedResult;
     model_mod.update(&model, msg, &fx);
     try testing.expectEqual(@as(f32, 78), model.chrome_leading);
+    try testing.expectEqual(@as(f32, 0), model.chrome_trailing);
     try testing.expectEqual(@max(model_mod.header_natural_height, 52), model.header_height);
 
     // A band taller than the natural header grows the header with it.
@@ -1778,11 +1779,23 @@ test "chrome geometry pads the header and matches its height to the tall band" {
     model_mod.update(&model, tall, &fx);
     try testing.expectEqual(@as(f32, 72), model.header_height);
 
-    // Fullscreen zeroes the chrome: the pad collapses and the height
+    // Windows delivers the min/max/close cluster on the TRAILING edge
+    // instead: the leading pad collapses and the trailing one takes it.
+    const windows_chrome = main.onChrome(.{
+        .insets = .{ .top = 32, .right = 139 },
+        .buttons = native_sdk.geometry.RectF.init(917, 0, 139, 32),
+    }) orelse return error.TestUnexpectedResult;
+    model_mod.update(&model, windows_chrome, &fx);
+    try testing.expectEqual(@as(f32, 0), model.chrome_leading);
+    try testing.expectEqual(@as(f32, 139), model.chrome_trailing);
+    try testing.expectEqual(model_mod.header_natural_height, model.header_height);
+
+    // Fullscreen zeroes the chrome: the pads collapse and the height
     // falls back to the header's natural floor.
     const cleared = main.onChrome(.{}) orelse return error.TestUnexpectedResult;
     model_mod.update(&model, cleared, &fx);
     try testing.expectEqual(@as(f32, 0), model.chrome_leading);
+    try testing.expectEqual(@as(f32, 0), model.chrome_trailing);
     try testing.expectEqual(model_mod.header_natural_height, model.header_height);
 
     // The scene declares the matching titlebar so the platform actually

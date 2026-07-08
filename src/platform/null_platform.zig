@@ -291,6 +291,14 @@ pub const NullPlatform = struct {
     /// — settable so tests model a hidden-titlebar macOS host (insets
     /// plus the traffic-light cluster frame).
     window_chrome: types.WindowChrome = .{},
+    /// The last drag-region mirror pushed through
+    /// `setWindowDragRegions` (the Windows `WM_NCHITTEST` seam), so
+    /// tests assert what a hit-testing platform would consult. One
+    /// mirror suffices: the runtime pushes per canvas view and the
+    /// tests drive a single canvas.
+    window_drag_regions: [16]types.WindowDragRegion = undefined,
+    window_drag_region_count: usize = 0,
+    window_drag_region_push_count: usize = 0,
     window_count: usize = 0,
     views: [max_views]NullView = undefined,
     view_count: usize = 0,
@@ -538,6 +546,7 @@ pub const NullPlatform = struct {
                 .close_window_fn = closeWindow,
                 .start_window_drag_fn = startWindowDrag,
                 .window_chrome_fn = windowChrome,
+                .set_window_drag_regions_fn = setWindowDragRegions,
                 .create_view_fn = createView,
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
@@ -808,6 +817,19 @@ pub const NullPlatform = struct {
         const self: *NullPlatform = @ptrCast(@alignCast(context.?));
         _ = window_id;
         return self.window_chrome;
+    }
+
+    fn setWindowDragRegions(context: ?*anyopaque, window_id: WindowId, label: []const u8, regions: []const types.WindowDragRegion) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        // A mirror push, not a window operation: accept any id (the
+        // runtime may install layouts before this platform tracks the
+        // window), mirroring how `windowChrome` answers for all ids.
+        _ = window_id;
+        _ = label;
+        if (regions.len > self.window_drag_regions.len) return error.WindowLimitReached;
+        for (regions, 0..) |region, index| self.window_drag_regions[index] = region;
+        self.window_drag_region_count = regions.len;
+        self.window_drag_region_push_count += 1;
     }
 
     fn focusWindow(context: ?*anyopaque, window_id: WindowId) anyerror!void {

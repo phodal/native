@@ -31,6 +31,9 @@
     <!-- One size register per row: search matches the sm tab buttons so
          the band's controls share one height. -->
     <search-field size="sm" text="{search}" placeholder="Search albums, artists, songs…" width="280" on-input="search_edit" label="Search library" />
+    <!-- The leading spacer's trailing twin: zero on macOS, sized to the
+         min/max/close cluster on Windows so search clears the buttons. -->
+    <spacer width="{chrome_trailing}" />
   </row>
   <separator />
 </column>

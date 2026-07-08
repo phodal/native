@@ -7,6 +7,8 @@
 #include <commctrl.h>
 #include <oleacc.h>
 #include <wincodec.h>
+#include <uxtheme.h>
+#include <dwmapi.h>
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -227,13 +229,33 @@ struct Window {
     double height = 480;
     bool resizable = true;
     /* 0 standard, 1 hidden_inset, 2 hidden_inset_tall. The hidden styles
-     * mean the app draws its own chrome (drag regions, close affordances);
-     * the Win32 equivalent is a caption-less window. */
+     * keep the FULL system frame and the DWM-drawn caption buttons; only
+     * the caption band is handed to the client (WM_NCCALCSIZE), so the
+     * app draws its header into the band while min/max/close, snap
+     * layouts, and the resize borders stay the OS's own. */
     int titlebar_style = 0;
     /* Declared content min-size floor for user resizes; axes <= 0 keep
      * the natural minimum (WM_GETMINMAXINFO applies the floor). */
     double min_width = 0;
     double min_height = 0;
+    /* Last DWMWA_CAPTION_COLOR pushed for the hidden styles (sampled
+     * from the presented header pixels so the DWM caption material
+     * behind the button cluster matches the app's header). */
+    COLORREF hidden_caption_color = 0;
+    bool hidden_caption_color_set = false;
+};
+
+/* One rectangle of a canvas view's window-drag mirror (runtime push,
+ * view-local logical coordinates). `exclusion` rects are the
+ * press-claiming widgets INSIDE a drag region — a point is draggable
+ * only inside a region rect and outside every exclusion rect, the same
+ * carve-out the runtime's own pointer walk applies. */
+struct DragRegionRect {
+    double x = 0;
+    double y = 0;
+    double width = 0;
+    double height = 0;
+    bool exclusion = false;
 };
 
 struct ChildWebView {
@@ -315,6 +337,10 @@ struct NativeView {
      * composition. Mirrors gpu_preedit_text in the GTK host and markedText
      * in the AppKit host. */
     std::string gpu_ime_preedit;
+    /* The runtime-pushed window-drag mirror (hidden-titlebar windows):
+     * WM_NCHITTEST consults it so the markup's drag header behaves like
+     * the system caption. */
+    std::vector<DragRegionRect> drag_regions;
 };
 
 struct Shortcut {
@@ -1631,6 +1657,262 @@ static NativeView *gpuSurfaceViewForHwnd(Host *host, HWND hwnd) {
     return nullptr;
 }
 
+/* ------------------------------------------------------------------------
+ * Hidden-titlebar window chrome (the Win32 custom-frame pattern).
+ *
+ * `hidden_inset` / `hidden_inset_tall` windows keep WS_OVERLAPPEDWINDOW —
+ * the full system frame, the DWM-drawn caption buttons, snap layouts —
+ * and reclaim ONLY the caption band for the client through WM_NCCALCSIZE.
+ * DwmExtendFrameIntoClientArea extends the DWM frame over the top band so
+ * the system's min/max/close render there; the app's opaque pixels cover
+ * everything in the band EXCEPT a hole punched over the button cluster
+ * (GDI black = zero alpha in the redirection surface, where the extended
+ * DWM frame shows through — the documented custom-frame compositing
+ * contract). DwmDefWindowProc gets first claim on every message so the
+ * buttons keep their hover/press visuals and Windows 11 offers snap
+ * layouts from the maximize button; nothing here hand-draws chrome.
+ * The DWM entry points resolve dynamically so hosts without dwmapi
+ * (very old cores, bare Wine prefixes) degrade to a frameless-looking
+ * band instead of failing to load. */
+
+struct DwmApi {
+    using ExtendFrameFn = HRESULT(WINAPI *)(HWND, const MARGINS *);
+    using DefWindowProcFn = BOOL(WINAPI *)(HWND, UINT, WPARAM, LPARAM, LRESULT *);
+    using SetWindowAttributeFn = HRESULT(WINAPI *)(HWND, DWORD, LPCVOID, DWORD);
+    ExtendFrameFn extend_frame = nullptr;
+    DefWindowProcFn def_window_proc = nullptr;
+    SetWindowAttributeFn set_window_attribute = nullptr;
+};
+
+static const DwmApi &dwmApi() {
+    static const DwmApi api = [] {
+        DwmApi resolved;
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (dwm) {
+            resolved.extend_frame = reinterpret_cast<DwmApi::ExtendFrameFn>(
+                reinterpret_cast<void *>(GetProcAddress(dwm, "DwmExtendFrameIntoClientArea")));
+            resolved.def_window_proc = reinterpret_cast<DwmApi::DefWindowProcFn>(
+                reinterpret_cast<void *>(GetProcAddress(dwm, "DwmDefWindowProc")));
+            resolved.set_window_attribute = reinterpret_cast<DwmApi::SetWindowAttributeFn>(
+                reinterpret_cast<void *>(GetProcAddress(dwm, "DwmSetWindowAttribute")));
+        }
+        return resolved;
+    }();
+    return api;
+}
+
+/* Windows 11 window attributes, spelled numerically so older SDK headers
+ * still compile; DwmSetWindowAttribute answers E_INVALIDARG (ignored) on
+ * builds that predate them. */
+constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
+constexpr DWORD kDwmwaCaptionColor = 35;
+
+static bool windowUsesHiddenTitlebar(const Window &window) {
+    return window.titlebar_style >= 1;
+}
+
+static Window *hiddenTitlebarWindowForHwnd(Host *host, HWND hwnd) {
+    if (!host || !hwnd) return nullptr;
+    for (auto &entry : host->windows) {
+        if (entry.second.hwnd == hwnd && windowUsesHiddenTitlebar(entry.second)) return &entry.second;
+    }
+    return nullptr;
+}
+
+/* Per-window dpi with the same dynamic resolution (and the same 96
+ * fallback) as gpuSurfaceScale. */
+static UINT dpiForWindow(HWND hwnd) {
+    using GetDpiForWindowFn = UINT(WINAPI *)(HWND);
+    static GetDpiForWindowFn get_dpi = reinterpret_cast<GetDpiForWindowFn>(
+        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow")));
+    if (get_dpi && hwnd) {
+        const UINT dpi = get_dpi(hwnd);
+        if (dpi > 0) return dpi;
+    }
+    return 96;
+}
+
+/* Caption metrics MUST scale with the monitor the window sits on, or a
+ * mixed-dpi setup mis-sizes the reclaimed band; GetSystemMetricsForDpi
+ * is resolved dynamically (Windows 10 1607+) with the process-global
+ * metric as fallback. */
+static int systemMetricForDpi(int index, UINT dpi) {
+    using GetSystemMetricsForDpiFn = int(WINAPI *)(int, UINT);
+    static GetSystemMetricsForDpiFn get_metric = reinterpret_cast<GetSystemMetricsForDpiFn>(
+        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForDpi")));
+    if (get_metric) return get_metric(index, dpi);
+    return GetSystemMetrics(index);
+}
+
+/* Thickness of the top resize frame (sizing border + padded border) at
+ * the window's dpi: the WM_NCCALCSIZE maximize inset and the
+ * WM_NCHITTEST top resize band are both exactly this tall. */
+static int hiddenFrameTopThickness(HWND hwnd) {
+    const UINT dpi = dpiForWindow(hwnd);
+    return systemMetricForDpi(SM_CYSIZEFRAME, dpi) + systemMetricForDpi(SM_CXPADDEDBORDER, dpi);
+}
+
+/* Height of the standard caption band (frame + caption) at the window's
+ * dpi — the DWM frame extension depth, and the chrome-channel top inset
+ * fallback when the live button rects are unavailable. */
+static int hiddenCaptionBandHeight(HWND hwnd) {
+    const UINT dpi = dpiForWindow(hwnd);
+    return systemMetricForDpi(SM_CYCAPTION, dpi) + hiddenFrameTopThickness(hwnd);
+}
+
+/* The DWM caption-button cluster (min/max/close union) in CLIENT
+ * coordinates. WM_GETTITLEBARINFOEX is answered by DefWindowProc from
+ * the same style + metrics the DWM lays the buttons out from, so the
+ * rects track dpi, maximize (where the whole cluster shifts inward),
+ * and RTL layouts without this host re-deriving any of it. rgrect
+ * indices: 2 minimize, 3 maximize, 5 close (0 is the bar, 4 help). */
+static bool captionButtonsClientRect(HWND hwnd, RECT *out) {
+    if (!hwnd) return false;
+    TITLEBARINFOEX info = {};
+    info.cbSize = sizeof(info);
+    SendMessageW(hwnd, WM_GETTITLEBARINFOEX, 0, reinterpret_cast<LPARAM>(&info));
+    const int indices[3] = { 2, 3, 5 };
+    RECT cluster = {};
+    bool any = false;
+    for (int index : indices) {
+        const RECT &rect = info.rgrect[index];
+        if (rect.right <= rect.left || rect.bottom <= rect.top) continue;
+        if (!any) {
+            cluster = rect;
+        } else {
+            cluster.left = cluster.left < rect.left ? cluster.left : rect.left;
+            cluster.top = cluster.top < rect.top ? cluster.top : rect.top;
+            cluster.right = cluster.right > rect.right ? cluster.right : rect.right;
+            cluster.bottom = cluster.bottom > rect.bottom ? cluster.bottom : rect.bottom;
+        }
+        any = true;
+    }
+    if (!any) return false;
+    POINT top_left = { cluster.left, cluster.top };
+    POINT bottom_right = { cluster.right, cluster.bottom };
+    ScreenToClient(hwnd, &top_left);
+    ScreenToClient(hwnd, &bottom_right);
+    out->left = top_left.x;
+    out->top = top_left.y;
+    out->right = bottom_right.x;
+    out->bottom = bottom_right.y;
+    return out->right > out->left && out->bottom > out->top;
+}
+
+/* Extend the DWM frame over the reclaimed caption band so the system
+ * caption buttons composite there. Idempotent; re-applied on WM_ACTIVATE
+ * because a composition restart (session reconnect) drops extensions. */
+static void applyHiddenTitlebarFrame(Window &window) {
+    if (!window.hwnd || !windowUsesHiddenTitlebar(window)) return;
+    const DwmApi &dwm = dwmApi();
+    if (!dwm.extend_frame) return;
+    MARGINS margins = { 0, 0, hiddenCaptionBandHeight(window.hwnd), 0 };
+    dwm.extend_frame(window.hwnd, &margins);
+}
+
+/* Outer (track) size for a desired CONTENT size under the hidden
+ * styles' live NC shape: WM_NCCALCSIZE hands the entire top band to the
+ * client, so the outer rect carries NO top chrome — just the side and
+ * bottom borders, plus the menu bar when one is attached. Plain
+ * AdjustWindowRectEx would count the caption band the custom calc gives
+ * back, landing the client one band taller than requested. */
+static SIZE hiddenOuterSizeForContent(DWORD style, DWORD ex_style, bool has_menu, double content_width, double content_height) {
+    RECT borders = { 0, 0, 0, 0 };
+    AdjustWindowRectEx(&borders, style & ~WS_CAPTION, FALSE, ex_style);
+    SIZE outer = {};
+    outer.cx = (LONG)content_width + (borders.right - borders.left);
+    outer.cy = (LONG)content_height + borders.bottom + (has_menu ? GetSystemMetrics(SM_CYMENU) : 0);
+    return outer;
+}
+
+/* The gpu-surface child's origin in its parent's client coordinates. */
+static POINT childOriginInParentClient(HWND child, HWND parent) {
+    RECT rect = {};
+    GetWindowRect(child, &rect);
+    POINT origin = { rect.left, rect.top };
+    ScreenToClient(parent, &origin);
+    return origin;
+}
+
+/* A view-local logical point against the view's drag mirror: inside any
+ * exclusion -> not draggable (the widget keeps its press), else inside
+ * any region -> draggable. */
+static bool pointInHiddenDragRegion(const NativeView &view, double x, double y) {
+    for (const DragRegionRect &rect : view.drag_regions) {
+        if (!rect.exclusion) continue;
+        if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height) return false;
+    }
+    for (const DragRegionRect &rect : view.drag_regions) {
+        if (rect.exclusion) continue;
+        if (x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height) return true;
+    }
+    return false;
+}
+
+/* A parent-client point against every canvas child's drag mirror. */
+static bool windowDragRegionHit(Host *host, const Window &window, POINT client) {
+    if (!host || !window.hwnd) return false;
+    for (auto &entry : host->native_views) {
+        const NativeView &view = entry.second;
+        if (view.window_id != window.id || view.kind != kViewGpuSurface || !view.hwnd) continue;
+        if (view.drag_regions.empty()) continue;
+        const POINT origin = childOriginInParentClient(view.hwnd, window.hwnd);
+        const double scale = gpuSurfaceScale(view.hwnd);
+        if (scale <= 0) continue;
+        const double local_x = (double)(client.x - origin.x) / scale;
+        const double local_y = (double)(client.y - origin.y) / scale;
+        if (pointInHiddenDragRegion(view, local_x, local_y)) return true;
+    }
+    return false;
+}
+
+/* Cut the caption-button cluster out of the presented canvas: fill it
+ * with GDI black, whose ZERO alpha byte tells the DWM (whose frame
+ * extends over the band) to composite its own caption material and the
+ * real min/max/close buttons there instead of the app's pixels. This is
+ * the one spot the app's surface yields to the OS; everywhere else in
+ * the band the present path's alpha-255 pixels win, so the header
+ * visually extends into the titlebar like the macOS hidden-inset shape. */
+static void punchHiddenCaptionButtonHole(Host *host, const NativeView &view, HWND hwnd, HDC dc) {
+    if (!host) return;
+    auto found = host->windows.find(view.window_id);
+    if (found == host->windows.end() || !found->second.hwnd || !windowUsesHiddenTitlebar(found->second)) return;
+    RECT cluster = {};
+    if (!captionButtonsClientRect(found->second.hwnd, &cluster)) return;
+    const POINT origin = childOriginInParentClient(hwnd, found->second.hwnd);
+    RECT local = { cluster.left - origin.x, cluster.top - origin.y, cluster.right - origin.x, cluster.bottom - origin.y };
+    FillRect(dc, &local, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+}
+
+/* Keep the DWM caption material behind the punched button hole matched
+ * to the app's own header: sample the presented pixel just leading of
+ * the cluster at its vertical middle and push it as the Windows 11
+ * caption color (plus the immersive dark flag, which picks the button
+ * glyph/hover palette). Older builds reject the attribute and keep the
+ * system caption material — the buttons still draw and work. */
+static void syncHiddenCaptionColor(Host *host, Window &window, const NativeView &view, const uint8_t *rgba8, size_t width, size_t height) {
+    if (!windowUsesHiddenTitlebar(window) || !window.hwnd || !view.hwnd) return;
+    const DwmApi &dwm = dwmApi();
+    if (!dwm.set_window_attribute) return;
+    RECT cluster = {};
+    if (!captionButtonsClientRect(window.hwnd, &cluster)) return;
+    const POINT origin = childOriginInParentClient(view.hwnd, window.hwnd);
+    long sample_x = (long)(cluster.left - origin.x) - 8;
+    long sample_y = (long)((cluster.top + cluster.bottom) / 2 - origin.y);
+    if (sample_x < 0) sample_x = 0;
+    if (sample_x >= (long)width) sample_x = (long)width - 1;
+    if (sample_y < 0) sample_y = 0;
+    if (sample_y >= (long)height) sample_y = (long)height - 1;
+    const uint8_t *pixel = rgba8 + ((size_t)sample_y * width + (size_t)sample_x) * 4;
+    const COLORREF color = RGB(pixel[0], pixel[1], pixel[2]);
+    if (window.hidden_caption_color_set && window.hidden_caption_color == color) return;
+    window.hidden_caption_color = color;
+    window.hidden_caption_color_set = true;
+    dwm.set_window_attribute(window.hwnd, kDwmwaCaptionColor, &color, sizeof(color));
+    const BOOL dark = (299 * pixel[0] + 587 * pixel[1] + 114 * pixel[2]) / 1000 < 128 ? TRUE : FALSE;
+    dwm.set_window_attribute(window.hwnd, kDwmwaUseImmersiveDarkMode, &dark, sizeof(dark));
+}
+
 static uint32_t gpuModifierFlags() {
     uint32_t flags = 0;
     if (keyDown(VK_CONTROL)) flags |= kShortcutModifierPrimary | kShortcutModifierControl;
@@ -1984,12 +2266,42 @@ static LRESULT CALLBACK gpuSurfaceProc(HWND hwnd, UINT message, WPARAM wparam, L
         case WM_PAINT: {
             PAINTSTRUCT paint = {};
             HDC dc = BeginPaint(hwnd, &paint);
-            if (dc) paintGpuSurface(*view, hwnd, dc);
+            if (dc) {
+                paintGpuSurface(*view, hwnd, dc);
+                /* Hidden-titlebar parents: yield the caption-button
+                 * cluster back to the DWM (see the helper's comment). */
+                punchHiddenCaptionButtonHole(host, *view, hwnd, dc);
+            }
             EndPaint(hwnd, &paint);
             return 0;
         }
         case WM_ERASEBKGND:
             return 1;
+        case WM_NCHITTEST: {
+            /* This child covers the parent's whole client area, so the
+             * parent's WM_NCHITTEST — where the hidden-titlebar caption
+             * behavior lives — is only ever consulted where this child
+             * answers HTTRANSPARENT. Hand back exactly the zones that
+             * belong to the window, not the canvas: the top resize band
+             * (the custom WM_NCCALCSIZE moved the top frame INSIDE the
+             * client), the DWM caption-button cluster, and the markup's
+             * window-drag regions minus their press-claiming exclusions.
+             * Everything else stays HTCLIENT and flows into the canvas
+             * input pipeline unchanged. */
+            Window *chrome_window = nullptr;
+            if (host) {
+                auto found = host->windows.find(view->window_id);
+                if (found != host->windows.end() && found->second.hwnd && windowUsesHiddenTitlebar(found->second)) chrome_window = &found->second;
+            }
+            if (!chrome_window) break;
+            POINT point = { (int)(short)LOWORD(lparam), (int)(short)HIWORD(lparam) };
+            ScreenToClient(chrome_window->hwnd, &point);
+            if (chrome_window->resizable && !IsZoomed(chrome_window->hwnd) && point.y >= 0 && point.y < hiddenFrameTopThickness(chrome_window->hwnd)) return HTTRANSPARENT;
+            RECT cluster = {};
+            if (captionButtonsClientRect(chrome_window->hwnd, &cluster) && PtInRect(&cluster, point)) return HTTRANSPARENT;
+            if (windowDragRegionHit(host, *chrome_window, point)) return HTTRANSPARENT;
+            break;
+        }
         case WM_SIZE: {
             double width = 0;
             double height = 0;
@@ -3377,6 +3689,104 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(host));
     }
     Host *host = hostFromWindow(hwnd);
+    /* Hidden-titlebar (custom frame) windows first: DwmDefWindowProc
+     * gets FIRST CLAIM on every message — it owns the DWM-drawn caption
+     * buttons over the extended frame (hit-test, hover wash, press), and
+     * the HTMAXBUTTON it answers is what makes Windows 11 pop snap
+     * layouts on maximize-hover. Only when it declines does the message
+     * reach the handlers below. */
+    Window *chrome_window = hiddenTitlebarWindowForHwnd(host, hwnd);
+    if (chrome_window) {
+        const DwmApi &dwm = dwmApi();
+        LRESULT dwm_result = 0;
+        if (dwm.def_window_proc && dwm.def_window_proc(hwnd, message, wparam, lparam, &dwm_result)) return dwm_result;
+        switch (message) {
+            case WM_NCCALCSIZE:
+                if (wparam) {
+                    /* Reclaim ONLY the caption band: let DefWindowProc
+                     * lay out the standard non-client frame, then pull
+                     * the client's top edge back up so the caption band
+                     * belongs to the app while the left/right/bottom
+                     * resize borders keep their exact system metrics.
+                     *
+                     * The maximize pitfall: a maximized window's outer
+                     * rect extends one frame thickness PAST the monitor
+                     * on every side (the borders park offscreen). A
+                     * client top restored to the outer top would put the
+                     * first rows of content offscreen — clipped header,
+                     * unreachable buttons — so when maximized the top is
+                     * inset by the frame thickness at the window's CURRENT
+                     * dpi (per-monitor correct on mixed-dpi setups). An
+                     * attached menu bar keeps its strip: it lives in the
+                     * band DefWindowProc reserved below the caption. */
+                    NCCALCSIZE_PARAMS *params = reinterpret_cast<NCCALCSIZE_PARAMS *>(lparam);
+                    const LONG original_top = params->rgrc[0].top;
+                    const LRESULT def_result = DefWindowProcW(hwnd, WM_NCCALCSIZE, wparam, lparam);
+                    if (def_result != 0) return def_result;
+                    LONG top = original_top;
+                    if (IsZoomed(hwnd)) top += hiddenFrameTopThickness(hwnd);
+                    if (GetMenu(hwnd)) top += systemMetricForDpi(SM_CYMENU, dpiForWindow(hwnd));
+                    params->rgrc[0].top = top;
+                    return 0;
+                }
+                break;
+            case WM_NCHITTEST: {
+                /* DwmDefWindowProc above already claimed the caption
+                 * buttons when the DWM draws them. DefWindowProc still
+                 * owns the three REAL borders kept in WM_NCCALCSIZE
+                 * (left/right/bottom and their corners) — trust any
+                 * non-client answer it gives. */
+                const LRESULT def_hit = DefWindowProcW(hwnd, WM_NCHITTEST, wparam, lparam);
+                if (def_hit != HTCLIENT) return def_hit;
+                POINT point = { (int)(short)LOWORD(lparam), (int)(short)HIWORD(lparam) };
+                ScreenToClient(hwnd, &point);
+                RECT client = {};
+                GetClientRect(hwnd, &client);
+                /* Top resize band: the caption removal moved the top
+                 * frame INSIDE the client area, so hand its band back to
+                 * the system — restored and resizable windows only (a
+                 * maximized window does not resize, a fixed one never
+                 * does). Corner slivers widen to the side borders so the
+                 * diagonal grips survive at the very top. */
+                if (chrome_window->resizable && !IsZoomed(hwnd) && point.y >= 0 && point.y < hiddenFrameTopThickness(hwnd)) {
+                    const UINT dpi = dpiForWindow(hwnd);
+                    const int corner = systemMetricForDpi(SM_CXSIZEFRAME, dpi) + systemMetricForDpi(SM_CXPADDEDBORDER, dpi);
+                    if (point.x < corner) return HTTOPLEFT;
+                    if (point.x >= client.right - corner) return HTTOPRIGHT;
+                    return HTTOP;
+                }
+                /* Caption buttons when DwmDefWindowProc stayed silent
+                 * (composition off, older cores): DefWindowProc still
+                 * performs minimize/maximize/close for these hit codes,
+                 * so the cluster keeps working even without DWM visuals.
+                 * The cluster rect comes from the same DefWindowProc
+                 * layout the DWM draws from, split left-to-right into
+                 * min | max | close. */
+                RECT cluster = {};
+                if (captionButtonsClientRect(hwnd, &cluster) && PtInRect(&cluster, point)) {
+                    const LONG third = (cluster.right - cluster.left) / 3;
+                    if (point.x < cluster.left + third) return HTMINBUTTON;
+                    if (point.x < cluster.left + 2 * third) return HTMAXBUTTON;
+                    return HTCLOSE;
+                }
+                /* The markup's window-drag regions ARE the caption:
+                 * HTCAPTION buys the system move loop, double-click
+                 * maximize toggle, and the right-click system menu with
+                 * zero custom gesture code. */
+                if (windowDragRegionHit(host, *chrome_window, point)) return HTCAPTION;
+                return HTCLIENT;
+            }
+            case WM_ACTIVATE:
+                /* Composition restarts (session reconnect, driver reset)
+                 * drop frame extensions; the DWM custom-frame pattern
+                 * re-extends on activation. Falls through to
+                 * DefWindowProc below. */
+                applyHiddenTitlebarFrame(*chrome_window);
+                break;
+            default:
+                break;
+        }
+    }
     switch (message) {
         case kWakeMessage:
             if (host) {
@@ -3495,14 +3905,25 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
                     if (window.hwnd != hwnd) continue;
                     if (window.min_width <= 0 && window.min_height <= 0) break;
                     /* The declared floor is a CONTENT size; convert to the
-                     * outer track size for this window's current style. */
+                     * outer track size for this window's current style.
+                     * Hidden titlebar styles carry no top chrome (the
+                     * custom WM_NCCALCSIZE hands the caption band to the
+                     * client), so their conversion skips it too. */
                     RECT frame = { 0, 0, (LONG)(window.min_width > 0 ? window.min_width : 0), (LONG)(window.min_height > 0 ? window.min_height : 0) };
                     const DWORD style = (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE);
                     const DWORD ex_style = (DWORD)GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                    AdjustWindowRectEx(&frame, style, GetMenu(hwnd) != nullptr, ex_style);
+                    const bool has_menu = GetMenu(hwnd) != nullptr;
+                    AdjustWindowRectEx(&frame, style, has_menu, ex_style);
+                    LONG outer_width = frame.right - frame.left;
+                    LONG outer_height = frame.bottom - frame.top;
+                    if (windowUsesHiddenTitlebar(window)) {
+                        const SIZE outer = hiddenOuterSizeForContent(style, ex_style, has_menu, window.min_width > 0 ? window.min_width : 0, window.min_height > 0 ? window.min_height : 0);
+                        outer_width = outer.cx;
+                        outer_height = outer.cy;
+                    }
                     MINMAXINFO *info = reinterpret_cast<MINMAXINFO *>(lparam);
-                    if (window.min_width > 0) info->ptMinTrackSize.x = frame.right - frame.left;
-                    if (window.min_height > 0) info->ptMinTrackSize.y = frame.bottom - frame.top;
+                    if (window.min_width > 0) info->ptMinTrackSize.x = outer_width;
+                    if (window.min_height > 0) info->ptMinTrackSize.y = outer_height;
                     return 0;
                 }
             }
@@ -3548,21 +3969,29 @@ static ATOM registerClass(Host *host) {
 static bool createNativeWindow(Host *host, Window &window) {
     registerClass(host);
     std::wstring title = widen(window.title.empty() ? host->window_title : window.title);
+    /* ALL titlebar styles keep the full overlapped frame. The hidden
+     * styles do NOT drop to WS_POPUP: real Windows apps with custom
+     * titlebars keep the system frame and the DWM caption buttons and
+     * extend their own drawing into the caption band — the band itself
+     * is reclaimed in WM_NCCALCSIZE, everything else stays standard. */
     DWORD style = WS_OVERLAPPEDWINDOW;
     if (!window.resizable) style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
-    if (window.titlebar_style >= 1) {
-        /* Hidden titlebar styles: the app draws its own chrome, so drop
-         * the caption entirely (keeping the resize frame when the window
-         * is resizable). */
-        style = WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX;
-        if (window.resizable) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
-    }
     /* The requested frame is a CONTENT size (the other hosts size the
      * content area); grow it to the outer size for this style so the
      * client rect lands at the request. The menu bar is attached after
-     * creation, so account for it here when menus are declared. */
+     * creation, so account for it here when menus are declared. Hidden
+     * styles use the custom-calc shape (no top chrome) — plain
+     * AdjustWindowRectEx would land their client one caption band tall. */
+    const bool has_menu = !host->menus.empty();
     RECT frame = { 0, 0, (LONG)window.width, (LONG)window.height };
-    AdjustWindowRectEx(&frame, style, host->menus.empty() ? FALSE : TRUE, 0);
+    AdjustWindowRectEx(&frame, style, has_menu ? TRUE : FALSE, 0);
+    LONG outer_width = frame.right - frame.left;
+    LONG outer_height = frame.bottom - frame.top;
+    if (windowUsesHiddenTitlebar(window)) {
+        const SIZE outer = hiddenOuterSizeForContent(style, 0, has_menu, window.width, window.height);
+        outer_width = outer.cx;
+        outer_height = outer.cy;
+    }
     HWND hwnd = CreateWindowExW(
         0,
         L"NativeSdkWindowsHost",
@@ -3570,8 +3999,8 @@ static bool createNativeWindow(Host *host, Window &window) {
         style,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        frame.right - frame.left,
-        frame.bottom - frame.top,
+        outer_width,
+        outer_height,
         nullptr,
         nullptr,
         host->instance,
@@ -3580,6 +4009,14 @@ static bool createNativeWindow(Host *host, Window &window) {
     DragAcceptFiles(hwnd, TRUE);
     window.hwnd = hwnd;
     applyMenusToWindow(host, window);
+    if (windowUsesHiddenTitlebar(window)) {
+        applyHiddenTitlebarFrame(window);
+        /* The create-time WM_NCCALCSIZE ran before this window was
+         * registered under its HWND, so the custom calc did not apply;
+         * force one now that the map entry resolves. The callers keep
+         * `window` referencing the stored map entry for exactly this. */
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
     SetTimer(hwnd, kFrameTimerId, 16, nullptr);
@@ -3991,9 +4428,15 @@ int native_sdk_windows_create_window(Host *host, uint64_t window_id, const char 
     window.titlebar_style = titlebar_style;
     window.min_width = min_width;
     window.min_height = min_height;
-    bool ok = createNativeWindow(host, window);
-    if (!ok) return 0;
-    host->windows[window_id] = window;
+    /* Register BEFORE creating: createNativeWindow's post-create frame
+     * pass (hidden titlebar styles) resolves the window through the map
+     * by HWND, so the stored entry must be the one it mutates. */
+    Window &stored = host->windows[window_id];
+    stored = window;
+    if (!createNativeWindow(host, stored)) {
+        host->windows.erase(window_id);
+        return 0;
+    }
     return 1;
 }
 
@@ -4057,6 +4500,74 @@ int native_sdk_windows_start_window_drag(Host *host, uint64_t window_id) {
      * this call. */
     ReleaseCapture();
     PostMessageW(found->second.hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+    return 1;
+}
+
+/* Replace a canvas view's window-drag mirror (runtime push after layout
+ * installs whose regions changed). Rects arrive flat as x,y,w,h in the
+ * view's logical coordinates; exclusions mark the press-claiming
+ * carve-outs. WM_NCHITTEST on hidden-titlebar windows consults the
+ * mirror to answer HTCAPTION. */
+int native_sdk_windows_set_window_drag_regions(Host *host, uint64_t window_id, const char *label, size_t label_len, const double *rects, const int *exclusions, size_t count) {
+    if (!host || label_len == 0) return 0;
+    auto found = host->native_views.find(nativeViewKey(window_id, slice(label, label_len)));
+    if (found == host->native_views.end() || found->second.kind != kViewGpuSurface) return 0;
+    found->second.drag_regions.clear();
+    if (!rects || !exclusions) return 1;
+    found->second.drag_regions.reserve(count);
+    for (size_t index = 0; index < count; ++index) {
+        DragRegionRect rect;
+        rect.x = rects[index * 4 + 0];
+        rect.y = rects[index * 4 + 1];
+        rect.width = rects[index * 4 + 2];
+        rect.height = rects[index * 4 + 3];
+        rect.exclusion = exclusions[index] != 0;
+        found->second.drag_regions.push_back(rect);
+    }
+    return 1;
+}
+
+/* Chrome overlay geometry for hidden-titlebar windows, logical points:
+ * the caption-button band's depth on top, the min/max/close cluster's
+ * extent from the trailing (right) edge, and the cluster's frame in
+ * content coordinates. The live rects come from WM_GETTITLEBARINFOEX —
+ * the same layout the DWM draws from — so maximize (the cluster shifts
+ * inward with the parked borders) and per-monitor dpi report true
+ * values on every poll; the runtime re-polls on resize events, which
+ * maximize/restore transitions emit. Standard-titlebar windows and
+ * minimized windows (whose rects describe the taskbar miniature, not
+ * content) report all zero, like macOS reports zero in fullscreen. */
+int native_sdk_windows_window_chrome(Host *host, uint64_t window_id, double *top, double *left, double *bottom, double *right, double *buttons_x, double *buttons_y, double *buttons_width, double *buttons_height) {
+    *top = 0;
+    *left = 0;
+    *bottom = 0;
+    *right = 0;
+    *buttons_x = 0;
+    *buttons_y = 0;
+    *buttons_width = 0;
+    *buttons_height = 0;
+    if (!host) return 0;
+    auto found = host->windows.find(window_id);
+    if (found == host->windows.end() || !found->second.hwnd) return 0;
+    Window &window = found->second;
+    if (!windowUsesHiddenTitlebar(window) || IsIconic(window.hwnd)) return 1;
+    const double scale = gpuSurfaceScale(window.hwnd);
+    if (scale <= 0) return 1;
+    RECT cluster = {};
+    if (captionButtonsClientRect(window.hwnd, &cluster)) {
+        RECT client = {};
+        GetClientRect(window.hwnd, &client);
+        *top = (double)cluster.bottom / scale;
+        *right = (double)(client.right - cluster.left) / scale;
+        *buttons_x = (double)cluster.left / scale;
+        *buttons_y = (double)cluster.top / scale;
+        *buttons_width = (double)(cluster.right - cluster.left) / scale;
+        *buttons_height = (double)(cluster.bottom - cluster.top) / scale;
+    } else {
+        /* No live rects yet (pre-show poll): the band metric still
+         * gives the header an honest height to layout against. */
+        *top = (double)hiddenCaptionBandHeight(window.hwnd) / scale;
+    }
     return 1;
 }
 
@@ -4244,8 +4755,13 @@ int native_sdk_windows_present_gpu_surface_pixels(Host *host, uint64_t window_id
     NativeView &view = found->second;
 
     /* Straight RGBA8 -> top-down BGRA rows for a BI_RGB 32bpp DIB. The
-     * surface is opaque (alpha_mode "opaque"), so no premultiply is needed
-     * and GDI ignores the fourth byte. */
+     * surface is opaque (alpha_mode "opaque"), so no premultiply is
+     * needed. The fourth byte is FORCED to 255, not copied: plain GDI
+     * ignores it, but on hidden-titlebar windows the DWM frame extends
+     * over the top band and composites its own caption material wherever
+     * the redirection surface's alpha is 0 — the app's pixels must read
+     * as opaque there or the whole header band would vanish under DWM
+     * chrome (only the punched button hole yields on purpose). */
     view.gpu_bgra.resize(width * height * 4);
     uint8_t *dst = view.gpu_bgra.data();
     const size_t pixel_count = width * height;
@@ -4254,10 +4770,15 @@ int native_sdk_windows_present_gpu_surface_pixels(Host *host, uint64_t window_id
         dst[index * 4 + 0] = src[2];
         dst[index * 4 + 1] = src[1];
         dst[index * 4 + 2] = src[0];
-        dst[index * 4 + 3] = src[3];
+        dst[index * 4 + 3] = 255;
     }
     view.gpu_buf_width = (int)width;
     view.gpu_buf_height = (int)height;
+
+    /* Hidden-titlebar windows: keep the DWM caption material behind the
+     * button cluster matched to the header the app just presented. */
+    auto owner = host->windows.find(view.window_id);
+    if (owner != host->windows.end()) syncHiddenCaptionColor(host, owner->second, view, rgba8, width, height);
 
     const size_t sample_index = ((height / 2) * width + width / 2) * 4;
     const uint8_t sr = rgba8[sample_index + 0];

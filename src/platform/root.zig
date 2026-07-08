@@ -74,6 +74,7 @@ pub const isValidShortcutKey = types.isValidShortcutKey;
 pub const WindowRestorePolicy = types.WindowRestorePolicy;
 pub const WindowTitlebarStyle = types.WindowTitlebarStyle;
 pub const WindowChrome = types.WindowChrome;
+pub const WindowDragRegion = types.WindowDragRegion;
 pub const WindowShowMode = types.WindowShowMode;
 pub const WindowOptions = types.WindowOptions;
 pub const WindowState = types.WindowState;

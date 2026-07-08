@@ -243,3 +243,42 @@ test "a widget with both a press handler and window_drag keeps its press" {
     try std.testing.expectEqual(@as(usize, 0), harness.null_platform.window_drag_start_count);
     try std.testing.expectEqual(@as(canvas.ObjectId, 2), app_state.last_press_target_id);
 }
+
+test "layout installs mirror window-drag regions to hit-testing platforms" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: DragTestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    try installDragLayout(harness);
+
+    // The install pushed the mirror the Windows host consults from
+    // WM_NCHITTEST: the drag header's frame, then the press-claiming
+    // button inside it as an exclusion. Plain text claims nothing and
+    // the body button lives outside the region, so neither appears.
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.window_drag_region_push_count);
+    const regions = harness.null_platform.window_drag_regions[0..harness.null_platform.window_drag_region_count];
+    try std.testing.expectEqual(@as(usize, 2), regions.len);
+    const layout = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(!regions[0].exclusion);
+    try std.testing.expectEqual((layout.findById(2) orelse return error.TestUnexpectedResult).frame, regions[0].frame);
+    try std.testing.expect(regions[1].exclusion);
+    try std.testing.expectEqual((layout.findById(3) orelse return error.TestUnexpectedResult).frame, regions[1].frame);
+
+    // Re-installing an identical layout pushes nothing: the mirror only
+    // travels when it changed.
+    const header_children = [_]canvas.Widget{
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(8, 6, 80, 28), .text = "Open", .command = "app.open" },
+        .{ .id = 4, .kind = .text, .frame = geometry.RectF.init(100, 10, 60, 18), .text = "Title" },
+    };
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .row, .frame = geometry.RectF.init(0, 0, 320, 40), .window_drag = true, .children = &header_children },
+        .{ .id = 5, .kind = .button, .frame = geometry.RectF.init(10, 60, 96, 32), .text = "Body", .command = "app.body" },
+    };
+    const root = canvas.Widget{ .id = 1, .kind = .panel, .children = &children };
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const same_layout = try canvas.layoutWidgetTree(root, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", same_layout);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.window_drag_region_push_count);
+}

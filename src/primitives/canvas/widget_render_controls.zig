@@ -134,7 +134,7 @@ fn pixelSnapTextPoint(tokens: DesignTokens, point: geometry.PointF) geometry.Poi
 
 pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = buttonControlVisualTokens(widget, tokens);
-    const radius = groupSegmentRadius(buttonControlRadius(widget, visual, tokens), widget.group_segment);
+    const radius = buttonGroupSegmentRadius(widget, visual, tokens);
     const text_size = widgetButtonTextSize(widget, tokens);
     const text_inset = widgetButtonInset(widget, tokens);
     try builder.fillRoundedRect(.{
@@ -220,7 +220,7 @@ pub fn emitButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
 
 pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = buttonControlVisualTokens(widget, tokens);
-    const radius = groupSegmentRadius(buttonControlRadius(widget, visual, tokens), widget.group_segment);
+    const radius = buttonGroupSegmentRadius(widget, visual, tokens);
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
@@ -264,13 +264,17 @@ pub fn emitIconButtonWidget(builder: *Builder, widget: Widget, tokens: DesignTok
     }
 }
 
-/// The button's corner radius shaped by its flush-group position: the
-/// first segment keeps only its leading pair, the last only its
-/// trailing pair, middles square off, and an ungrouped button keeps
-/// all four. This is what makes a flush group read as ONE bar with one
-/// corner language instead of three chips pressed together.
-fn groupSegmentRadius(radius: Radius, segment: widget_model.WidgetGroupSegment) Radius {
-    return switch (segment) {
+/// The button's corner radius shaped by its group register. Segmented
+/// (house) members collapse by position: the first segment keeps only
+/// its leading pair, the last only its trailing pair, middles square
+/// off, and an ungrouped button keeps all four — what makes a flush
+/// group read as ONE bar with one corner language instead of three
+/// chips pressed together. Detached members are exactly those chips:
+/// each keeps all four corners.
+fn buttonGroupSegmentRadius(widget: Widget, visual: ControlVisualTokens, tokens: DesignTokens) Radius {
+    const radius = buttonControlRadius(widget, visual, tokens);
+    if (widget_render_style.buttonInDetachedGroup(widget, tokens)) return radius;
+    return switch (widget.group_segment) {
         .none => radius,
         .first => .{ .top_left = radius.top_left, .bottom_left = radius.bottom_left },
         .middle => .{},
@@ -290,7 +294,10 @@ fn groupSegmentRadius(radius: Radius, segment: widget_model.WidgetGroupSegment) 
 /// freed by the retired button shadow.
 fn emitButtonBorder(builder: *Builder, widget: Widget, tokens: DesignTokens, radius: Radius) Error!void {
     const stroke_width = buttonStrokeWidth(widget, tokens);
-    const drop_left_border = widget.group_segment == .middle or widget.group_segment == .last;
+    // Seams exist only in the segmented register — a detached chip has
+    // no shared boundary to collapse.
+    const drop_left_border = !widget_render_style.buttonInDetachedGroup(widget, tokens) and
+        (widget.group_segment == .middle or widget.group_segment == .last);
     if (drop_left_border) {
         try builder.pushClip(.{
             .id = widgetPartId(widget.id, 0),

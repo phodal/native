@@ -196,6 +196,17 @@ pub fn buttonFillColor(widget: Widget, tokens: DesignTokens) Color {
     const toggle_kind = widget.kind == .toggle_button or widget.kind == .toggle;
     const selected_toggle = selected and toggle_kind;
     const visual = buttonControlVisualTokens(widget, tokens);
+    // The detached group chip's own ladder, ahead of the variant switch:
+    // every member rests on the group table's wash, the selected (or
+    // pressed) chip takes the ink-inverted active fill, and hover moves
+    // only if the theme states a hover channel — selection is the one
+    // signal the strip speaks.
+    if (buttonInDetachedGroup(widget, tokens)) {
+        if (pressed) return widgetAccentColor(widget, visual.pressed_background orelse visual.active_background orelse tokens.colors.surface_pressed);
+        if (selected) return widgetAccentColor(widget, visual.active_background orelse tokens.colors.surface_pressed);
+        if (hovered) return widgetBackgroundColor(widget, visual.hover_background orelse visual.background orelse tokens.colors.surface_subtle);
+        return widgetBackgroundColor(widget, visual.background orelse tokens.colors.surface_subtle);
+    }
     return switch (widget.variant) {
         .default => if (pressed or selected)
             widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent)
@@ -311,6 +322,13 @@ pub fn buttonTextColorForWidget(widget: Widget, tokens: DesignTokens) Color {
     }
     const active = widget.state.pressed or widget.state.selected;
     const visual = buttonControlVisualTokens(widget, tokens);
+    // The detached group chip's ink pair: knockout on the ink-inverted
+    // active fill, the stated rest ink (falling back to the body ink)
+    // everywhere else.
+    if (buttonInDetachedGroup(widget, tokens)) {
+        if (active) return widgetAccentForegroundColor(widget, tokens, visual.active_foreground orelse tokens.colors.accent_text);
+        return widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
+    }
     return switch (widget.variant) {
         .default => if (active)
             widgetAccentForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.accent_text)
@@ -332,6 +350,11 @@ pub fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
     // control wearing a ring. Ghost keeps its no-border shape.
     const border = widget.style.border orelse blk: {
         const visual = buttonControlVisualTokens(widget, tokens);
+        // The detached group chip is a borderless shape (its edge is
+        // where the wash ends), unless the theme states an edge.
+        if (buttonInDetachedGroup(widget, tokens)) {
+            break :blk widgetBorderColor(widget, visual.border orelse transparentColor());
+        }
         break :blk switch (widget.variant) {
             .primary => widgetAccentColor(widget, visual.border orelse tokens.colors.accent),
             // The destructive chip and ghost are borderless shapes: the
@@ -344,7 +367,24 @@ pub fn buttonBorderFill(widget: Widget, tokens: DesignTokens) Fill {
     return colorFill(disabledWash(border, widget.state.disabled, tokens.states.disabled_alpha));
 }
 
+/// Whether this widget is a button-group member rendering in the
+/// `.detached` chip register: the group walks stamp `group_segment`
+/// onto every member on the way down, and the register switch decides
+/// what the stamp means — `.segmented` collapses corners and seams,
+/// `.detached` swaps the member's whole visual class to the
+/// `button_group` control table (fills, inks, borderless chrome) while
+/// keeping full corners. Never true under the house register's default
+/// tokens, so no-pack rendering cannot take this path.
+pub fn buttonInDetachedGroup(widget: Widget, tokens: DesignTokens) bool {
+    return widget.group_segment != .none and tokens.controls.button_group_style == .detached;
+}
+
 pub fn buttonControlVisualTokens(widget: Widget, tokens: DesignTokens) ControlVisualTokens {
+    // A detached-register group member wears the group's own control
+    // table — the chip treatment replaces variant chrome, so the strip
+    // reads as ONE exclusive-choice affordance rather than a row of
+    // mismatched buttons.
+    if (buttonInDetachedGroup(widget, tokens)) return tokens.controls.button_group;
     const variant = switch (widget.variant) {
         .default => tokens.controls.button_default,
         .primary => tokens.controls.button_primary,
@@ -553,6 +593,9 @@ pub fn buttonStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
     if (widget.style.stroke_width) |width| return nonNegative(width);
     const visual = buttonControlVisualTokens(widget, tokens);
     if (visual.stroke_width) |width| return nonNegative(width);
+    // The detached group chip defaults borderless like the other
+    // wash-edged shapes below.
+    if (buttonInDetachedGroup(widget, tokens)) return 0;
     return switch (widget.variant) {
         // Ghost has no box; the destructive chip's edge is its wash.
         .ghost, .destructive => 0,

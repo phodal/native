@@ -72,7 +72,11 @@ pub fn layoutWidgetDepth(
 
     const content = frame.inset(widget.layout.padding);
     switch (widget.kind) {
-        .row, .breadcrumb, .button_group, .pagination, .radio_group, .tabs, .toggle_group => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout, tokens),
+        .row, .breadcrumb, .pagination, .radio_group, .tabs, .toggle_group => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, widget.layout, tokens),
+        // Button groups flow like rows but at their register's effective
+        // gap: the detached register supplies its own inter-chip gap when
+        // the author left the group's gap at 0.
+        .button_group => try layoutAxisChildren(widget.children, content, .horizontal, index, depth, output, len, buttonGroupLayoutStyle(widget, tokens), tokens),
         .column => try layoutAxisChildren(widget.children, content, .vertical, index, depth, output, len, widget.layout, tokens),
         // The grouped input flows vertically inside its own field chrome:
         // the text entry (grow-stretched by `Ui.inputGroup`) above the
@@ -220,6 +224,25 @@ const LayoutAxis = enum {
     horizontal,
     vertical,
 };
+
+/// A button group's effective inter-member gap: the author's stated gap
+/// always wins; a gap left at 0 means "the register decides" — attached
+/// segments (0) under the house `.segmented` register, the pack's
+/// `button_group_gap` metric under `.detached`. The default metric is 0,
+/// so no-pack layout is unchanged by construction.
+pub fn buttonGroupGap(widget: Widget, tokens: DesignTokens) f32 {
+    const gap = nonNegative(widget.layout.gap);
+    if (gap > 0 or tokens.controls.button_group_style != .detached) return gap;
+    return nonNegative(tokens.metrics.button_group_gap);
+}
+
+/// The group's layout style with the register's effective gap applied —
+/// what `layoutAxisChildren` receives for `.button_group` parents.
+fn buttonGroupLayoutStyle(widget: Widget, tokens: DesignTokens) WidgetLayoutStyle {
+    var style = widget.layout;
+    style.gap = buttonGroupGap(widget, tokens);
+    return style;
+}
 
 fn layoutAxisChildren(
     children: []const Widget,
@@ -591,7 +614,10 @@ fn rowChildWidth(row: Widget, available_width: f32, index: usize, tokens: Design
         }
     }
     if (flow_count == 0) return available_width;
-    const total_gap = nonNegative(row.layout.gap) * @as(f32, @floatFromInt(flow_count - 1));
+    // Button groups replay their register's effective gap (see
+    // `buttonGroupGap`), matching what `layoutAxisChildren` used.
+    const row_gap = if (row.kind == .button_group) buttonGroupGap(row, tokens) else nonNegative(row.layout.gap);
+    const total_gap = row_gap * @as(f32, @floatFromInt(flow_count - 1));
     const remaining = @max(0, available_width - fixed_extent - total_gap);
     const child = children[index];
     const grow = nonNegative(child.layout.grow);
@@ -1441,7 +1467,10 @@ fn intrinsicAxisChildrenSize(widget: Widget, tokens: DesignTokens, axis: LayoutA
         }
     }
     if (flow_count == 0) return intrinsicOwnMinSize(widget);
-    const gap = nonNegative(widget.layout.gap) * @as(f32, @floatFromInt(flow_count - 1));
+    // Button groups measure at their register's effective gap (see
+    // `buttonGroupGap`), so intrinsic sizing agrees with placement.
+    const child_gap = if (widget.kind == .button_group) buttonGroupGap(widget, tokens) else nonNegative(widget.layout.gap);
+    const gap = child_gap * @as(f32, @floatFromInt(flow_count - 1));
     return paddedIntrinsicSize(widget, switch (axis) {
         .horizontal => geometry.SizeF.init(main_sum + gap, cross_max),
         .vertical => geometry.SizeF.init(cross_max, main_sum + gap),

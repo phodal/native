@@ -783,6 +783,115 @@ test "gpu components display list renders stable geist reference snapshot" {
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
 }
 
+/// Render a two-member exclusive-choice button group (one member
+/// selected) on a small reference surface under `tokens` — the pinned
+/// specimen for the per-pack button-group register below. The lab scene
+/// the catalog pins render carries no button group, so the detached
+/// chip register gets its own machine-verified surface instead of
+/// moving (or hiding inside) the existing catalog signatures.
+fn renderButtonGroupReferenceSurface(tokens: canvas.DesignTokens, pixels: []u8, scratch: []u8) !canvas.ReferenceRenderSurface {
+    // Fixed member frames, like the lab scene's other fixed-geometry
+    // specimens: widths sized for the real bundled face so the labels
+    // never elide under the estimator's narrower guess.
+    const members = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 96, 40), .text = "Albums", .state = .{ .selected = true } },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 0, 84, 40), .text = "Songs" },
+    };
+    const group = canvas.Widget{
+        .id = 1,
+        .kind = .button_group,
+        .frame = geometry.RectF.init(16, 16, button_group_surface_width - 32, 40),
+        .children = &members,
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTreeWithTokens(group, group.frame, tokens, &nodes);
+
+    var commands: [32]canvas.CanvasCommand = undefined;
+    var builder = canvas.Builder.init(&commands);
+    try layout.emitDisplayList(&builder, tokens);
+    const display_list = builder.displayList();
+
+    var render_commands: [64]canvas.RenderCommand = undefined;
+    var render_batches: [64]canvas.RenderBatch = undefined;
+    var pipeline_cache_entries: [max_component_pipelines]canvas.RenderPipelineCacheEntry = undefined;
+    var pipeline_cache_actions: [max_component_pipelines * 2]canvas.RenderPipelineCacheAction = undefined;
+    var layers: [64]canvas.RenderLayer = undefined;
+    var layer_cache_entries: [64]canvas.RenderLayerCacheEntry = undefined;
+    var layer_cache_actions: [64 * 2]canvas.RenderLayerCacheAction = undefined;
+    var resources: [64]canvas.RenderResource = undefined;
+    var cache_entries: [64]canvas.RenderResourceCacheEntry = undefined;
+    var cache_actions: [64 * 2]canvas.RenderResourceCacheAction = undefined;
+    var images: [64]canvas.RenderImage = undefined;
+    var image_cache_entries: [64]canvas.RenderImageCacheEntry = undefined;
+    var image_cache_actions: [64 * 2]canvas.RenderImageCacheAction = undefined;
+    var visual_effects: [64]canvas.VisualEffect = undefined;
+    var visual_effect_cache_entries: [64]canvas.VisualEffectCacheEntry = undefined;
+    var visual_effect_cache_actions: [64 * 2]canvas.VisualEffectCacheAction = undefined;
+    var glyphs: [256]canvas.GlyphAtlasEntry = undefined;
+    var glyph_cache_entries: [256]canvas.GlyphAtlasCacheEntry = undefined;
+    var glyph_cache_actions: [256 * 2]canvas.GlyphAtlasCacheAction = undefined;
+    var text_layout_plans: [64]canvas.TextLayoutPlan = undefined;
+    var text_layout_lines: [256]canvas.TextLine = undefined;
+    var text_layout_cache_entries: [64]canvas.TextLayoutCacheEntry = undefined;
+    var text_layout_cache_actions: [64 * 2]canvas.TextLayoutCacheAction = undefined;
+    var changes: [64 * 2 + 1]canvas.DiffChange = undefined;
+    const frame = try componentFrame(display_list, null, .{
+        .surface_size = geometry.SizeF.init(button_group_surface_width, button_group_surface_height),
+        .full_repaint = true,
+        .image_resources = &preview_images,
+    }, componentFrameStorage(&render_commands, &render_batches, &pipeline_cache_entries, &pipeline_cache_actions, &layers, &layer_cache_entries, &layer_cache_actions, &resources, &cache_entries, &cache_actions, &images, &image_cache_entries, &image_cache_actions, &visual_effects, &visual_effect_cache_entries, &visual_effect_cache_actions, &glyphs, &glyph_cache_entries, &glyph_cache_actions, &text_layout_plans, &text_layout_lines, &text_layout_cache_entries, &text_layout_cache_actions, &changes));
+
+    @memset(pixels, 0);
+    const surface = (try canvas.ReferenceRenderSurface.initWithScratch(button_group_surface_width, button_group_surface_height, pixels, scratch)).withImages(&preview_images);
+    try surface.renderPass(frame.renderPass(), tokens.colors.background);
+    return surface;
+}
+
+const button_group_surface_width: usize = 260;
+const button_group_surface_height: usize = 72;
+const button_group_surface_pixels: usize = button_group_surface_width * button_group_surface_height * 4;
+
+test "geist button group renders the detached secondary-tab register in both schemes" {
+    // The pack's button-group register, machine-verified per scheme:
+    // detached fully-rounded chips 8px apart, the selected chip in the
+    // ink-inverted fill (gray-1000 under page-color knockout — NOT the
+    // pack's pure-black light primary), the unselected chip on the
+    // translucent gray wash under the primary ink, no borders, no
+    // container chrome. Pinned 2026-07-08 with the register's first
+    // authoring; light and dark captures of this exact specimen were
+    // reviewed by eye before blessing.
+    const pixels = try std.testing.allocator.alloc(u8, button_group_surface_pixels);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, button_group_surface_pixels);
+    defer std.testing.allocator.free(scratch);
+
+    const light = try renderButtonGroupReferenceSurface(componentTokensForPack(.geist, .light), pixels, scratch);
+    // The selected chip's fill is the measured gray-1000 step #171717 —
+    // one step short of the pack's pure-black light primary — probed at
+    // the chip's lower body, clear of the knockout label.
+    try std.testing.expectEqual([4]u8{ 23, 23, 23, 255 }, light.pixelRgba8(30, 48));
+    try std.testing.expectEqual(@as(u64, 8187074409027429810), referenceSurfaceSignature(pixels));
+
+    const dark = try renderButtonGroupReferenceSurface(componentTokensForPack(.geist, .dark), pixels, scratch);
+    // Dark inverts to porcelain #ededed.
+    try std.testing.expectEqual([4]u8{ 237, 237, 237, 255 }, dark.pixelRgba8(30, 48));
+    try std.testing.expectEqual(@as(u64, 272499359279849024), referenceSurfaceSignature(pixels));
+}
+
+test "house button group keeps the attached segmented bar through the shared specimen" {
+    // The same specimen under the house register: the members stay one
+    // attached bar (interior corners collapsed, one shared seam), so
+    // this pin moving without the geist pin above is the loud signal
+    // that no-pack button-group rendering drifted. Pinned 2026-07-08
+    // alongside the geist register's first authoring.
+    const pixels = try std.testing.allocator.alloc(u8, button_group_surface_pixels);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, button_group_surface_pixels);
+    defer std.testing.allocator.free(scratch);
+    _ = try renderButtonGroupReferenceSurface(componentTokens(), pixels, scratch);
+    try std.testing.expectEqual(@as(u64, 12529290438367463158), referenceSurfaceSignature(pixels));
+}
+
 test "gpu components house reference snapshot is reproducible through the shared per-theme path" {
     // Sanity for the helper above: rendering the house register through
     // the per-theme path reproduces the pinned house signature exactly,

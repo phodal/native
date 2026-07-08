@@ -705,6 +705,100 @@ test "flush button groups collapse corners and interior seams in both render wal
     try std.testing.expect(spaced_list.findCommandById(widgetPartId(4, 0)) == null);
 }
 
+test "detached button groups render chip members with the group table and the metric gap" {
+    // A detached-register token set with every channel stated, so the
+    // assertions read the table straight back: rest wash, ink-inverted
+    // selected fill under the knockout ink, full corners, no borders,
+    // and the metric gap standing in for the author's gap-0.
+    var tokens = DesignTokens{};
+    tokens.controls.button_group_style = .detached;
+    tokens.controls.button_group = .{
+        .background = Color.rgba8(0, 0, 0, 20),
+        .hover_background = Color.rgba8(0, 0, 0, 20),
+        .active_background = Color.rgb8(23, 23, 23),
+        .foreground = Color.rgb8(23, 23, 23),
+        .active_foreground = Color.rgb8(255, 255, 255),
+        .stroke_width = 0,
+    };
+    tokens.metrics.button_group_gap = 8;
+
+    const segments = [_]Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 80, 32), .text = "Albums", .state = .{ .selected = true } },
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(80, 0, 80, 32), .text = "Songs" },
+    };
+    const group = Widget{
+        .id = 1,
+        .kind = .button_group,
+        .frame = geometry.RectF.init(0, 0, 240, 32),
+        .children = &segments,
+    };
+
+    // Tree walk: the selected member wears the ink-inverted fill, the
+    // unselected member the rest wash, both on FULL corners with no
+    // seam clips and no visible border.
+    var commands: [16]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, group, tokens);
+    const list = builder.displayList();
+    switch (list.findCommandById(widgetPartId(2, 1)).?.command) {
+        .fill_rounded_rect => |fill| {
+            try expectFillColor(Color.rgb8(23, 23, 23), fill.fill);
+            try std.testing.expectEqualDeep(Radius.all(10), fill.radius);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (list.findCommandById(widgetPartId(3, 1)).?.command) {
+        .fill_rounded_rect => |fill| {
+            try expectFillColor(Color.rgba8(0, 0, 0, 20), fill.fill);
+            try std.testing.expectEqualDeep(Radius.all(10), fill.radius);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // No seam clips anywhere: a chip has no shared boundary.
+    try std.testing.expect(list.findCommandById(widgetPartId(2, 0)) == null);
+    try std.testing.expect(list.findCommandById(widgetPartId(3, 0)) == null);
+    // The chips are borderless: the border stroke carries zero width.
+    switch (list.findCommandById(widgetPartId(2, 2)).?.command) {
+        .stroke_rect => |stroke| try std.testing.expectEqual(@as(f32, 0), stroke.stroke.width),
+        else => return error.TestUnexpectedResult,
+    }
+    // Knockout ink on the selected label, the stated rest ink elsewhere.
+    switch (list.findCommandById(widgetPartId(2, 4)).?.command) {
+        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(255, 255, 255), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (list.findCommandById(widgetPartId(3, 4)).?.command) {
+        .draw_text => |text| try std.testing.expectEqualDeep(Color.rgb8(23, 23, 23), text.color),
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Layout walk: the same chips, and the metric gap separates the
+    // members the author left at gap 0.
+    var nodes: [4]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTreeWithTokens(group, group.frame, tokens, &nodes);
+    try std.testing.expectEqual(@as(f32, 0), layout.nodes[1].frame.x);
+    const second_x = layout.nodes[2].frame.x;
+    const first_max_x = layout.nodes[1].frame.maxX();
+    try std.testing.expectApproxEqAbs(@as(f32, 8), second_x - first_max_x, 0.001);
+    var layout_commands: [16]CanvasCommand = undefined;
+    var layout_builder = Builder.init(&layout_commands);
+    try layout.emitDisplayList(&layout_builder, tokens);
+    switch (layout_builder.displayList().findCommandById(widgetPartId(2, 1)).?.command) {
+        .fill_rounded_rect => |fill| {
+            try expectFillColor(Color.rgb8(23, 23, 23), fill.fill);
+            try std.testing.expectEqualDeep(Radius.all(10), fill.radius);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // An author-stated gap still wins over the metric.
+    var spaced = group;
+    spaced.layout = .{ .gap = 4 };
+    var spaced_nodes: [4]WidgetLayoutNode = undefined;
+    const spaced_layout = try layoutWidgetTreeWithTokens(spaced, spaced.frame, tokens, &spaced_nodes);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), spaced_layout.nodes[2].frame.x - spaced_layout.nodes[1].frame.maxX(), 0.001);
+}
+
 test "the bubble reaction pill straddles the bottom edge on the page plane" {
     const surfaces = @import("widget_render_surfaces.zig");
     const tokens = DesignTokens{};

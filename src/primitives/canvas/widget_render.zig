@@ -361,12 +361,21 @@ fn emitWidgetChildren(builder: *Builder, children: []const Widget, tokens: Desig
     }
 }
 
-/// Whether a button group's segments attach: only a gap-0 (the default)
-/// group collapses corners and seams — an author who spaces the group
-/// out has asked for separate buttons, and rounding off their inner
-/// corners then would be dishonest chrome.
-fn buttonGroupIsFlush(widget: Widget) bool {
-    return widget.layout.gap <= 0;
+/// Whether a button group stamps member positions into the render walk.
+/// Under the house `.segmented` register only a gap-0 (the default)
+/// group stamps — attached segments collapse corners and seams, while
+/// an author who spaces the group out has asked for separate buttons,
+/// and rounding off their inner corners then would be dishonest chrome.
+/// Under the `.detached` register every member stamps regardless of
+/// gap: the stamp switches the member to the group's chip treatment
+/// (full corners, group control table), so spacing carries no opt-out
+/// meaning there. The button emitters key the corner/seam collapse on
+/// the register, never on the stamp alone.
+fn buttonGroupStampsSegments(widget: Widget, tokens: DesignTokens) bool {
+    return switch (tokens.controls.button_group_style) {
+        .segmented => widget.layout.gap <= 0,
+        .detached => true,
+    };
 }
 
 /// A group child's position among the group's VISIBLE children, in
@@ -394,13 +403,14 @@ fn buttonGroupSegmentAt(ordinal: usize, visible_total: usize) widget_model.Widge
 }
 
 /// The tree walk's button-group emission: `emitWidgetClippedChildren`
-/// with the flush-group segment stamp applied to each child copy on the
-/// way down, so the button emitters can shape corners and collapse the
-/// shared seams. The layout walk applies the same stamp in
-/// `emitWidgetLayoutChildren` — the two walks must agree or a docs
-/// scene and a live app would render different bars.
+/// with the group segment stamp applied to each child copy on the way
+/// down, so the button emitters can shape corners and collapse the
+/// shared seams (segmented register) or swap to the group chip
+/// treatment (detached register). The layout walk applies the same
+/// stamp in `emitWidgetLayoutChildren` — the two walks must agree or a
+/// docs scene and a live app would render different bars.
 fn emitButtonGroupWidget(builder: *Builder, widget: Widget, tokens: DesignTokens, depth: usize) Error!void {
-    if (!buttonGroupIsFlush(widget)) return emitWidgetClippedChildren(builder, widget, tokens, depth);
+    if (!buttonGroupStampsSegments(widget, tokens)) return emitWidgetClippedChildren(builder, widget, tokens, depth);
     if (widget.layout.clip_content) try builder.pushClip(widgetContentClip(widget, tokens));
     var emitted: usize = 0;
     var previous: ?WidgetPaintOrder = null;
@@ -427,7 +437,7 @@ fn emitWidgetLayoutChildren(
     // their segment position on the way down.
     const group_index: ?usize = if (parent_index) |index| blk: {
         const parent = layout.nodes[index].widget;
-        break :blk if (parent.kind == .button_group and buttonGroupIsFlush(parent)) index else null;
+        break :blk if (parent.kind == .button_group and buttonGroupStampsSegments(parent, tokens)) index else null;
     } else null;
     var emitted: usize = 0;
     var previous: ?WidgetPaintOrder = null;

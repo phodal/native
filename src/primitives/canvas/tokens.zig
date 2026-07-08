@@ -508,6 +508,12 @@ pub const ControlMetricTokens = struct {
     /// active trigger's label. Unused by the house `.pill` register —
     /// the default only matters once a theme opts into underlines.
     tabs_indicator_thickness: f32 = 2,
+    /// The inter-chip gap of the `.detached` button-group register (see
+    /// `ControlTokens.button_group_style`), applied only when the author
+    /// left the group's gap at 0. Unused by the house `.segmented`
+    /// register — a gap-0 segmented group attaches on purpose, so the
+    /// default stays 0 and no-pack rendering never moves.
+    button_group_gap: f32 = 0,
     /// The spinner's structural register, promoted to tokens because
     /// indicator SHAPE is a pack signature, not a color: the house
     /// spinner is one stroked arc spun continuously, while other
@@ -895,6 +901,24 @@ pub const TabsIndicatorKind = enum {
     underline,
 };
 
+/// How a button group's segments relate — a REGISTER choice, not a
+/// color, so it lives beside the control tables like `tabs_indicator`:
+///
+/// - `.segmented`: the house treatment. A gap-0 group renders as ONE
+///   attached bar — the first segment keeps its leading corners, the
+///   last its trailing pair, middles square off, and interior seams
+///   collapse to a single shared stroke. A gap above 0 opts back into
+///   ordinary separate buttons.
+/// - `.detached`: chip triggers. Every group member renders as its own
+///   fully-rounded chip from the `button_group` control table (rest
+///   wash, ink-inverted selected fill, borderless), separated by the
+///   author's gap or, when the author left the gap at 0, the pack's
+///   `ControlMetricTokens.button_group_gap`.
+pub const ButtonGroupKind = enum {
+    segmented,
+    detached,
+};
+
 pub const ControlVisualTokens = struct {
     background: ?Color = null,
     hover_background: ?Color = null,
@@ -912,6 +936,10 @@ pub const ControlVisualTokens = struct {
     disabled_background: ?Color = null,
     disabled_foreground: ?Color = null,
     foreground: ?Color = null,
+    /// The selected/pressed state's ink, for controls whose active fill
+    /// inverts against the rest ink (a detached button-group chip's
+    /// knockout label). Null keeps each consumer's existing ink ladder.
+    active_foreground: ?Color = null,
     border: ?Color = null,
     radius: ?f32 = null,
     stroke_width: ?f32 = null,
@@ -949,6 +977,17 @@ pub const ControlTokens = struct {
     /// A geometry switch shared by the TabsList chrome and the trigger
     /// emitter, so both halves of the control change shape together.
     tabs_indicator: TabsIndicatorKind = .pill,
+    /// The detached button-group chip treatment (read only when
+    /// `button_group_style` is `.detached`): `background` is the rest
+    /// wash every member wears, `active_background`/`active_foreground`
+    /// the selected chip's ink-inverted fill and knockout label,
+    /// `foreground` the rest ink. The house `.segmented` register never
+    /// reads this table — its segments keep their variant chrome.
+    button_group: ControlVisualTokens = .{},
+    /// The button-group register — attached segments (house) or
+    /// detached chips. A geometry-and-fill switch shared by the group
+    /// walks (segment stamping, gap) and the button emitters.
+    button_group_style: ButtonGroupKind = .segmented,
     checkbox: ControlVisualTokens = .{},
     radio: ControlVisualTokens = .{},
     switch_control: ControlVisualTokens = .{},
@@ -1140,6 +1179,7 @@ pub const ControlMetricTokenOverrides = struct {
     slider_thumb_width: ?f32 = null,
     slider_thumb_height: ?f32 = null,
     tabs_indicator_thickness: ?f32 = null,
+    button_group_gap: ?f32 = null,
     spinner_style: ?SpinnerStyleToken = null,
     spinner_segment_count: ?u32 = null,
     spinner_segment_length_ratio: ?f32 = null,
@@ -1266,6 +1306,7 @@ pub const ControlVisualTokenOverrides = struct {
     disabled_background: ?Color = null,
     disabled_foreground: ?Color = null,
     foreground: ?Color = null,
+    active_foreground: ?Color = null,
     border: ?Color = null,
     radius: ?f32 = null,
     stroke_width: ?f32 = null,
@@ -1302,6 +1343,8 @@ pub const ControlTokenOverrides = struct {
     tabs: ControlVisualTokenOverrides = .{},
     segmented_control: ControlVisualTokenOverrides = .{},
     tabs_indicator: ?TabsIndicatorKind = null,
+    button_group: ControlVisualTokenOverrides = .{},
+    button_group_style: ?ButtonGroupKind = null,
     checkbox: ControlVisualTokenOverrides = .{},
     radio: ControlVisualTokenOverrides = .{},
     switch_control: ControlVisualTokenOverrides = .{},
@@ -1348,6 +1391,8 @@ pub const ControlTokenOverrides = struct {
         next.tabs = self.tabs.apply(next.tabs);
         next.segmented_control = self.segmented_control.apply(next.segmented_control);
         if (self.tabs_indicator) |tabs_indicator| next.tabs_indicator = tabs_indicator;
+        next.button_group = self.button_group.apply(next.button_group);
+        if (self.button_group_style) |button_group_style| next.button_group_style = button_group_style;
         next.checkbox = self.checkbox.apply(next.checkbox);
         next.radio = self.radio.apply(next.radio);
         next.switch_control = self.switch_control.apply(next.switch_control);

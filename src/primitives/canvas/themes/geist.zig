@@ -88,6 +88,10 @@ pub fn designTokens(color_scheme: ColorScheme, contrast: ColorContrast) DesignTo
             // the primary ink under the active label (see the tabs
             // entries in `controlTokens` below).
             .tabs_indicator_thickness = 2,
+            // The detached button-group register's inter-chip gap (see
+            // the `button_group` entries in `controlTokens` below):
+            // measured at 8px between chips on the reference strip.
+            .button_group_gap = 8,
             // The pack's activity indicator is the segmented dial, not
             // the house arc: twelve radial pills (measured at the 20px
             // default — pill length a quarter of the box, thickness a
@@ -368,6 +372,48 @@ fn controlTokens(color_scheme: ColorScheme, contrast: ColorContrast) ControlToke
                 .dark => Color.rgb8(69, 69, 69),
             },
             .radius = 1,
+        },
+        // The pack's button group is the DETACHED chip register — the
+        // register has no attached segmented bar; its secondary tab
+        // strip is the same exclusive-choice affordance, so the group
+        // renders as that strip: fully-rounded chips on the control
+        // corner, 8px apart (the metric above), no container chrome at
+        // all. Every member rests on a translucent gray wash (light:
+        // black at 8%, the same strength as the hairline; dark: white
+        // at 9%) under the primary ink, and the SELECTED chip inverts —
+        // its fill is the primary ink itself (gray-1000: light #171717,
+        // dark #ededed) under page-color knockout text. Deliberately
+        // NOT the accent: in light the register's filled-control black
+        // is the scale's extreme #000000, while the selected chip stops
+        // one step short at gray-1000 — the measured treatment, and the
+        // reason this table states its own fills instead of falling
+        // through to the primary. Hover states the rest wash explicitly
+        // because the reference strip does not move on hover; selection
+        // is the one signal it speaks. Disabled is the pack's swap
+        // register one step darker than the button chip: gray-200 under
+        // gray-900 ink.
+        .button_group_style = .detached,
+        .button_group = .{
+            .background = switch (color_scheme) {
+                .light => Color.rgba8(0, 0, 0, 20),
+                .dark => Color.rgba8(255, 255, 255, 23),
+            },
+            .hover_background = switch (color_scheme) {
+                .light => Color.rgba8(0, 0, 0, 20),
+                .dark => Color.rgba8(255, 255, 255, 23),
+            },
+            .active_background = colors.text,
+            .foreground = colors.text,
+            .active_foreground = colors.background,
+            .disabled_background = switch (contrast) {
+                .standard => switch (color_scheme) {
+                    .light => Color.rgb8(235, 235, 235),
+                    .dark => Color.rgb8(31, 31, 31),
+                },
+                .high => colors.disabled,
+            },
+            .disabled_foreground = colors.text_muted,
+            .stroke_width = 0,
         },
         // The pack's tabs are the UNDERLINE register, a different shape
         // from the house pill-on-muted-track: bare 14px text triggers on

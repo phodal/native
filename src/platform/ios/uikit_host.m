@@ -81,11 +81,22 @@
 // audio) pause the player and report the paused state honestly through an
 // immediate position event. Background audio and now-playing-center
 // integration are out of scope for this host today.
+//
+// Images: the host registers the platform image decoder
+// (`native_sdk_app_set_image_service`) before start, mirroring the macOS
+// host's `native_sdk_appkit_decode_image` byte for byte: CGImageSource
+// (ImageIO) decodes PNG, JPEG, and every other codec the OS ships into
+// straight-alpha RGBA8, so `fx.registerImageBytes` registers real pixels
+// (album covers, fetched avatars) instead of declining. Decoding is
+// synchronous inside the registration call and the runtime copies the
+// pixels into its bounded image registry once — frames then reference the
+// registered pixels by id, never re-decoding.
 
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <AVFoundation/AVFoundation.h>
+#import <ImageIO/ImageIO.h>
 
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
@@ -848,6 +859,79 @@ static int NativeSdkAudioServiceSetVolume(void *context, double volume) {
     return [(__bridge NativeSdkAudioEngine *)context audioSetVolume:volume];
 }
 
+// ---------------------------------------------------------------- image decode
+//
+// The platform image decoder registered through
+// native_sdk_app_set_image_service: CGImageSource (ImageIO) handles PNG,
+// JPEG, and every other codec the OS ships — the toolkit bundles none.
+// This is the macOS host's native_sdk_appkit_decode_image ported into the
+// iOS host with the identical contract: the image draws into a
+// premultiplied RGBA8 bitmap context (the only RGBA layout
+// CGBitmapContext can render into) and is un-premultiplied in place,
+// because the canvas image pipeline expects straight alpha. Returns 1
+// decoded, -1 when the decoded pixels do not fit `pixels_len`, 0 for
+// undecodable bytes.
+static int NativeSdkImageServiceDecode(void *context, const uint8_t *bytes, uintptr_t bytes_len, uint8_t *pixels, uintptr_t pixels_len, uintptr_t *out_width, uintptr_t *out_height) {
+    (void)context;
+    if (out_width) *out_width = 0;
+    if (out_height) *out_height = 0;
+    if (!bytes || bytes_len == 0 || !pixels) return 0;
+    @autoreleasepool {
+        NSData *data = [NSData dataWithBytesNoCopy:(void *)bytes length:bytes_len freeWhenDone:NO];
+        CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+        if (!source) return 0;
+        CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+        CFRelease(source);
+        if (!image) return 0;
+
+        size_t width = CGImageGetWidth(image);
+        size_t height = CGImageGetHeight(image);
+        if (width == 0 || height == 0 || width > 8192 || height > 8192) {
+            CGImageRelease(image);
+            return 0;
+        }
+        if (out_width) *out_width = width;
+        if (out_height) *out_height = height;
+        size_t byte_len = width * height * 4;
+        if (byte_len / 4 / height != width || pixels_len < byte_len) {
+            CGImageRelease(image);
+            return -1;
+        }
+
+        CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+        if (!color_space) {
+            CGImageRelease(image);
+            return 0;
+        }
+        CGContextRef bitmap = CGBitmapContextCreate(pixels, width, height, 8, width * 4, color_space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(color_space);
+        if (!bitmap) {
+            CGImageRelease(image);
+            return 0;
+        }
+        memset(pixels, 0, byte_len);
+        CGContextSetBlendMode(bitmap, kCGBlendModeCopy);
+        CGContextDrawImage(bitmap, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height), image);
+        CGContextRelease(bitmap);
+        CGImageRelease(image);
+
+        // Un-premultiply: round to nearest so opaque pixels survive exactly.
+        for (size_t offset = 0; offset < byte_len; offset += 4) {
+            uint8_t alpha = pixels[offset + 3];
+            if (alpha == 0) {
+                pixels[offset + 0] = 0;
+                pixels[offset + 1] = 0;
+                pixels[offset + 2] = 0;
+            } else if (alpha != 255) {
+                pixels[offset + 0] = (uint8_t)MIN(255, ((size_t)pixels[offset + 0] * 255 + alpha / 2) / alpha);
+                pixels[offset + 1] = (uint8_t)MIN(255, ((size_t)pixels[offset + 1] * 255 + alpha / 2) / alpha);
+                pixels[offset + 2] = (uint8_t)MIN(255, ((size_t)pixels[offset + 2] * 255 + alpha / 2) / alpha);
+            }
+        }
+        return 1;
+    }
+}
+
 // ---------------------------------------------------------------- UITextInput
 // Index-based position/range objects over the local marked-text store (the
 // "document" the system IME edits is the composition only, matching the
@@ -1449,6 +1533,16 @@ static const CGFloat NativeSdkTouchSlop = 8.0;
     };
     native_sdk_app_set_audio_service(self.nativeApp, &audioService, (__bridge void *)self.audioEngine);
     [self logNativeErrorIfAny:@"audio_service"];
+
+    // The platform image decoder (registered before start, like the audio
+    // service, so a boot-effect fx.registerImageBytes already decodes):
+    // CGImageSource behind the embed image seam, the same ImageIO family
+    // the macOS host decodes through.
+    native_sdk_image_service_t imageService = {
+        .decode = NativeSdkImageServiceDecode,
+    };
+    native_sdk_app_set_image_service(self.nativeApp, &imageService, NULL);
+    [self logNativeErrorIfAny:@"image_service"];
 
     // Verification harness: with NATIVE_SDK_AUTOMATION set (simctl launch
     // exports SIMCTL_CHILD_* into the app) the embedded runtime publishes

@@ -68,6 +68,11 @@ static struct {
     jmethodID audio_stop_method;
     jmethodID audio_seek_method;
     jmethodID audio_set_volume_method;
+    // Image decode upcall target, registered by nativeSetImageService: the
+    // activity owns the platform codec (BitmapFactory on the Java side),
+    // and the embed image service callback below calls back into it.
+    jobject image_activity; // global ref while the image service is registered
+    jmethodID image_decode_method;
 } host_state = {0};
 
 static void host_log_error(void *app, const char *stage) {
@@ -110,6 +115,11 @@ JNIEXPORT void JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativeDestroy
         host_state.audio_stop_method = NULL;
         host_state.audio_seek_method = NULL;
         host_state.audio_set_volume_method = NULL;
+    }
+    if (host_state.image_activity) {
+        (*env)->DeleteGlobalRef(env, host_state.image_activity);
+        host_state.image_activity = NULL;
+        host_state.image_decode_method = NULL;
     }
 }
 
@@ -523,6 +533,81 @@ JNIEXPORT void JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativeSetAudi
     native_sdk_app_set_audio_service((void *)app, &service, NULL);
     host_log_error((void *)app, "audio_service");
     NATIVE_SDK_LOGI("audio service registered");
+}
+
+// ------------------------------------------------------------------ images
+//
+// The embed image-decode service, bridged to the activity's Java-side
+// codec (android.graphics.BitmapFactory — see the image section in
+// NativeSdkActivity.java). The decode callback runs INSIDE runtime
+// dispatch on the main thread (a synchronous fx.registerImageBytes call),
+// so the upcall resolves the JNIEnv through the stored JavaVM exactly
+// like the text-measure and audio upcalls. The runtime's decode scratch
+// buffer crosses as a direct ByteBuffer so the Java side writes pixels
+// straight into it — no second pixel copy on the JNI seam.
+
+// Decode `bytes` into straight-alpha RGBA8 written into `pixels`.
+// Returns 1 decoded (dimensions in out_width/out_height), -1 when the
+// decoded pixels do not fit pixels_len, 0 undecodable — the embed image
+// service contract (native_sdk_app.h).
+static int host_image_decode(void *context, const uint8_t *bytes, uintptr_t bytes_len, uint8_t *pixels, uintptr_t pixels_len, uintptr_t *out_width, uintptr_t *out_height) {
+    (void)context;
+    if (out_width) *out_width = 0;
+    if (out_height) *out_height = 0;
+    if (!bytes || bytes_len == 0 || !pixels) return 0;
+    if (!host_state.vm || !host_state.image_activity || !host_state.image_decode_method) return 0;
+    JNIEnv *env = NULL;
+    if ((*host_state.vm)->GetEnv(host_state.vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK || !env) return 0;
+    jbyteArray encoded = (*env)->NewByteArray(env, (jsize)bytes_len);
+    if (!encoded) return 0;
+    (*env)->SetByteArrayRegion(env, encoded, 0, (jsize)bytes_len, (const jbyte *)bytes);
+    jobject buffer = (*env)->NewDirectByteBuffer(env, pixels, (jlong)pixels_len);
+    if (!buffer) {
+        (*env)->DeleteLocalRef(env, encoded);
+        return 0;
+    }
+    jlongArray dims = (*env)->NewLongArray(env, 2);
+    if (!dims) {
+        (*env)->DeleteLocalRef(env, buffer);
+        (*env)->DeleteLocalRef(env, encoded);
+        return 0;
+    }
+    jint result = (*env)->CallIntMethod(env, host_state.image_activity, host_state.image_decode_method, encoded, buffer, dims);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        result = 0;
+    } else if (result == 1) {
+        jlong values[2] = {0, 0};
+        (*env)->GetLongArrayRegion(env, dims, 0, 2, values);
+        if (out_width) *out_width = (uintptr_t)values[0];
+        if (out_height) *out_height = (uintptr_t)values[1];
+    }
+    (*env)->DeleteLocalRef(env, dims);
+    (*env)->DeleteLocalRef(env, buffer);
+    (*env)->DeleteLocalRef(env, encoded);
+    return (int)result;
+}
+
+// Register the activity's codec as the embed platform image decoder.
+// Called before nativeStart, like the audio service, so a boot-effect
+// fx.registerImageBytes already decodes.
+JNIEXPORT void JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativeSetImageService(JNIEnv *env, jobject self, jlong app) {
+    if ((*env)->GetJavaVM(env, &host_state.vm) != JNI_OK) return;
+    if (host_state.image_activity) (*env)->DeleteGlobalRef(env, host_state.image_activity);
+    host_state.image_activity = (*env)->NewGlobalRef(env, self);
+    jclass cls = (*env)->GetObjectClass(env, self);
+    host_state.image_decode_method = (*env)->GetMethodID(env, cls, "imageDecode", "([BLjava/nio/ByteBuffer;[J)I");
+    (*env)->DeleteLocalRef(env, cls);
+    if (!host_state.image_activity || !host_state.image_decode_method) {
+        NATIVE_SDK_LOGE("image_service registration failed");
+        return;
+    }
+    static const native_sdk_image_service_t service = {
+        .decode = host_image_decode,
+    };
+    native_sdk_app_set_image_service((void *)app, &service, NULL);
+    host_log_error((void *)app, "image_service");
+    NATIVE_SDK_LOGI("image decode service registered");
 }
 
 // One player report from the Java side (kind ordinals in

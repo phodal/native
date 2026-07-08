@@ -183,6 +183,20 @@ int native_sdk_app_set_audio_service(void *app, const native_sdk_audio_service_t
 // Call between runtime entry points on the loop thread, never from inside
 // an audio service callback.
 void native_sdk_app_audio_event(void *app, int kind, uint64_t position_ms, uint64_t duration_ms, int playing, int buffering);
+// Platform image-decode service: the host registers the platform codec
+// behind this callback (layout mirrors src/embed/types.zig
+// MobileImageService) and the runtime's fx.registerImageBytes decodes
+// through it synchronously. The decode contract matches the macOS host's
+// native_sdk_appkit_decode_image exactly: write tightly packed, row-major,
+// straight-alpha RGBA8 into `pixels`, report the dimensions, and return 1
+// decoded / -1 pixels buffer too small / anything else undecodable.
+// Register before native_sdk_app_start; without a registration the runtime
+// declines image decoding honestly and image/avatar widgets keep their
+// fallback.
+typedef struct native_sdk_image_service {
+  int (*decode)(void *context, const uint8_t *bytes, uintptr_t bytes_len, uint8_t *pixels, uintptr_t pixels_len, uintptr_t *out_width, uintptr_t *out_height);
+} native_sdk_image_service_t;
+int native_sdk_app_set_image_service(void *app, const native_sdk_image_service_t *service, void *context);
 int native_sdk_app_set_automation_dir(void *app, const char *path, uintptr_t len);
 void native_sdk_app_set_asset_root(void *app, const char *path, uintptr_t len);
 uintptr_t native_sdk_app_widget_semantics_count(void *app);

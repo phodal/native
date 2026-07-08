@@ -311,7 +311,8 @@ pub fn runDev(allocator: std.mem.Allocator, io: std.Io, options: DevOptions) !vo
         "-framework",    "Metal",        "-framework",
         "QuartzCore",    "-framework",   "Foundation",
         "-framework",    "CoreGraphics", "-framework",
-        "AVFoundation",  "-o",           executable_path,
+        "AVFoundation",  "-framework",   "ImageIO",
+        "-o",            executable_path,
     }, error.HostCompileFailed);
     try runInherit(io, &.{ "codesign", "--force", "--sign", "-", bundle_path }, error.HostCompileFailed);
 

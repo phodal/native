@@ -164,6 +164,70 @@ pub fn setAudioService(self: anytype, service: types.MobileAudioService, context
     self.null_platform.audio_streaming = streaming;
 }
 
+/// Host-owned storage for the shim's registered image-decode service
+/// (callback table + shim context). Lives on the (heap-allocated) host
+/// beside the audio store so the platform-services bridge can reach it
+/// for the runtime's lifetime.
+pub const MobileImage = struct {
+    service: types.MobileImageService = .{},
+    context: ?*anyopaque = null,
+};
+
+/// Platform-services bridge from the runtime's image-decode seam
+/// (`PlatformServices.decode_image_fn`, the `fx.registerImageBytes` path)
+/// to the shim's registered C callback. Context recovery mirrors the
+/// audio bridge: the services table carries the host's embedded
+/// `NullPlatform`, and the host is recovered from that field. Result
+/// codes map exactly like the macOS host's `decodeImage`
+/// (`src/platform/macos/root.zig`): 1 decoded, -1 too large for the
+/// buffer, anything else undecodable — with the shim-reported dimensions
+/// re-validated against the buffer before any slice is formed, so a
+/// buggy shim answer surfaces as `error.ImageDecodeFailed`, never as an
+/// out-of-bounds pixel slice.
+fn MobileImageBridge(comptime Host: type) type {
+    return struct {
+        fn hostFromContext(context: ?*anyopaque) *Host {
+            const null_platform: *platform.NullPlatform = @ptrCast(@alignCast(context.?));
+            return @alignCast(@fieldParentPtr("null_platform", null_platform));
+        }
+
+        fn decodeImage(context: ?*anyopaque, bytes: []const u8, buffer: []u8) anyerror!platform.DecodedImage {
+            const image = &hostFromContext(context).image;
+            const decode_fn = image.service.decode orelse return error.UnsupportedService;
+            var width: usize = 0;
+            var height: usize = 0;
+            return switch (decode_fn(image.context, bytes.ptr, bytes.len, buffer.ptr, buffer.len, &width, &height)) {
+                1 => {
+                    if (width == 0 or height == 0) return error.ImageDecodeFailed;
+                    const row_len = std.math.mul(usize, width, 4) catch return error.ImageDecodeFailed;
+                    const byte_len = std.math.mul(usize, row_len, height) catch return error.ImageDecodeFailed;
+                    if (byte_len > buffer.len) return error.ImageDecodeFailed;
+                    return .{ .width = width, .height = height, .rgba8 = buffer[0..byte_len] };
+                },
+                -1 => error.ImageTooLarge,
+                else => error.ImageDecodeFailed,
+            };
+        }
+    };
+}
+
+/// Install (or clear, with an all-null table) the shim's platform image
+/// decoder on the embedded runtime — the mobile counterpart of the
+/// desktop hosts' `decode_image_fn` platform service. Registration flips
+/// the runtime's service entry so `fx.registerImageBytes` decodes for
+/// real; clearing (and never registering) keeps the honest decline:
+/// `error.UnsupportedService`, image/avatar widgets on their fallback.
+/// Register before `native_sdk_app_start` (like the audio service) so a
+/// boot-effect registration already sees the codec.
+pub fn setImageService(self: anytype, service: types.MobileImageService, context: ?*anyopaque) void {
+    const Host = std.meta.Child(@TypeOf(self));
+    const Bridge = MobileImageBridge(Host);
+    const complete = service.complete();
+    self.image = .{ .service = service, .context = if (complete) context else null };
+    const services = &self.embedded.runtime.options.platform.services;
+    services.decode_image_fn = if (complete) Bridge.decodeImage else null;
+}
+
 pub const EmbeddedApp = struct {
     app: runtime.App,
     runtime: runtime.Runtime,
@@ -380,6 +444,12 @@ pub const MobileHostApp = struct {
     automation_io: ?*std.Io.Threaded = null,
     text_measure: MobileTextMeasure = .{},
     audio: MobileAudio = .{},
+    // Image decode stays declined until the shim registers a real codec
+    // (`native_sdk_app_set_image_service`): the null platform's strict
+    // test decoder is opt-in (`image_decode`, default off), so with no
+    // registration `fx.registerImageBytes` reports UnsupportedService and
+    // image/avatar widgets keep their fallback — never a bundled codec.
+    image: MobileImage = .{},
     last_command_name: [max_mobile_command_name_bytes + 1]u8 = [_]u8{0} ** (max_mobile_command_name_bytes + 1),
 
     pub fn create() !*MobileHostApp {
@@ -430,6 +500,7 @@ pub const MobileHostApp = struct {
         self.automation_io = null;
         self.text_measure = .{};
         self.audio = .{};
+        self.image = .{};
         self.last_command_name = [_]u8{0} ** (max_mobile_command_name_bytes + 1);
         self.embedded.initInPlace(.{
             .context = self,

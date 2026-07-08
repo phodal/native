@@ -1738,3 +1738,251 @@ test "mobile audio service registration is all-or-nothing per tier" {
     try std.testing.expect(!self.embedded.runtime.options.platform.supports(.audio_playback));
     try std.testing.expect(self.embedded.runtime.options.platform.services.audio_load_fn == null);
 }
+
+// ------------------------------------------------------------ image service
+//
+// The embed image-decode seam end to end: hosts decline
+// `fx.registerImageBytes` until the shim registers a codec
+// (`native_sdk_app_set_image_service`) — the pinned degrade behind the
+// avatar-initials fallback on phones — and a registered callback receives
+// the encoded bytes through the same `decode_image_fn` seam the desktop
+// platform codecs serve, with the shim-reported result codes mapping
+// exactly like the macOS host's (1 decoded / -1 too large / else failed)
+// and the reported dimensions re-validated before any pixels are trusted.
+
+const MobileImageDef = struct {
+    pub const Model = struct {
+        cover: u64 = 0,
+        width: usize = 0,
+        height: usize = 0,
+        register_error: ?anyerror = null,
+    };
+
+    pub const Msg = union(enum) {
+        register,
+    };
+
+    const App = runtime.UiApp(Model, Msg);
+
+    pub fn initModel() Model {
+        return .{};
+    }
+
+    pub fn mobileOptions() App.Options {
+        return .{
+            .name = "mobile-image",
+            .scene = ui_host.mobile_shell_scene,
+            .canvas_label = mobile_gpu_surface_label,
+            .update_fx = update,
+            .view = view,
+        };
+    }
+
+    // The soundboard boot shape: decode-and-register committed encoded
+    // bytes synchronously, store the id in the model only on success so a
+    // failed decode leaves the avatar on its initials fallback.
+    fn update(model: *Model, msg: Msg, fx: *App.Effects) void {
+        switch (msg) {
+            .register => {
+                model.register_error = null;
+                const registered = fx.registerImageBytes(7, "encoded-cover-bytes") catch |err| {
+                    model.register_error = err;
+                    return;
+                };
+                model.cover = 7;
+                model.width = registered.width;
+                model.height = registered.height;
+            },
+        }
+    }
+
+    fn view(ui: *App.Ui, model: *const Model) App.Ui.Node {
+        return ui.column(.{ .gap = 8, .padding = 12 }, .{
+            ui.text(.{}, ui.fmt("cover {d}", .{model.cover})),
+            ui.button(.{ .on_press = .register }, "Register"),
+        });
+    }
+};
+
+const MobileImageHost = ui_host.UiAppHost(MobileImageDef);
+const MobileImageApi = c_api.MobileCApi(MobileImageHost);
+
+/// What the fake shim codec records — the mobile mirror of the null
+/// platform's decode counter, held by the test and reached through the
+/// registered context pointer. `result`/`width`/`height` script the next
+/// answer so every shim result code is exercised.
+const MobileImageRecorder = struct {
+    decode_count: usize = 0,
+    last_bytes: [64]u8 = undefined,
+    last_bytes_len: usize = 0,
+    last_pixels_len: usize = 0,
+    result: c_int = 1,
+    width: usize = 2,
+    height: usize = 2,
+    fill: u8 = 0xAB,
+
+    fn from(context: ?*anyopaque) *MobileImageRecorder {
+        return @ptrCast(@alignCast(context.?));
+    }
+};
+
+fn recorderImageDecode(
+    context: ?*anyopaque,
+    bytes: ?[*]const u8,
+    bytes_len: usize,
+    pixels: ?[*]u8,
+    pixels_len: usize,
+    out_width: ?*usize,
+    out_height: ?*usize,
+) callconv(.c) c_int {
+    const recorder = MobileImageRecorder.from(context);
+    recorder.decode_count += 1;
+    recorder.last_bytes_len = conversions.copyInputText(&recorder.last_bytes, if (bytes) |value| value[0..bytes_len] else "");
+    recorder.last_pixels_len = pixels_len;
+    if (recorder.result != 1) return recorder.result;
+    out_width.?.* = recorder.width;
+    out_height.?.* = recorder.height;
+    const byte_len = recorder.width *% recorder.height *% 4;
+    if (pixels != null and byte_len <= pixels_len) {
+        @memset(pixels.?[0..byte_len], recorder.fill);
+    }
+    return 1;
+}
+
+fn startImageHost(app: ?*anyopaque) !void {
+    MobileImageApi.native_sdk_app_start(app);
+    var surface_token: u8 = 0;
+    MobileImageApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileImageApi.native_sdk_app_frame(app);
+    try std.testing.expectEqualStrings("", std.mem.span(MobileImageApi.native_sdk_app_last_error_name(app)));
+}
+
+fn pressRegisterButton(app: ?*anyopaque) !void {
+    const count = MobileImageApi.native_sdk_app_widget_semantics_count(app);
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        var node: MobileWidgetSemantics = .{};
+        try std.testing.expectEqual(@as(c_int, 1), MobileImageApi.native_sdk_app_widget_semantics_at(app, index, &node));
+        if (node.role != @intFromEnum(MobileWidgetRole.button)) continue;
+        const node_label = if (node.label) |ptr| ptr[0..node.label_len] else "";
+        if (!std.mem.eql(u8, node_label, "Register")) continue;
+        const x = node.x + node.width / 2;
+        const y = node.y + node.height / 2;
+        MobileImageApi.native_sdk_app_touch(app, 1, 0, x, y, 1);
+        MobileImageApi.native_sdk_app_touch(app, 1, 1, x, y, 0);
+        try std.testing.expectEqualStrings("", std.mem.span(MobileImageApi.native_sdk_app_last_error_name(app)));
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "mobile hosts decline image decode until the shim registers a codec" {
+    const app = MobileImageApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileImageApi.native_sdk_app_destroy(app);
+    const self: *MobileImageHost = @ptrCast(@alignCast(app));
+
+    try startImageHost(app);
+
+    // No registered service: registerImageBytes reports the honest
+    // decline synchronously, the id never reaches the model, and the
+    // registry stays empty — the initials-fallback shape the soundboard
+    // suite pins on the null platform, unchanged by the new seam.
+    try pressRegisterButton(app);
+    try std.testing.expectEqual(error.UnsupportedService, self.ui.model.register_error.?);
+    try std.testing.expectEqual(@as(u64, 0), self.ui.model.cover);
+    try std.testing.expectEqual(@as(usize, 0), self.embedded.runtime.registeredCanvasImageCount());
+}
+
+test "mobile image service decodes registerImageBytes through the shim codec" {
+    const app = MobileImageApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileImageApi.native_sdk_app_destroy(app);
+    const self: *MobileImageHost = @ptrCast(@alignCast(app));
+
+    var recorder = MobileImageRecorder{};
+    const service = types.MobileImageService{ .decode = recorderImageDecode };
+    try std.testing.expectEqual(@as(c_int, 1), MobileImageApi.native_sdk_app_set_image_service(app, &service, &recorder));
+
+    try startImageHost(app);
+
+    // The encoded bytes reach the shim callback verbatim and the decoded
+    // pixels land in the runtime's image registry with the shim-reported
+    // dimensions; the model stores the id only after that success.
+    try pressRegisterButton(app);
+    try std.testing.expectEqual(@as(usize, 1), recorder.decode_count);
+    try std.testing.expectEqualStrings("encoded-cover-bytes", recorder.last_bytes[0..recorder.last_bytes_len]);
+    try std.testing.expect(self.ui.model.register_error == null);
+    try std.testing.expectEqual(@as(u64, 7), self.ui.model.cover);
+    try std.testing.expectEqual(@as(usize, 2), self.ui.model.width);
+    try std.testing.expectEqual(@as(usize, 2), self.ui.model.height);
+    const registered = self.embedded.runtime.registeredCanvasImage(7) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), registered.width);
+    try std.testing.expectEqual(@as(usize, 2), registered.height);
+    const resources = self.embedded.runtime.registeredCanvasImages();
+    try std.testing.expectEqual(@as(usize, 1), resources.len);
+    try std.testing.expectEqual(@as(u8, 0xAB), resources[0].pixels[0]);
+
+    // The decode happens once per registration: nothing about presenting
+    // frames re-decodes (the registry holds the pixels).
+    MobileImageApi.native_sdk_app_frame(app);
+    MobileImageApi.native_sdk_app_frame(app);
+    try std.testing.expectEqual(@as(usize, 1), recorder.decode_count);
+}
+
+test "mobile image decode failures map to the macOS host's result codes" {
+    const app = MobileImageApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileImageApi.native_sdk_app_destroy(app);
+    const self: *MobileImageHost = @ptrCast(@alignCast(app));
+
+    var recorder = MobileImageRecorder{};
+    const service = types.MobileImageService{ .decode = recorderImageDecode };
+    try std.testing.expectEqual(@as(c_int, 1), MobileImageApi.native_sdk_app_set_image_service(app, &service, &recorder));
+    try startImageHost(app);
+
+    // 0 (undecodable bytes) → ImageDecodeFailed, nothing registered.
+    recorder.result = 0;
+    try pressRegisterButton(app);
+    try std.testing.expectEqual(error.ImageDecodeFailed, self.ui.model.register_error.?);
+    try std.testing.expectEqual(@as(u64, 0), self.ui.model.cover);
+
+    // -1 (decoded pixels over the buffer) → ImageTooLarge.
+    recorder.result = -1;
+    try pressRegisterButton(app);
+    try std.testing.expectEqual(error.ImageTooLarge, self.ui.model.register_error.?);
+
+    // A shim that answers success with dimensions the buffer cannot hold
+    // is refused before any pixel slice is formed: decode failed, never
+    // an out-of-bounds read.
+    recorder.result = 1;
+    recorder.width = 100_000;
+    recorder.height = 100_000;
+    try pressRegisterButton(app);
+    try std.testing.expectEqual(error.ImageDecodeFailed, self.ui.model.register_error.?);
+
+    // Zero dimensions on a success answer are refused the same way.
+    recorder.width = 0;
+    recorder.height = 0;
+    try pressRegisterButton(app);
+    try std.testing.expectEqual(error.ImageDecodeFailed, self.ui.model.register_error.?);
+    try std.testing.expectEqual(@as(usize, 0), self.embedded.runtime.registeredCanvasImageCount());
+}
+
+test "clearing the mobile image service returns to the honest decline" {
+    const app = MobileImageApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileImageApi.native_sdk_app_destroy(app);
+    const self: *MobileImageHost = @ptrCast(@alignCast(app));
+
+    var recorder = MobileImageRecorder{};
+    const service = types.MobileImageService{ .decode = recorderImageDecode };
+    try std.testing.expectEqual(@as(c_int, 1), MobileImageApi.native_sdk_app_set_image_service(app, &service, &recorder));
+    try std.testing.expect(self.embedded.runtime.options.platform.services.decode_image_fn != null);
+
+    // A null (or all-null) table clears the registration: the service
+    // entry empties and registerImageBytes declines again.
+    try std.testing.expectEqual(@as(c_int, 1), MobileImageApi.native_sdk_app_set_image_service(app, null, null));
+    try std.testing.expect(self.embedded.runtime.options.platform.services.decode_image_fn == null);
+
+    try startImageHost(app);
+    try pressRegisterButton(app);
+    try std.testing.expectEqual(error.UnsupportedService, self.ui.model.register_error.?);
+    try std.testing.expectEqual(@as(usize, 0), recorder.decode_count);
+}

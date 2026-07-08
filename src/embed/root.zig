@@ -16,6 +16,7 @@ pub const MobileViewportState = types.MobileViewportState;
 pub const MobileGpuFrameState = types.MobileGpuFrameState;
 pub const MobileCanvasPixels = types.MobileCanvasPixels;
 pub const MobileAudioService = types.MobileAudioService;
+pub const MobileImageService = types.MobileImageService;
 pub const mobile_gpu_surface_label = types.mobile_gpu_surface_label;
 
 pub const EmbeddedApp = host.EmbeddedApp;
@@ -38,6 +39,7 @@ pub const native_sdk_app_gpu_frame_state = c_api.native_sdk_app_gpu_frame_state;
 pub const native_sdk_app_text_input_state = c_api.native_sdk_app_text_input_state;
 pub const native_sdk_app_set_audio_service = c_api.native_sdk_app_set_audio_service;
 pub const native_sdk_app_audio_event = c_api.native_sdk_app_audio_event;
+pub const native_sdk_app_set_image_service = c_api.native_sdk_app_set_image_service;
 pub const native_sdk_app_set_automation_dir = c_api.native_sdk_app_set_automation_dir;
 pub const native_sdk_app_touch = c_api.native_sdk_app_touch;
 pub const native_sdk_app_scroll = c_api.native_sdk_app_scroll;

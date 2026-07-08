@@ -209,6 +209,24 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
         }
 
+        /// Register (or clear, with a null/empty table) the shim's
+        /// platform image decoder — the mobile counterpart of the desktop
+        /// hosts' `decode_image_fn` platform service (CGImageSource on
+        /// macOS/iOS, BitmapFactory on Android). While registered,
+        /// `fx.registerImageBytes` decodes encoded bytes through the shim
+        /// callback synchronously; without a registration the host
+        /// declines with `error.UnsupportedService` and image/avatar
+        /// widgets keep their fallback. Register before
+        /// `native_sdk_app_start` so a boot-effect registration already
+        /// sees the codec.
+        pub fn native_sdk_app_set_image_service(app: ?*anyopaque, service: ?*const types.MobileImageService, context: ?*anyopaque) callconv(.c) c_int {
+            const self = hostApp(Host, app) orelse return 0;
+            const table: types.MobileImageService = if (service) |value| value.* else .{};
+            host.setImageService(self, table, context);
+            self.last_error = null;
+            return 1;
+        }
+
         pub fn native_sdk_app_set_automation_dir(app: ?*anyopaque, path: ?[*]const u8, len: usize) callconv(.c) c_int {
             const self = hostApp(Host, app) orelse return 0;
             const dir = inputSlice(path, len) catch |err| {
@@ -530,6 +548,7 @@ pub const native_sdk_app_text_input_state = FixedShellApi.native_sdk_app_text_in
 pub const native_sdk_app_set_text_measure = FixedShellApi.native_sdk_app_set_text_measure;
 pub const native_sdk_app_set_audio_service = FixedShellApi.native_sdk_app_set_audio_service;
 pub const native_sdk_app_audio_event = FixedShellApi.native_sdk_app_audio_event;
+pub const native_sdk_app_set_image_service = FixedShellApi.native_sdk_app_set_image_service;
 pub const native_sdk_app_set_automation_dir = FixedShellApi.native_sdk_app_set_automation_dir;
 pub const native_sdk_app_touch = FixedShellApi.native_sdk_app_touch;
 pub const native_sdk_app_scroll = FixedShellApi.native_sdk_app_scroll;

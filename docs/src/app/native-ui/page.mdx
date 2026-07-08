@@ -409,7 +409,7 @@ macOS-first, like `resizable = false`: GTK and Win32 hosts keep standard chrome 
 
 ## Images
 
-Image pixels are runtime-registered resources: the app registers decoded straight-alpha RGBA8 under a caller-chosen `ImageId` (a `u64` kept in the model, effect-key style; 0 is the "no image" sentinel), and `image`, `icon_button`, and `avatar` widgets reference the id. Native SDK bundles no image codecs — encoded bytes (PNG, JPEG, whatever the OS decodes) go through the platform decoder: CGImageSource on macOS, gdk-pixbuf on GTK, WIC on Windows.
+Image pixels are runtime-registered resources: the app registers decoded straight-alpha RGBA8 under a caller-chosen `ImageId` (a `u64` kept in the model, effect-key style; 0 is the "no image" sentinel), and `image`, `icon_button`, and `avatar` widgets reference the id. Native SDK bundles no image codecs — encoded bytes (PNG, JPEG, whatever the OS decodes) go through the platform decoder: CGImageSource on macOS and the iOS toolkit host, gdk-pixbuf on GTK, WIC on Windows, BitmapFactory on the Android toolkit host (both mobile hosts register the codec over the embed image service; an embed host without one reports `error.UnsupportedService`).
 
 The fetch-avatar path is one update arm: fetch bytes, decode + register in one call, and write the id into the model only on success — so the avatar renders its initials while the image is loading and keeps them when the fetch or decode failed:
 

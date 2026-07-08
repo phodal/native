@@ -55,11 +55,22 @@
 // play, and a focus loss pauses the player and reports the paused state
 // honestly through an immediate position event. See the audio section
 // below for the backend rationale and its constraints.
+//
+// Images: the host registers the platform image decoder (through the
+// native bridge's nativeSetImageService) before start, mirroring the iOS
+// host's CGImageSource callback: BitmapFactory decodes encoded bytes
+// (PNG, JPEG, ...) into straight-alpha RGBA8 written directly into the
+// runtime's decode buffer, so `fx.registerImageBytes` registers real
+// pixels (album covers, fetched avatars) instead of declining. Decoding
+// runs once per registration; frames reference the runtime's registered
+// copy afterwards.
 
 package dev.native_sdk.host;
 
 import android.app.Activity;
 import android.content.res.AssetManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.media.AudioAttributes;
@@ -219,6 +230,12 @@ public final class NativeSdkActivity extends Activity implements SurfaceHolder.C
         // one real player behind the embed audio seam — see the audio
         // section below.
         nativeSetAudioService(nativeApp);
+
+        // The platform image decoder (registered before start, so a
+        // boot-effect fx.registerImageBytes already decodes): the
+        // BitmapFactory codec behind the embed image seam — see the image
+        // section below.
+        nativeSetImageService(nativeApp);
 
         // Verification harness: `am start --ez native-sdk-automation true`
         // publishes snapshot.txt into the app's files dir, same protocol
@@ -409,6 +426,65 @@ public final class NativeSdkActivity extends Activity implements SurfaceHolder.C
         if (fontId == 5) return Typeface.create(Typeface.DEFAULT, Typeface.ITALIC);
         if (fontId == 6) return Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC);
         return Typeface.DEFAULT;
+    }
+
+    // -------------------------------------------------------------- images
+    //
+    // The platform image decoder behind the embed image service — the
+    // Android mirror of the iOS host's CGImageSource callback. Backend:
+    // android.graphics.BitmapFactory, the platform's in-box codec stack
+    // (PNG, JPEG, WebP, ...), decoding to a non-premultiplied ARGB_8888
+    // bitmap whose copyPixelsToBuffer byte order is exactly the tightly
+    // packed straight-alpha RGBA8 the canvas image pipeline expects. The
+    // upcall writes into the runtime's decode scratch through a direct
+    // ByteBuffer, so the decoded pixels cross the JNI seam without a
+    // second copy; the bitmap is recycled before returning — decode is
+    // one-shot per registration, and frames reference the runtime's
+    // registered copy afterwards.
+
+    // Decode upcall from android_host.c. Returns 1 decoded (dimensions in
+    // size[0]/size[1]), -1 when the decoded pixels do not fit the buffer,
+    // 0 undecodable — the embed image service contract.
+    @SuppressWarnings("unused") // called from android_host.c
+    int imageDecode(byte[] encoded, ByteBuffer pixels, long[] size) {
+        if (encoded == null || encoded.length == 0 || pixels == null || size == null || size.length < 2) return 0;
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        // Straight alpha, matching the desktop decoders: the canvas
+        // pipeline un-premultiplies nothing downstream.
+        options.inPremultiplied = false;
+        Bitmap bitmap;
+        try {
+            bitmap = BitmapFactory.decodeByteArray(encoded, 0, encoded.length, options);
+        } catch (Exception e) {
+            return 0;
+        }
+        if (bitmap == null) return 0;
+        try {
+            if (bitmap.getConfig() != Bitmap.Config.ARGB_8888) {
+                // A codec that ignored the preferred config (rare): one
+                // conversion pass; copy(...) preserves isPremultiplied.
+                Bitmap converted = bitmap.copy(Bitmap.Config.ARGB_8888, false);
+                bitmap.recycle();
+                if (converted == null) return 0;
+                bitmap = converted;
+            }
+            long width = bitmap.getWidth();
+            long height = bitmap.getHeight();
+            // The dimension ceiling mirrors the iOS/macOS decode callback.
+            if (width <= 0 || height <= 0 || width > 8192 || height > 8192) return 0;
+            size[0] = width;
+            size[1] = height;
+            long byteLen = width * height * 4;
+            if (byteLen > pixels.capacity()) return -1;
+            pixels.position(0);
+            bitmap.copyPixelsToBuffer(pixels);
+            return 1;
+        } catch (Exception e) {
+            return 0;
+        } finally {
+            if (!bitmap.isRecycled()) bitmap.recycle();
+        }
     }
 
     // -------------------------------------------------------------- audio
@@ -1285,6 +1361,7 @@ public final class NativeSdkActivity extends Activity implements SurfaceHolder.C
     private native void nativeSetAutomationDir(long app, String path);
     private native void nativeSetTextMeasure(long app);
     private native void nativeSetAudioService(long app);
+    private native void nativeSetImageService(long app);
     private native void nativeAudioEvent(long app, int kind, long positionMs, long durationMs, int playing, int buffering);
     private native String nativeLastError(long app);
 }

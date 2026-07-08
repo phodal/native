@@ -82,6 +82,12 @@ pub fn UiAppHost(comptime AppDef: type) type {
         automation_io: ?*std.Io.Threaded = null,
         text_measure: host.MobileTextMeasure = .{},
         audio: host.MobileAudio = .{},
+        // Image decode stays declined until the shim registers a real
+        // codec (`native_sdk_app_set_image_service`): the null platform's
+        // strict test decoder is opt-in (`image_decode`, default off), so
+        // with no registration `fx.registerImageBytes` reports
+        // UnsupportedService and image/avatar widgets keep their fallback.
+        image: host.MobileImage = .{},
 
         pub fn create() !*Self {
             const allocator = std.heap.page_allocator;
@@ -118,6 +124,7 @@ pub fn UiAppHost(comptime AppDef: type) type {
             self.automation_io = null;
             self.text_measure = .{};
             self.audio = .{};
+            self.image = .{};
             // In-place init + pointer-targeted model assignment:
             // `initModel()`'s result writes straight into the heap
             // struct via result-location semantics, so a multi-MB Model

@@ -267,6 +267,52 @@ pub const MobileAudioService = extern struct {
     }
 };
 
+// ------------------------------------------------------------ image decode
+//
+// The platform image-decode service over the embed C ABI. A mobile shim
+// that owns a real image codec (the iOS toolkit host: CGImageSource, the
+// same ImageIO family the macOS host decodes through; the Android toolkit
+// host: BitmapFactory over JNI) registers this callback table through
+// `native_sdk_app_set_image_service`, and the runtime's
+// `fx.registerImageBytes` decodes encoded bytes (PNG, JPEG, ...) through
+// it — the same `PlatformServices.decode_image_fn` seam the desktop
+// platform codecs serve. Hosts without a registered service decline
+// honestly: `registerImageBytes` reports `error.UnsupportedService` and
+// image/avatar widgets keep their fallback (initials) — never a bundled
+// codec pretending to be the platform's.
+
+/// Synchronous decode of encoded image bytes into tightly packed,
+/// row-major, straight-alpha (non-premultiplied) RGBA8 written into
+/// `pixels`, reporting the dimensions through the out parameters. Returns
+/// 1 when the image decoded (`*out_width * *out_height * 4` bytes fill a
+/// prefix of `pixels`), -1 when the decoded pixels do not fit
+/// `pixels_len`, anything else for undecodable bytes — the exact contract
+/// of the macOS host's `native_sdk_appkit_decode_image`.
+pub const MobileImageDecodeFn = *const fn (
+    context: ?*anyopaque,
+    bytes: ?[*]const u8,
+    bytes_len: usize,
+    pixels: ?[*]u8,
+    pixels_len: usize,
+    out_width: ?*usize,
+    out_height: ?*usize,
+) callconv(.c) c_int;
+
+/// The image service callback table (`native_sdk_image_service_t` in the
+/// shim headers). One tier today: a table with `decode` registers the
+/// platform codec, an empty table clears it back to the honest decline.
+pub const MobileImageService = extern struct {
+    decode: ?MobileImageDecodeFn = null,
+
+    pub fn complete(self: MobileImageService) bool {
+        return self.decode != null;
+    }
+
+    pub fn empty(self: MobileImageService) bool {
+        return self.decode == null;
+    }
+};
+
 /// Dimensions of a canvas render produced by
 /// `native_sdk_app_render_pixels` (tightly packed RGBA8).
 pub const MobileCanvasPixels = extern struct {

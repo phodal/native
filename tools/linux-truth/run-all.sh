@@ -42,6 +42,26 @@ up() {
 }
 
 sync_sources() {
+  # A verdict from this loop is only as honest as the tree it ran on.
+  # The long-lived container binds /src at CREATE time, so a container
+  # started from one checkout (say, an agent worktree) keeps testing
+  # THAT tree forever — a later invocation from a different checkout
+  # would sync and pass against the wrong sources while looking green.
+  # Refuse loudly instead of reporting another tree's truth.
+  local mounted
+  mounted="$(docker inspect "$container" --format '{{range .Mounts}}{{if eq .Destination "/src"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+  if [ -z "$mounted" ]; then
+    echo "linux-truth: container '$container' is not running; start it with '$0 up'" >&2
+    exit 1
+  fi
+  if [ "$mounted" != "$repo_root" ]; then
+    echo "linux-truth: container '$container' mounts /src from" >&2
+    echo "  $mounted" >&2
+    echo "but this invocation is from" >&2
+    echo "  $repo_root" >&2
+    echo "so its results would describe a different tree. Recreate it with '$0 up'." >&2
+    exit 1
+  fi
   docker exec "$container" bash /src/tools/linux-truth/sync.sh
 }
 

@@ -382,6 +382,10 @@ fn planDockIcon(path: []const u8) DockIconPlan {
 /// event-loop `std.Io` instance is not; the host re-reads the file
 /// asynchronously anyway, so a race here only re-selects the fallback.
 fn iconFileExists(path: []const u8) bool {
+    // Hermetic guard: this file compiles into every desktop target's
+    // test build, and non-macOS builds must never reference the libc
+    // symbol below, so the probe answers false at comptime there.
+    if (comptime builtin.os.tag != .macos) return false;
     var buffer: [1024:0]u8 = undefined;
     if (path.len == 0 or path.len >= buffer.len) return false;
     @memcpy(buffer[0..path.len], path);
@@ -393,6 +397,10 @@ fn iconFileExists(path: []const u8) bool {
 /// executable lives under Contents/MacOS). Unbundled processes get the
 /// dev-run icon fallbacks; bundled ones keep their Info.plist identity.
 fn processIsBundled() bool {
+    // Same hermetic guard as `iconFileExists`: the executable-path
+    // lookup below exists only on macOS, and non-macOS test builds of
+    // this file must never reference it.
+    if (comptime builtin.os.tag != .macos) return false;
     var buffer: [4096]u8 = undefined;
     var size: u32 = buffer.len;
     if (std.c._NSGetExecutablePath(&buffer, &size) != 0) return false;
@@ -2053,6 +2061,10 @@ test "mac dock icon fallback renders the embedded toolkit default" {
 }
 
 test "mac dock icon plan uses the embedded default only without a file" {
+    // The file-existence and bundle probes are comptime-stubbed to
+    // false off macOS, where this plan never runs — only the macOS test
+    // build exercises the real probes.
+    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     // Missing file, unbundled test binary: the embedded default.
     try std.testing.expectEqual(DockIconPlan.embedded_default, planDockIcon("assets/does-not-exist.icns"));
     try std.testing.expectEqual(DockIconPlan.embedded_default, planDockIcon(""));

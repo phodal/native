@@ -286,7 +286,12 @@ fn rebuildScene(self: *Preview) !void {
     ui.virtual_window_source = previewVirtualWindowState;
     const tree = try ui.finalizeWithTokens(self.scene.build(&ui, &self.model), tokens);
     self.has_virtual_windows = ui.virtualWindows().len > 0;
-    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, self.width, self.height), &self.layout_nodes);
+    // Layout with the SAME resolved tokens the paint pass reads: packs
+    // restate layout metrics too (control ladders, group gaps), and a
+    // house-token layout under a pack's paint would silently hide every
+    // metric the pack changes. Pack and scheme swaps both route through
+    // this rebuild, so a toggle re-lays as well as repaints.
+    const layout = try canvas.layoutWidgetTreeWithTokens(tree.root, geometry.RectF.init(0, 0, self.width, self.height), tokens, &self.layout_nodes);
     _ = try self.runtime.setCanvasWidgetLayout(1, view_label, layout);
     _ = try self.runtime.emitCanvasWidgetDisplayList(1, view_label, tokens);
     self.tree = tree;

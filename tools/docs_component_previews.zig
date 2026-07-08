@@ -79,7 +79,12 @@ fn renderScenePng(
 
     const nodes = try gpa.alloc(canvas.WidgetLayoutNode, native_sdk.runtime.max_canvas_widget_nodes_per_view);
     defer gpa.free(nodes);
-    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, width, height), nodes);
+    // Layout with the same resolved tokens the emit pass reads, matching
+    // the live wasm host: the static set renders the default register
+    // only, whose layout metrics equal the token defaults, so this is
+    // byte-identical today — the call exists so the two renderers can
+    // never drift if this pipeline ever renders another pack.
+    const layout = try canvas.layoutWidgetTreeWithTokens(tree.root, geometry.RectF.init(0, 0, width, height), tokens, nodes);
     _ = try harness.runtime.setCanvasWidgetLayout(1, view_label, layout);
     _ = try harness.runtime.emitCanvasWidgetDisplayList(1, view_label, tokens);
 

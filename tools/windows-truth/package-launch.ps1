@@ -3,7 +3,7 @@
 # one click through the automation dropbox. Run `native package --target
 # windows` in examples\calculator first.
 . "$PSScriptRoot\lib.ps1"
-$pkg = "C:\Users\rdp\repo\examples\calculator\zig-out\package\calculator-windows\bin"
+$pkg = "$(AppDir "calculator")\zig-out\package\calculator-windows\bin"
 taskkill /IM calculator.exe /F 2>$null | Out-Null
 Set-Location $pkg
 if (Test-Path (DropboxDir)) { Remove-Item -Recurse -Force (DropboxDir) }

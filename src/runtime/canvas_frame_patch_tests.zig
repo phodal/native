@@ -490,7 +490,7 @@ test "rebuild dirty bounds derive from the patch edit script, not the window" {
     var buffers = try PresentBuffers.init(std.testing.allocator);
     defer buffers.deinit(std.testing.allocator);
 
-    // 72 keyed rects (past the small-list gate) in a 8-wide grid.
+    // 72 keyed rects in a 8-wide grid.
     var rects: [72]canvas.CanvasCommand = undefined;
     const buildGrid = struct {
         fn rectAt(index: usize) geometry.RectF {
@@ -546,6 +546,54 @@ test "rebuild dirty bounds derive from the patch edit script, not the window" {
     try std.testing.expect(reordered.frame.dirty_bounds != null);
     try std.testing.expect(reordered.frame.dirty_bounds.?.width > 200);
     try std.testing.expect(reordered.frame.dirty_bounds.?.height > 100);
+}
+
+test "rebuild dirty bounds derive from the edit script on small command lists too" {
+    // Refinement must have NO minimum command count: the index-vs-scan
+    // floor elsewhere trades lookup cost with byte-identical results,
+    // but refusing refinement changes the dirty AREA — a scene one
+    // command under a floor would pay a full-window re-raster on every
+    // Msg rebuild exactly where the derivation is cheapest. A real app
+    // regressed this way when a styling round shrank its retained plan
+    // from 64 to 62 commands and every click's present became a
+    // full-surface repaint.
+    var app_state: PatchHarnessApp = .{};
+    const harness = try createPatchHarness(&app_state);
+    defer harness.destroy(std.testing.allocator);
+    var buffers = try PresentBuffers.init(std.testing.allocator);
+    defer buffers.deinit(std.testing.allocator);
+
+    // 12 keyed rects — far below any index floor — in a 4-wide grid
+    // that fits the 320x240 harness surface.
+    var rects: [12]canvas.CanvasCommand = undefined;
+    const buildRow = struct {
+        fn rectAt(index: usize) geometry.RectF {
+            const col: f32 = @floatFromInt(index % 4);
+            const row: f32 = @floatFromInt(index / 4);
+            return geometry.RectF.init(col * 44 + 2, row * 24 + 2, 36, 20);
+        }
+    };
+    for (&rects, 0..) |*command, index| {
+        command.* = .{ .fill_rect = .{
+            .id = @intCast(5_000 + index),
+            .rect = buildRow.rectAt(index),
+            .fill = .{ .color = canvas.Color.rgb8(30, 41, 59) },
+        } };
+    }
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &rects });
+    const baseline = try presentFrame(harness, &buffers, 70);
+    try std.testing.expectEqual(CanvasPresentationMode.gpu_packet, baseline.mode);
+    try std.testing.expect(harness.runtime.views[0].canvas_packet_baseline_valid);
+
+    // Rebuild with ONE color change: dirty is that command's rect, not
+    // the window, and the present is a one-upsert patch.
+    rects[7].fill_rect.fill = .{ .color = canvas.Color.rgb8(37, 99, 235) };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &rects });
+    const toggled = try presentFrame(harness, &buffers, 71);
+    try std.testing.expectEqual(CanvasPresentationMode.gpu_packet, toggled.mode);
+    try std.testing.expectEqualDeep(buildRow.rectAt(7), toggled.frame.dirty_bounds.?);
+    try std.testing.expectEqual(platform.GpuPresentPacketMode.patch, harness.runtime.views[0].gpu_present_packet_mode);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.views[0].gpu_present_patch_upsert_count);
 }
 
 test "a host that refuses patches gets a full resync in the same frame" {

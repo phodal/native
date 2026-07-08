@@ -1010,8 +1010,16 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 // of their bounding union. Refused refinements (no
                 // baseline, unkeyable list, z-order shuffle of unchanged
                 // commands) keep the conservative summary union below.
+                // Deliberately NO small-list floor: every other
+                // min_entries_for_index gate picks index vs linear scan
+                // with byte-identical results, but skipping refinement
+                // here changes the dirty AREA — a scene one command
+                // under a floor would repaint the full window per click
+                // (a measured ~17 ms of direct-command re-raster on a
+                // 68-command dashboard) where the derived rect costs a
+                // sub-millisecond sort over at most the retained-packet
+                // command budget.
                 if (canvas_changed and
-                    render_plan.commandCount() >= canvas.plan_key_index.min_entries_for_index and
                     self.views[index].canvas_packet_baseline_valid and
                     sizesEqual(self.views[index].canvas_packet_baseline_surface_size, frame_options.surface_size) and
                     self.views[index].canvas_packet_baseline_scale == frame_options.scale)

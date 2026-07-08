@@ -122,7 +122,7 @@ pub const attribute_docs = [_]Doc{
     .{ .name = "role", .doc = "Accessibility role (listitem, treeitem, button, ...). treeitem also makes the row part of its tree's roving keyboard focus set." },
     .{ .name = "min-width", .doc = "Width floor (plain number) without width's definite max: the element may grow past it but never shrink below. On split panes it bounds the divider drag." },
     .{ .name = "expanded", .doc = "Tree rows (role=\"treeitem\"): disclosure state (true/false or a {binding}). Omit on leaves; expanded rows collapse on Left, collapsed ones expand on Right, both through on-toggle - the model owns the state." },
-    .{ .name = "label", .doc = "Accessible name." },
+    .{ .name = "label", .doc = "Accessible name; when set it REPLACES the element's text as the announced name - screen readers and automation snapshots see the label, never the text it shadows." },
     .{ .name = "autofocus", .doc = "Focusable controls only: moves keyboard focus to the element when it mounts or when the value turns on (edge-triggered - holding it true never re-steals focus). The TEA way to focus an editor on create." },
     .{ .name = "icon", .doc = "button, toggle-button, list-item, menu-item: vector icon drawn inline (buttons/toggle-buttons before the label, list/menu items as a leading slot): a built-in name (comptime-validated against canvas.icons.known_icon_names, e.g. save, plus, refresh-cw), an app-registered app:<name>, or one {binding} resolving to such a name. Icon-only buttons when the content is empty — add a label. One hit target, one enabled/disabled tint." },
     .{ .name = "icon-placement", .doc = "Icon slot side on label-bearing buttons/toggle-buttons: leading (default) draws the icon before the label, trailing after it — the next-page chevron. Icon-only buttons center the glyph regardless." },
@@ -169,7 +169,7 @@ pub const stepper_attr_docs = [_]Doc{
     .{ .name = "active", .doc = "stepper: the active step index (a number or one {binding}); earlier steps render completed, later ones pending. Required." },
     .{ .name = "key", .doc = "Sibling-scoped identity key." },
     .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
-    .{ .name = "label", .doc = "Accessible name." },
+    .{ .name = "label", .doc = "Accessible name; when set it REPLACES the element's text as the announced name - screen readers and automation snapshots see the label, never the text it shadows." },
     .{ .name = "autofocus", .doc = "Focusable controls only: moves keyboard focus to the element when it mounts or when the value turns on (edge-triggered - holding it true never re-steals focus). The TEA way to focus an editor on create." },
 };
 
@@ -178,7 +178,7 @@ pub const timeline_attr_docs = [_]Doc{
     .{ .name = "grow", .doc = "Flex grow factor." },
     .{ .name = "key", .doc = "Sibling-scoped identity key." },
     .{ .name = "global-key", .doc = "Parent-independent identity: ids survive reparenting between containers." },
-    .{ .name = "label", .doc = "Accessible name." },
+    .{ .name = "label", .doc = "Accessible name; when set it REPLACES the element's text as the announced name - screen readers and automation snapshots see the label, never the text it shadows." },
     .{ .name = "autofocus", .doc = "Focusable controls only: moves keyboard focus to the element when it mounts or when the value turns on (edge-triggered - holding it true never re-steals focus). The TEA way to focus an editor on create." },
 };
 

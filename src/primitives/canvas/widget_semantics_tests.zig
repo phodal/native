@@ -474,6 +474,9 @@ test "widget layout collects accessibility semantics" {
     try std.testing.expect(semantics[0].parent_index == null);
 
     try std.testing.expectEqual(WidgetRole.button, semantics[1].role);
+    // The label-replace contract: an explicit semantics.label REPLACES the
+    // widget's text ("Run") as the accessible name — the sources never
+    // combine, so screen readers and snapshots see the label alone.
     try std.testing.expectEqualStrings("Run query", semantics[1].label);
     try std.testing.expectEqual(@as(?usize, 0), semantics[1].parent_index);
     try std.testing.expect(semantics[1].focusable);

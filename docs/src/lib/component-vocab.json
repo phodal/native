@@ -398,7 +398,7 @@
     },
     {
       "name": "label",
-      "doc": "Accessible name."
+      "doc": "Accessible name; when set it REPLACES the element's text as the announced name - screen readers and automation snapshots see the label, never the text it shadows."
     },
     {
       "name": "autofocus",
@@ -541,7 +541,7 @@
       },
       {
         "name": "label",
-        "doc": "Accessible name."
+        "doc": "Accessible name; when set it REPLACES the element's text as the announced name - screen readers and automation snapshots see the label, never the text it shadows."
       },
       {
         "name": "autofocus",
@@ -567,7 +567,7 @@
       },
       {
         "name": "label",
-        "doc": "Accessible name."
+        "doc": "Accessible name; when set it REPLACES the element's text as the announced name - screen readers and automation snapshots see the label, never the text it shadows."
       },
       {
         "name": "autofocus",

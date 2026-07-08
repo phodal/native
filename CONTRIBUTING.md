@@ -90,6 +90,12 @@ native package --target macos --manifest app.zon --assets assets --binary zig-ou
 
 For Chromium packages, configure `.web_engine = "chromium"` and `.cef` in `app.zon`, or use temporary `--web-engine` and `--cef-dir` overrides while testing.
 
+Verify an ad-hoc signed package's code signature survives packaging intact (macOS; skips loudly on hosts without `codesign`):
+
+```bash
+zig build test-package-signing
+```
+
 ## Automation Development
 
 Enable automation in a build:

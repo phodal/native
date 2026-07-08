@@ -7698,6 +7698,27 @@ static BOOL NativeSdkDirectoryExists(NSString *path) {
     return path.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory;
 }
 
+/* Resolve a relative asset FILE path the way the webview asset root and
+ * the bundled-font roots resolve directories: inside a packaged .app the
+ * bundle's Resources mirrors the app directory's asset tree at the same
+ * relative paths, so "assets/music/track.mp3" names Resources/assets/
+ * music/track.mp3 when it exists there. Outside a bundle — and for any
+ * path the bundle does not carry — the path keeps its plain meaning
+ * (cwd-relative), so dev runs and terminal launches are unchanged and a
+ * missing bundled file still reports missing to the caller (the audio
+ * source cascade falls through to its URL source on exactly that
+ * answer). Absolute paths pass through untouched. */
+static NSString *NativeSdkResolvedAssetFilePath(NSString *path) {
+    if (path.length == 0 || path.isAbsolutePath) return path;
+    if (![[NSBundle mainBundle].bundlePath.pathExtension.lowercaseString isEqualToString:@"app"]) return path;
+    NSString *resourcePath = [NSBundle mainBundle].resourcePath;
+    if (resourcePath.length == 0) return path;
+    NSString *bundled = [resourcePath stringByAppendingPathComponent:path];
+    BOOL isDirectory = NO;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:bundled isDirectory:&isDirectory] && !isDirectory) return bundled;
+    return path;
+}
+
 static NSString *NativeSdkResolvedAssetRoot(NSString *rootPath) {
     NSString *resourcePath = [NSBundle mainBundle].resourcePath;
     BOOL isAppBundle = [[NSBundle mainBundle].bundlePath.pathExtension.lowercaseString isEqualToString:@"app"];
@@ -8667,13 +8688,17 @@ static int NativeSdkSpectrumComputeBands(native_sdk_spectrum_tap_state_t *state,
  * unification. */
 - (int)audioLoadPath:(NSString *)path {
     [self audioStop];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return 1;
+    /* Relative paths resolve against the bundle's Resources inside a
+     * packaged .app (where the process cwd is meaningless — `open`
+     * launches at /), and keep their cwd meaning everywhere else. */
+    NSString *resolved = NativeSdkResolvedAssetFilePath(path);
+    if (![[NSFileManager defaultManager] fileExistsAtPath:resolved]) return 1;
     NSError *error = nil;
-    AVAudioPlayer *probe = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path]
+    AVAudioPlayer *probe = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:resolved]
                                                                   error:&error];
     if (!probe || error) return 2;
     if (![probe prepareToPlay]) return 2;
-    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:nil];
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:resolved] options:nil];
     AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:asset];
     [self audioInstallItem:item asset:asset localSource:YES];
     return 0;

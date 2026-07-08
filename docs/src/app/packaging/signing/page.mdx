@@ -35,6 +35,17 @@ Signing modes:
   </tbody>
 </table>
 
+## What Gatekeeper shows for an ad-hoc package
+
+An ad-hoc signature carries no developer identity, so Gatekeeper cannot verify who built the app. What that means in practice depends on whether the copy carries the quarantine attribute:
+
+- **Downloaded through a browser** (or anything else that sets quarantine): the first launch shows the standard dialog — macOS "cannot check it for malicious software" / cannot verify the app "is free of malware". This is not an error in the package; it is Gatekeeper's honest answer for any app without a notarized Developer ID signature. The user can still run it: right-click (or Control-click) the app in Finder, choose **Open**, and the dialog gains an **Open** button that launches the app and remembers the choice.
+- **Copied over scp, USB, rsync, or a local build**: these transfers set no quarantine attribute, so the app launches directly with no dialog at all.
+
+Either way the signature itself is valid — `codesign --verify --strict` passes on every package the toolkit signs, and the packaging test suite pins that (`zig build test-package-signing`). If Gatekeeper ever calls a package "damaged" instead of showing the dialog above, the bundle was modified after signing (a broken resource seal), which is a real defect — not the expected ad-hoc experience.
+
+For distribution without any dialog, sign with a Developer ID (`--signing identity`) and notarize; see below.
+
 ## Signing flags
 
 <table>

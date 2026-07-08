@@ -178,10 +178,15 @@ pub fn main(init: std.process.Init) !void {
         };
         const output_dir = try flagValue(args, "--output") orelse if (args.len >= 3 and args[2].len > 0 and args[2][0] != '-') args[2] else default_output;
         const archive = flagBool(args, "--archive");
-        // The mobile targets package around the embed static library, so
-        // it must exist: the release-shaped default is ReleaseFast (the
-        // desktop package expects a prebuilt ReleaseFast binary too).
-        const optimize_value = try flagValue(args, "--optimize") orelse if (target == .ios or target == .android) "ReleaseFast" else "Debug";
+        // Packaging is release-shaped on every target, and the optimize
+        // label must reflect the binary actually packaged: the mobile
+        // targets build the embed static library as ReleaseFast, and the
+        // desktop targets pick up the ReleaseFast binary `native build`
+        // installs. The label names artifacts (the .dmg/.zip/.tar.gz and
+        // the package report), so a Debug default would stamp "Debug" on
+        // a ReleaseFast binary. Pass --optimize when packaging a binary
+        // built any other way.
+        const optimize_value = try flagValue(args, "--optimize") orelse "ReleaseFast";
         const binary_path = try flagValue(args, "--binary") orelse switch (target) {
             .ios => try iosPackageLibrary(allocator, init.io, init.environ_map, metadata.name, optimize_value),
             .android => try androidPackageLibrary(allocator, init.io, init.environ_map, metadata.name, optimize_value),

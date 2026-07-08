@@ -172,7 +172,7 @@ pub fn createMacosApp(allocator: std.mem.Allocator, io: std.Io, options: Package
     try writeFile(package_dir, io, "Contents/Info.plist", info_plist);
     try writeFile(package_dir, io, "Contents/PkgInfo", "APPL????");
     try writeFile(package_dir, io, "Contents/Resources/README.txt", "Unsigned local Native SDK macOS app bundle.\n");
-    const assets_output = try assetOutputPath(allocator, options.output_path, "Contents/Resources", options);
+    const assets_output = try macosAssetOutputPath(allocator, options);
     defer allocator.free(assets_output);
     const bundle_stats = try assets_tool.bundle(allocator, io, options.assets_dir, assets_output);
     try copyMacosIcon(allocator, io, package_dir, options);
@@ -484,12 +484,43 @@ fn assetOutputPath(allocator: std.mem.Allocator, output_path: []const u8, resour
     return std.fs.path.join(allocator, &.{ output_path, resources_subpath });
 }
 
+/// Where the macOS bundle carries the app's assets. Frontend apps keep
+/// the established Resources/<dist> layout their webview asset root
+/// resolves against. Everything else mirrors the asset directory at its
+/// app-relative path — Resources/assets by default — so a relative asset
+/// path the app uses at runtime ("assets/music/track.mp3") names the
+/// same file inside the bundle that it names in a dev run: the packaged
+/// macOS host resolves relative asset paths against Resources. An
+/// absolute or parent-escaping --assets directory has no app-relative
+/// meaning a packaged process could resolve, so it keeps the flat
+/// Resources layout.
+fn macosAssetOutputPath(allocator: std.mem.Allocator, options: PackageOptions) ![]const u8 {
+    if (options.frontend != null) return assetOutputPath(allocator, options.output_path, "Contents/Resources", options);
+    if (appRelativeAssetSubpath(options.assets_dir)) |subpath| {
+        return std.fs.path.join(allocator, &.{ options.output_path, "Contents/Resources", subpath });
+    }
+    return std.fs.path.join(allocator, &.{ options.output_path, "Contents/Resources" });
+}
+
+/// The asset directory as an app-relative bundle subpath, or null when
+/// it cannot honestly be one (empty, ".", absolute, or escaping the app
+/// root through a ".." segment).
+fn appRelativeAssetSubpath(assets_dir: []const u8) ?[]const u8 {
+    if (assets_dir.len == 0 or std.fs.path.isAbsolute(assets_dir)) return null;
+    var segments = std.mem.tokenizeAny(u8, assets_dir, "/\\");
+    var has_component = false;
+    while (segments.next()) |segment| {
+        if (std.mem.eql(u8, segment, "..")) return null;
+        if (!std.mem.eql(u8, segment, ".")) has_component = true;
+    }
+    if (!has_component) return null;
+    return assets_dir;
+}
+
 fn macosInfoPlist(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata, executable_name: []const u8) ![]const u8 {
     const icon_name = macosIconFile(metadata);
     const bundle_id = try xmlEscapeAlloc(allocator, metadata.id);
     defer allocator.free(bundle_id);
-    const name = try xmlEscapeAlloc(allocator, metadata.name);
-    defer allocator.free(name);
     const display_name = try xmlEscapeAlloc(allocator, metadata.displayName());
     defer allocator.free(display_name);
     const executable = try xmlEscapeAlloc(allocator, executable_name);
@@ -508,6 +539,13 @@ fn macosInfoPlist(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata
     // dev runs pass to the panel directly.
     const about_line = try macosAboutLine(allocator, metadata);
     defer allocator.free(about_line);
+    // CFBundleName is the SHORT user-visible name — the application
+    // menu's title next to the Apple menu reads it — while
+    // CFBundleDisplayName serves the Finder and longer surfaces. Both
+    // carry the manifest display name so every user-facing surface
+    // (menu bar, Dock, Gatekeeper prompts) agrees; the manifest `.name`
+    // stays the executable's name, exactly like dev runs, whose host
+    // titles the application menu with the display name too.
     return std.fmt.allocPrint(allocator,
         \\<?xml version="1.0" encoding="UTF-8"?>
         \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -535,7 +573,7 @@ fn macosInfoPlist(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata
         \\</dict>
         \\</plist>
         \\
-    , .{ bundle_id, name, display_name, executable, icon, version, version, about_line, document_types, url_types });
+    , .{ bundle_id, display_name, display_name, executable, icon, version, version, about_line, document_types, url_types });
 }
 
 /// The optional NSHumanReadableCopyright entry (with trailing newline)
@@ -1081,32 +1119,40 @@ fn copyTree(allocator: std.mem.Allocator, io: std.Io, source_path: []const u8, d
     }
 }
 
+/// Sign the finished bundle and record the signing plan inside it. The
+/// plan file lives in Contents/Resources, which codesign seals: writing
+/// it AFTER a successful signature would invalidate the resource seal
+/// (`codesign --verify --strict` reports "file added" and a quarantined
+/// install shows Gatekeeper's "damaged" dialog). So the plan is written
+/// BEFORE codesign runs — the sealed file states what was requested and
+/// the signature on the bundle is the proof it happened — and only a
+/// FAILED signing rewrites it, which is safe because a failed codesign
+/// leaves the bundle without a seal to break.
 fn runSigning(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, options: PackageOptions) !void {
+    const plan_path = "Contents/Resources/signing-plan.txt";
     switch (options.signing.mode) {
-        .none => try writeFile(dir, io, "Contents/Resources/signing-plan.txt", "signing=none\nunsigned local package\n"),
+        .none => try writeFile(dir, io, plan_path, "signing=none\nunsigned local package\n"),
         .adhoc => {
+            try writeFile(dir, io, plan_path, "signing=adhoc\nad-hoc signed\n");
             const result = codesign.signAdHoc(io, options.output_path) catch {
-                try writeFile(dir, io, "Contents/Resources/signing-plan.txt", "signing=adhoc\ncodesign --sign - failed; bundle is unsigned\n");
+                try writeFile(dir, io, plan_path, "signing=adhoc\ncodesign --sign - failed; bundle is unsigned\n");
                 return;
             };
-            const status = if (result.ok) "signing=adhoc\nad-hoc signed\n" else "signing=adhoc\ncodesign --sign - failed; bundle is unsigned\n";
-            try writeFile(dir, io, "Contents/Resources/signing-plan.txt", status);
+            if (!result.ok) try writeFile(dir, io, plan_path, "signing=adhoc\ncodesign --sign - failed; bundle is unsigned\n");
         },
         .identity => {
             const identity = options.signing.identity orelse {
-                try writeFile(dir, io, "Contents/Resources/signing-plan.txt", "signing=identity\nno identity provided; bundle is unsigned\n");
+                try writeFile(dir, io, plan_path, "signing=identity\nno identity provided; bundle is unsigned\n");
                 return;
             };
+            const plan_text = try std.fmt.allocPrint(allocator, "signing=identity\nsigned with {s}\n", .{identity});
+            defer allocator.free(plan_text);
+            try writeFile(dir, io, plan_path, plan_text);
             const result = codesign.signIdentity(io, options.output_path, identity, options.signing.entitlements) catch {
-                try writeFile(dir, io, "Contents/Resources/signing-plan.txt", "signing=identity\ncodesign failed; bundle is unsigned\n");
+                try writeFile(dir, io, plan_path, "signing=identity\ncodesign failed; bundle is unsigned\n");
                 return;
             };
-            const status_text = if (result.ok)
-                try std.fmt.allocPrint(allocator, "signing=identity\nsigned with {s}\n", .{identity})
-            else
-                try allocator.dupe(u8, "signing=identity\ncodesign failed; bundle is unsigned\n");
-            defer allocator.free(status_text);
-            try writeFile(dir, io, "Contents/Resources/signing-plan.txt", status_text);
+            if (!result.ok) try writeFile(dir, io, plan_path, "signing=identity\ncodesign failed; bundle is unsigned\n");
         },
     }
 }
@@ -1827,6 +1873,11 @@ test "plist template includes identity executable and version" {
     try std.testing.expect(std.mem.indexOf(u8, plist, "CFBundleDisplayName") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "dev.example.app") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "Demo App") != null);
+    // CFBundleName is what the application menu shows: it must carry the
+    // display name, never the lowercase manifest/executable name.
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CFBundleName</key>\n  <string>Demo App</string>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<string>demo</string>\n  <key>CFBundleDisplayName</key>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CFBundleExecutable</key>\n  <string>demo</string>") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "icon.icns") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "LSMinimumSystemVersion") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "11.0") != null);
@@ -1902,6 +1953,42 @@ test "macOS package copies document type icons into resources" {
     const copied = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-doc-icons/Demo.app/Contents/Resources/markdown.icns");
     defer std.testing.allocator.free(copied);
     try std.testing.expectEqualStrings("icnsdoc-icon", copied);
+}
+
+test "macOS package mirrors app assets at their app-relative path" {
+    // The packaged host resolves relative asset paths against
+    // Contents/Resources, so the bundle must carry the asset tree at the
+    // same relative paths a dev run reads ("assets/music/track.mp3" →
+    // Resources/assets/music/track.mp3) — never flattened into the
+    // Resources root where no runtime path ever finds it.
+    var cwd = std.Io.Dir.cwd();
+    try cwd.deleteTree(std.testing.io, ".zig-cache/test-package-asset-layout");
+    defer cwd.deleteTree(std.testing.io, ".zig-cache/test-package-asset-layout") catch {};
+    try cwd.createDirPath(std.testing.io, ".zig-cache/test-package-asset-layout/assets/music");
+    try cwd.writeFile(std.testing.io, .{ .sub_path = ".zig-cache/test-package-asset-layout/assets/music/track.mp3", .data = "mp3-bytes" });
+
+    const metadata: manifest_tool.Metadata = .{ .id = "dev.example.app", .name = "demo", .version = "1.2.3" };
+    const stats = try createMacosApp(std.testing.allocator, std.testing.io, .{
+        .metadata = metadata,
+        .output_path = ".zig-cache/test-package-asset-layout/Demo.app",
+        .assets_dir = ".zig-cache/test-package-asset-layout/assets",
+    });
+    try std.testing.expectEqual(@as(usize, 1), stats.asset_count);
+
+    const bundled = try readPath(std.testing.allocator, std.testing.io, ".zig-cache/test-package-asset-layout/Demo.app/Contents/Resources/.zig-cache/test-package-asset-layout/assets/music/track.mp3");
+    defer std.testing.allocator.free(bundled);
+    try std.testing.expectEqualStrings("mp3-bytes", bundled);
+}
+
+test "app-relative asset subpaths accept plain trees and reject escapes" {
+    try std.testing.expectEqualStrings("assets", appRelativeAssetSubpath("assets").?);
+    try std.testing.expectEqualStrings("data/sounds", appRelativeAssetSubpath("data/sounds").?);
+    try std.testing.expect(appRelativeAssetSubpath("") == null);
+    try std.testing.expect(appRelativeAssetSubpath(".") == null);
+    try std.testing.expect(appRelativeAssetSubpath("./.") == null);
+    try std.testing.expect(appRelativeAssetSubpath("../shared") == null);
+    try std.testing.expect(appRelativeAssetSubpath("assets/../..") == null);
+    try std.testing.expect(appRelativeAssetSubpath("/tmp/assets") == null);
 }
 
 test "windows registration script contains extension and protocol keys" {

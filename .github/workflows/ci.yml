@@ -31,6 +31,10 @@ jobs:
           version: 0.16.0
       - run: zig build test-webview-system-link
       - run: zig build test-webview-smoke
+      # Signed-package seal pin: an ad-hoc signed package must pass
+      # codesign --verify --strict (macOS runners are the only tier with
+      # codesign; the step skips loudly anywhere else).
+      - run: zig build test-package-signing
       # Shared macos-14 runners are far noisier than a dev box (the second
       # CI run measured a 576 ms automation-ready against the 500 ms local
       # ceiling), so widen the smoke budgets here instead of weakening the

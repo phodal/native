@@ -2098,6 +2098,37 @@ pub fn build(b: *std.Build) void {
     const package_cef_smoke_step = b.step("test-package-cef-layout", "Verify macOS Chromium package layout");
     package_cef_smoke_step.dependOn(&package_cef_check.step);
 
+    // Signed-package seal pin: package an ad-hoc signed bundle and prove
+    // the signature survives packaging intact with codesign's own strict
+    // verifier. This is the regression gate for the ordering bug where a
+    // file written into Contents/Resources AFTER signing invalidated the
+    // resource seal ("file added"), turning every quarantined install
+    // into Gatekeeper's "damaged — move to Trash" dialog. The bundle
+    // carries the CLI as its executable (packaging only needs a real
+    // Mach-O to sign); the check skips loudly on hosts without codesign
+    // (any non-macOS machine) instead of pretending to have verified.
+    const package_signing_run = b.addRunArtifact(host_cli_exe);
+    package_signing_run.addArgs(&.{ "package", "--target", "macos", "--output", "zig-out/package/native-sdk-signing-verify.app", "--binary" });
+    package_signing_run.addFileArg(host_cli_exe.getEmittedBin());
+    package_signing_run.addArgs(&.{ "--manifest", "app.zon", "--assets", "assets", "--optimize", optimize_name, "--signing", "adhoc" });
+    package_signing_run.has_side_effects = true;
+    const package_signing_check = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\set -e
+        \\app="zig-out/package/native-sdk-signing-verify.app"
+        \\if ! command -v codesign >/dev/null 2>&1; then
+        \\  echo "codesign unavailable on this host; skipping signed-package verification"
+        \\  exit 0
+        \\fi
+        \\codesign --verify --strict --deep "$app"
+        \\grep -q "ad-hoc signed" "$app/Contents/Resources/signing-plan.txt"
+        \\echo "signed package verify ok"
+        ,
+    });
+    package_signing_check.step.dependOn(&package_signing_run.step);
+    const package_signing_step = b.step("test-package-signing", "Verify an ad-hoc signed macOS package passes codesign --verify --strict");
+    package_signing_step.dependOn(&package_signing_check.step);
+
     const package_windows_run = b.addRunArtifact(host_cli_exe);
     package_windows_run.addArgs(&.{ "package-windows", "--output", b.fmt("zig-out/package/native-sdk-{s}-windows-Debug", .{package_version}), "--manifest", "app.zon", "--assets", "assets" });
     const package_windows_step = b.step("package-windows", "Create local Windows artifact directory");

@@ -320,6 +320,10 @@ pub fn addAppArtifacts(b: *std.Build, dep: *std.Build.Dependency, app_options: A
             b.fmt("zig-out/package/{s}", .{package_target_name}));
         package_run.addArg("--binary");
         package_run.addFileArg(exe.getEmittedBin());
+        // The archive and report names carry an optimize label; this
+        // build graph knows the packaged binary's REAL mode, so forward
+        // it instead of letting the CLI assume one.
+        package_run.addArgs(&.{ "--optimize", @tagName(app_optimize) });
         package_run.has_side_effects = true;
         const package_step = b.step("package", "Create a distributable package via the native CLI");
         package_step.dependOn(&package_run.step);

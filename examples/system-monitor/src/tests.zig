@@ -1040,6 +1040,47 @@ test "the toolbar renders one control height and carries no settings button" {
     try testing.expectEqual(canvas.WidgetKind.button, pause.kind);
 }
 
+test "sort chips render their whole labels under the app's pixel snapping" {
+    // Offscreen render check for the exact-fit elision cliff: the sort
+    // chips hug their measured labels, and this app snaps geometry to
+    // the 1px grid, so a fractional chip width used to lose part of a
+    // pixel to edge snapping and paint "PID" as "PI…". Intrinsic
+    // measured-label widths now ceil to the snap grid; emit the real
+    // tree with the app's own tokens and prove every chip label (and
+    // the matching table headers) lays out without elision.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = edgeModel();
+    const tree = try buildTree(arena_state.allocator(), &model);
+    const tokens = main.tokensFromModel(&model);
+
+    var nodes: [1024]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTreeWithTokens(tree.root, geometry.RectF.init(0, 0, main.window_width, main.window_height), tokens, &nodes);
+
+    const commands = try testing.allocator.alloc(canvas.CanvasCommand, 8192);
+    defer testing.allocator.free(commands);
+    var builder = canvas.Builder.init(commands);
+    try canvas.emitWidgetLayout(&builder, layout, tokens);
+
+    const chip_labels = [_][]const u8{ "CPU", "Memory", "PID", "Name" };
+    for (chip_labels) |label| {
+        var seen = false;
+        for (builder.displayList().commands) |command| switch (command) {
+            .draw_text => |text| {
+                if (!std.mem.eql(u8, text.text, label)) continue;
+                const options = text.text_layout orelse continue;
+                seen = true;
+                var lines: [4]canvas.TextLine = undefined;
+                const text_layout = try canvas.layoutTextRun(text, options, &lines);
+                for (text_layout.lines) |line| try testing.expect(!line.isElided());
+            },
+            else => {},
+        };
+        try testing.expect(seen);
+    }
+}
+
 // -------------------------------------------------------- showcase shots
 
 // Env-gated screenshot renderer (skipped everywhere by default, never in

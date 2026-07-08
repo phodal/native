@@ -3042,6 +3042,81 @@ test "widget text at intrinsic width does not wrap under geometry pixel snapping
     }
 }
 
+test "label-exact controls at intrinsic width never elide under geometry pixel snapping" {
+    // The elision twin of the wrap seam above: a control sized exactly
+    // to its measured label sits at a fractional width, and render-time
+    // geometry snapping can shave up to half a device pixel off that
+    // frame — past the elision slack, so real glyphs swap for an
+    // ellipsis (system monitor's "PID" sort chip painting "PI…").
+    // Intrinsic measured-label widths now ceil to the snap grid
+    // (`pixelSnapCeil` in widget_layout.zig), so the snapped frame is
+    // never narrower than the label it was measured for. Sweep every
+    // widget family that hugs a measured label and elides at its frame
+    // edge, at both snap scales, across labels whose fractional widths
+    // land on both sides of the rounding boundary.
+    const kinds = [_]canvas.WidgetKind{
+        .toggle_button, .button,   .toggle, .segmented_control,
+        .menu_item,     .checkbox, .radio,  .switch_control,
+        .tooltip,       .badge,    .list_item,
+    };
+    const labels = [_][]const u8{ "PID", "CPU", "Memory", "Name", "Filter processes", "Quarterly report" };
+    const scales = [_]f32{ 1, 2 };
+    for (scales) |scale| {
+        const tokens = DesignTokens{ .pixel_snap = .{ .geometry = true, .text = true, .scale = scale } };
+        for (kinds) |kind| for (labels) |label_text| {
+            var label = Widget{ .id = 7, .kind = kind, .text = label_text };
+            label.size = .sm;
+            // The grow spacer pushes the hug-sized control to the right
+            // edge, so the snapped left edge (not the fixed right one)
+            // carries the fractional remainder — the shave that trips
+            // the cliff.
+            const children = [_]Widget{ Widget{ .id = 2, .kind = .stack, .layout = .{ .grow = 1 } }, label };
+            const row = Widget{ .id = 1, .kind = .row, .layout = .{ .gap = 10, .cross_alignment = .center }, .children = &children };
+
+            var nodes: [4]WidgetLayoutNode = undefined;
+            const layout = try canvas.layoutWidgetTreeWithTokens(row, geometry.RectF.init(0, 0, 400, 40), tokens, &nodes);
+
+            var commands: [16]CanvasCommand = undefined;
+            var builder = Builder.init(&commands);
+            try canvas.emitWidgetLayout(&builder, layout, tokens);
+            var seen = false;
+            for (builder.displayList().commands) |command| switch (command) {
+                .draw_text => |text| {
+                    seen = true;
+                    var lines: [4]TextLine = undefined;
+                    const text_layout = try canvas.layoutTextRun(text, text.text_layout.?, &lines);
+                    for (text_layout.lines) |line| try std.testing.expect(!line.isElided());
+                },
+                else => {},
+            };
+            try std.testing.expect(seen);
+        };
+    }
+}
+
+test "geometry pixel snapping off keeps label-exact intrinsic widths bit-identical" {
+    // The ceil-to-grid rule is gated on `pixel_snap.geometry`: themes
+    // without geometry snapping have no snap shave to defend against,
+    // and their intrinsic widths must stay the exact fractional
+    // measurement — bit-identical layout, so no golden moves for
+    // non-snapping themes.
+    const off = DesignTokens{};
+    const text_off = DesignTokens{ .pixel_snap = .{ .geometry = false, .text = true, .scale = 2 } };
+    const kinds = [_]canvas.WidgetKind{ .toggle_button, .segmented_control, .menu_item, .checkbox, .tooltip, .badge };
+    for (kinds) |kind| {
+        var chip = Widget{ .id = 3, .kind = kind, .text = "Memory" };
+        chip.size = .sm;
+        const exact = canvas.intrinsicWidgetSize(chip, off);
+        try std.testing.expectEqual(exact.width, canvas.intrinsicWidgetSize(chip, text_off).width);
+        // A snapping theme may only ever widen, and by less than two
+        // snap steps (one step per ceil; the menu row ceils its label
+        // base and its check-reserve total separately).
+        const snapped = canvas.intrinsicWidgetSize(chip, DesignTokens{ .pixel_snap = .{ .geometry = true, .text = true, .scale = 2 } });
+        try std.testing.expect(snapped.width >= exact.width);
+        try std.testing.expect(snapped.width - exact.width < 1.0);
+    }
+}
+
 test "theme packs resolve by name and compose with every theme axis" {
     const DesignTokensT = canvas.DesignTokens;
     // Manifest-facing name resolution: known packs resolve, typos are

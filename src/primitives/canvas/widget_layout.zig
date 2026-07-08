@@ -1386,13 +1386,20 @@ fn intrinsicWidgetSizeDepth(widget: Widget, tokens: DesignTokens, depth: usize) 
         .menu_item => blk: {
             const base = intrinsicRowTextWidgetSize(widget, tokens);
             const check_reserve = widget_metrics.widgetRowIconExtent(widget, tokens) + widget_metrics.widgetRowIconGap(widget, tokens);
-            break :blk geometry.SizeF.init(base.width + check_reserve, widgetSizedDensityValue(widget, tokens, 32));
+            // The fractional check reserve can pull the total off the
+            // snap grid again; ceil the final width so edge snapping
+            // never shaves the label region (`pixelSnapCeil`).
+            break :blk geometry.SizeF.init(pixelSnapCeil(tokens, base.width + check_reserve), widgetSizedDensityValue(widget, tokens, 32));
         },
         .list_item => blk: {
             const base = intrinsicRowTextWidgetSize(widget, tokens);
             if (widget.children.len == 0) break :blk base;
             const flow = intrinsicAxisChildrenSize(widget, tokens, .horizontal, depth);
-            break :blk geometry.SizeF.init(@max(base.width, flow.width), @max(base.height, flow.height));
+            // A child flow only fractionally wider than the label-exact
+            // base sits off the snap grid; ceil the winner so edge
+            // snapping cannot land the row below its own label
+            // (`pixelSnapCeil`).
+            break :blk geometry.SizeF.init(pixelSnapCeil(tokens, @max(base.width, flow.width)), @max(base.height, flow.height));
         },
         // A span-carrying cell (markdown tables) measures like a padded
         // span paragraph; classic cells keep the single-line row metric.
@@ -1574,14 +1581,20 @@ fn intrinsicTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32)
 
 fn intrinsicPaddedTextWidgetSize(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32) geometry.SizeF {
     const text = intrinsicTextWidgetSize(widget, tokens, text_size);
-    return geometry.SizeF.init(text.width + inset * 2, @max(widgetControlHeight(widget, tokens), text.height + widgetSizedDensityValue(widget, tokens, 8)));
+    // Ceil to the snap grid (`pixelSnapCeil`): the tooltip capsule hugs
+    // its measured label exactly, so render-time edge snapping must not
+    // shave it into eliding.
+    return geometry.SizeF.init(pixelSnapCeil(tokens, text.width + inset * 2), @max(widgetControlHeight(widget, tokens), text.height + widgetSizedDensityValue(widget, tokens, 8)));
 }
 
 fn intrinsicStatusBarWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const text_size = widgetBodyTextSize(widget, tokens);
     const text = intrinsicTextWidgetSize(widget, tokens, text_size);
     const padding = widgetStatusBarPadding(widget);
-    return geometry.SizeF.init(text.width + padding.horizontal(), @max(widgetSizedDensityValue(widget, tokens, 32), text.height + padding.vertical()));
+    // Ceil to the snap grid (`pixelSnapCeil`): a hug-sized status bar
+    // is label-exact and its text elides at the frame edge, the same
+    // cliff every measured-label chip rides.
+    return geometry.SizeF.init(pixelSnapCeil(tokens, text.width + padding.horizontal()), @max(widgetSizedDensityValue(widget, tokens, 32), text.height + padding.vertical()));
 }
 
 fn intrinsicAlertWidgetSize(widget: Widget, tokens: DesignTokens, depth: usize) geometry.SizeF {
@@ -1701,7 +1714,11 @@ fn intrinsicButtonWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Size
     // Measured with the button-label face (not the body face) so the
     // medium advances the render draws are the widths layout reserves.
     const text_width = measureTextWidthForFont(tokens.text_measure, tokens.typography.buttonFontId(), widget.text, widgetButtonTextSize(widget, tokens));
-    const width = @max(widgetSizedDensityValue(widget, tokens, 44), icon_width + text_width + widgetButtonInset(widget, tokens) * 2);
+    // Ceil to the snap grid (`pixelSnapCeil`): a button or toggle chip
+    // sized exactly to its measured label ("PID" in a sort-chip row)
+    // must not lose a fraction of a pixel to render-time edge snapping
+    // and elide its own label.
+    const width = pixelSnapCeil(tokens, @max(widgetSizedDensityValue(widget, tokens, 44), icon_width + text_width + widgetButtonInset(widget, tokens) * 2));
     return geometry.SizeF.init(width, height);
 }
 
@@ -1742,13 +1759,22 @@ fn intrinsicBadgeWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF
     return geometry.SizeF.init(pixelSnapCeil(tokens, @max(min_width, icon_width + text_width + inset * 2)), height);
 }
 
+/// True exactly when the renderer's geometry snapping is live — the
+/// same guard its rect snapping applies (geometry on, usable scale) —
+/// so intrinsic sizing and painting agree about whether edges move.
+fn pixelSnapGeometryActive(tokens: DesignTokens) bool {
+    return tokens.pixel_snap.geometry and std.math.isFinite(tokens.pixel_snap.scale) and tokens.pixel_snap.scale > 0;
+}
+
 /// Round a length UP to the pixel-snap grid when geometry snapping is
 /// on (no-op otherwise): intrinsic boxes sized from measured text must
 /// survive the renderer's edge snapping without losing content width.
+/// A width on the snap grid is preserved exactly by edge snapping at
+/// ANY position (both edges move by the same rounding), so the snapped
+/// box is never narrower than the label it was measured for.
 fn pixelSnapCeil(tokens: DesignTokens, value: f32) f32 {
-    if (!tokens.pixel_snap.geometry) return value;
+    if (!pixelSnapGeometryActive(tokens)) return value;
     const scale = tokens.pixel_snap.scale;
-    if (!std.math.isFinite(scale) or scale <= 0) return value;
     return @ceil(value * scale) / scale;
 }
 
@@ -1775,7 +1801,10 @@ fn intrinsicSpinnerWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Siz
 
 fn intrinsicSegmentedControlSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
     const text_width = measuredTextWidth(tokens, widget.text, widgetLabelTextSize(widget, tokens));
-    const width = @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetControlInset(widget, tokens, tokens.spacing.md) * 2);
+    // Ceil to the snap grid (`pixelSnapCeil`): a segment / tabs trigger
+    // sized exactly to its measured label must survive render-time edge
+    // snapping without eliding.
+    const width = pixelSnapCeil(tokens, @max(widgetSizedDensityValue(widget, tokens, 44), text_width + widgetControlInset(widget, tokens, tokens.spacing.md) * 2));
     return geometry.SizeF.init(width, widgetControlHeight(widget, tokens));
 }
 
@@ -1789,7 +1818,10 @@ fn intrinsicRowTextWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Siz
         widget_metrics.widgetRowIconExtent(widget, tokens) + widget_metrics.widgetRowIconGap(widget, tokens)
     else
         0;
-    return geometry.SizeF.init(icon_width + text_width + inset * 2, widgetDefaultRowHeight(widget, tokens));
+    // Ceil to the snap grid (`pixelSnapCeil`): list rows and table
+    // cells hug their measured label exactly, so render-time edge
+    // snapping must not shave the label below its own width and elide.
+    return geometry.SizeF.init(pixelSnapCeil(tokens, icon_width + text_width + inset * 2), widgetDefaultRowHeight(widget, tokens));
 }
 
 fn intrinsicCheckboxWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
@@ -1797,7 +1829,10 @@ fn intrinsicCheckboxWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Si
     const label_size = widgetLabelTextSize(widget, tokens);
     const label_width = measuredTextWidth(tokens, widget.text, label_size);
     const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
-    return geometry.SizeF.init(box_size + gap + label_width, @max(box_size, widgetLineHeight(label_size)));
+    // Ceil to the snap grid (`pixelSnapCeil`): the label tail after the
+    // box is measured exactly, and render-time edge snapping must not
+    // shave it into eliding.
+    return geometry.SizeF.init(pixelSnapCeil(tokens, box_size + gap + label_width), @max(box_size, widgetLineHeight(label_size)));
 }
 
 fn intrinsicRadioWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
@@ -1805,7 +1840,9 @@ fn intrinsicRadioWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF
     const label_size = widgetLabelTextSize(widget, tokens);
     const label_width = measuredTextWidth(tokens, widget.text, label_size);
     const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
-    return geometry.SizeF.init(circle_size + gap + label_width, @max(circle_size, widgetLineHeight(label_size)));
+    // Same label-exact tail as the checkbox: ceil so snapping cannot
+    // elide the label (`pixelSnapCeil`).
+    return geometry.SizeF.init(pixelSnapCeil(tokens, circle_size + gap + label_width), @max(circle_size, widgetLineHeight(label_size)));
 }
 
 fn intrinsicToggleWidgetSize(widget: Widget, tokens: DesignTokens) geometry.SizeF {
@@ -1815,7 +1852,19 @@ fn intrinsicToggleWidgetSize(widget: Widget, tokens: DesignTokens) geometry.Size
     const label_size = widgetLabelTextSize(widget, tokens);
     const label_width = measuredTextWidth(tokens, widget.text, label_size);
     const gap = if (widget.text.len > 0) widgetControlInset(widget, tokens, tokens.spacing.sm) else 0;
-    return geometry.SizeF.init(track_width + gap + label_width, @max(track_height, widgetLineHeight(label_size)));
+    const height = @max(track_height, widgetLineHeight(label_size));
+    // The renderer widens the track to 1.75x a tall row's height and
+    // snaps the track RECT itself to the pixel grid, where nearest-
+    // rounding can grow it past a fractional reserve (a 38.5px sm track
+    // paints 39px wide at scale 1) and push the label into eliding.
+    // With snapping live, reserve the ceiled render extent and ceil the
+    // total like every measured-label chip; non-snapping themes keep
+    // the classic reserve bit-identically.
+    const track_reserve = if (pixelSnapGeometryActive(tokens))
+        pixelSnapCeil(tokens, @max(track_width, height * 1.75))
+    else
+        track_width;
+    return geometry.SizeF.init(pixelSnapCeil(tokens, track_reserve + gap + label_width), height);
 }
 
 fn intrinsicIconExtent(widget: Widget, tokens: DesignTokens) f32 {

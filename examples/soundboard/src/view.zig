@@ -205,16 +205,16 @@ const TileContext = struct {
 
 /// One bare album tile: the cover IS the tile — no card fill, border, or
 /// shadow around it (the flat `list_item` composite, the same chromeless
-/// register the track rows use). NO state wash at all: hover changes
-/// nothing visually — the pointer cursor is the whole hover affordance
-/// on a cover-art grid — and the transparent per-widget background
-/// override below is what silences the composite's built-in hover/press
-/// fill (painting a fully transparent wash instead). Keyboard focus
-/// still draws the standard ring, and the whole tile — art and text —
-/// stays one hit target with the album-by-artist accessible label.
-/// Shared by both shells; only the context menu is desktop vocabulary
-/// (right/ctrl-click has no honest touch equivalent on the phone hosts,
-/// so the compact tile mounts none).
+/// register the track rows use). Hover is QUIET: the pointer rests on
+/// cover art, not a control register, so hovering changes nothing
+/// visually (the pointer cursor is the whole hover affordance) — the
+/// quiet-surface style knob below states exactly that. A press still
+/// paints the standard pressed wash (the visible moment of commitment),
+/// keyboard focus still draws the standard ring, and the whole tile —
+/// art and text — stays one hit target with the album-by-artist
+/// accessible label. Shared by both shells; only the context menu is
+/// desktop vocabulary (right/ctrl-click has no honest touch equivalent
+/// on the phone hosts, so the compact tile mounts none).
 fn albumTile(ui: *Ui, context: TileContext, cell: *const model_mod.AlbumCell) Ui.Node {
     const cover = context.fit.tile_width - tile_padding * 2;
     const desktop_menu = [_]Ui.ContextMenuItem{
@@ -227,11 +227,10 @@ fn albumTile(ui: *Ui, context: TileContext, cell: *const model_mod.AlbumCell) Ui
         // between column-count breakpoints.
         .height = tile_padding * 2 + cover + cover_text_gap + tile_text_height,
         .padding = tile_padding,
-        // A widget-level background override recolors whatever state
-        // fill the composite would paint; fully transparent, it removes
-        // the hover and press washes without touching hit testing,
-        // cursor intent, or the focus ring.
-        .style = .{ .background = canvas.Color.rgba(0, 0, 0, 0) },
+        // The quiet-surface knob: no hover wash on an image-forward
+        // tile. Press feedback, cursor intent, the focus ring, and hit
+        // testing all keep their own channels.
+        .style = .{ .quiet_hover = true },
         .on_press = Msg{ .open_album = cell.id },
         .context_menu = if (context.form == .regular) &desktop_menu else &.{},
         .semantics = .{ .role = .listitem, .label = ui.fmt("{s} by {s}", .{ cell.title, cell.artist }) },

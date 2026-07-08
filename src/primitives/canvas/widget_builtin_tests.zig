@@ -1022,6 +1022,67 @@ test "menu rows wash the active row, never outline, and checkmark the committed 
     try std.testing.expect(both_builder.displayList().findCommandById(widgetPartId(73, 2)) == null);
 }
 
+test "the quiet-surface knob silences the hover wash and nothing else" {
+    // The quiet-tile doctrine: hover washes belong to acting controls;
+    // on an image-forward content tile the pointer rests on content, so
+    // hover paints nothing (the cursor is the affordance). The knob is
+    // `WidgetStyle.quiet_hover`, and it must remove ONLY the hover fill
+    // — the press wash (the visible moment of commitment) and the focus
+    // ring stay.
+    const tokens = DesignTokens{};
+    const base = Widget{
+        .id = 74,
+        .kind = WidgetKind.list_item,
+        .frame = geometry.RectF.init(0, 0, 160, 160),
+        .style = .{ .quiet_hover = true },
+    };
+
+    // Hovered: no state fill at slot 1 — the row emitter skips the wash
+    // rect entirely, exactly like a row at rest.
+    var hovered = base;
+    hovered.state.hovered = true;
+    var hovered_commands: [8]CanvasCommand = undefined;
+    var hovered_builder = Builder.init(&hovered_commands);
+    try emitWidgetTree(&hovered_builder, hovered, tokens);
+    try std.testing.expect(hovered_builder.displayList().findCommandById(widgetPartId(74, 1)) == null);
+
+    // Control: the same hovered row WITHOUT the knob paints the muted
+    // hover wash — proving the knob, not the setup, is what went quiet.
+    var loud = hovered;
+    loud.style.quiet_hover = false;
+    var loud_commands: [8]CanvasCommand = undefined;
+    var loud_builder = Builder.init(&loud_commands);
+    try emitWidgetTree(&loud_builder, loud, tokens);
+    const loud_wash = switch (loud_builder.displayList().findCommandById(widgetPartId(74, 1)).?.command) {
+        .fill_rounded_rect => |fill| fill,
+        else => return error.TestUnexpectedResult,
+    };
+    try expectFillColor(tokens.colors.surface_subtle, loud_wash.fill);
+
+    // Pressed (even while still hovered): the pressed wash paints — the
+    // knob never reaches the press channel.
+    var pressed = base;
+    pressed.state.hovered = true;
+    pressed.state.pressed = true;
+    var pressed_commands: [8]CanvasCommand = undefined;
+    var pressed_builder = Builder.init(&pressed_commands);
+    try emitWidgetTree(&pressed_builder, pressed, tokens);
+    const pressed_wash = switch (pressed_builder.displayList().findCommandById(widgetPartId(74, 1)).?.command) {
+        .fill_rounded_rect => |fill| fill,
+        else => return error.TestUnexpectedResult,
+    };
+    try expectFillColor(tokens.colors.surface_pressed, pressed_wash.fill);
+
+    // Focused: the standard focus ring still strokes at slot 2 — quiet
+    // surfaces stay honest keyboard citizens.
+    var focused = base;
+    focused.state.focused = true;
+    var focused_commands: [8]CanvasCommand = undefined;
+    var focused_builder = Builder.init(&focused_commands);
+    try emitWidgetTree(&focused_builder, focused, tokens);
+    try std.testing.expect(focused_builder.displayList().findCommandById(widgetPartId(74, 2)) != null);
+}
+
 test "icon buttons draw registry names as vector icons and keep the glyph fallback" {
     const tokens = DesignTokens{};
     const vector = Widget{

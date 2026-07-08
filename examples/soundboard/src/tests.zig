@@ -1148,7 +1148,7 @@ test "arrows move the selection without playback or a focus ring; enter plays it
     try testing.expectEqual(before, app_state.model.selected);
 }
 
-test "the selected row wears the inverted accent register; tiles wash nothing" {
+test "the selected row wears the inverted accent register; tiles hover quiet" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1175,16 +1175,18 @@ test "the selected row wears the inverted accent register; tiles wash nothing" {
     try testing.expect(!other_row.state.selected);
     try testing.expect(other_row.style.background == null);
 
-    // Album tiles opt OUT of the state washes entirely: the transparent
-    // background override recolors any hover/press fill to nothing, so
-    // hovering a tile changes nothing visually (the pointer cursor is
-    // the affordance).
+    // Album tiles opt out of the HOVER wash through the toolkit's
+    // quiet-surface style knob — hovering cover art changes nothing
+    // visually (the pointer cursor is the affordance) — and carry no
+    // background override at all, so the pressed wash and any themed
+    // base fill keep their own channels.
     model.tab = .albums;
     const grid_tree = try buildTree(arena, &model);
     const album = &model_mod.albums[0];
     const tile_label = try std.fmt.allocPrint(arena, "{s} by {s}", .{ album.title, album.artist });
     const tile = findByLabel(grid_tree.root, tile_label).?;
-    try testing.expectEqual(@as(f32, 0), tile.style.background.?.a);
+    try testing.expect(tile.style.quiet_hover);
+    try testing.expect(tile.style.background == null);
 }
 
 test "the transport buttons share one quiet register" {

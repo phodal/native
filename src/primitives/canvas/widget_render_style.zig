@@ -68,6 +68,17 @@ pub fn staticTextSelectionFillColor(widget: Widget, tokens: DesignTokens) Color 
     return colorWithAlpha(widget.style.accent orelse tokens.colors.accent, tokens.states.selection_wash_alpha);
 }
 
+/// The hover half of a widget's wash state: hovered, unless the widget
+/// opted out of hover washes (`WidgetStyle.quiet_hover`, the
+/// quiet-surface knob for image-forward content tiles). Every
+/// background-fill resolver that steps on hover reads it through this,
+/// so a quiet surface silences ONLY the hover fill: pressed and
+/// selected fills keep their own ladder rungs, and the focus ring,
+/// cursor intent, and hit testing never resolve through here at all.
+pub fn washHovered(widget: Widget) bool {
+    return widget.state.hovered and !widget.style.quiet_hover;
+}
+
 pub fn colorWithAlpha(color: Color, alpha: f32) Color {
     return Color.rgba(color.r, color.g, color.b, std.math.clamp(alpha, 0, 1));
 }
@@ -176,7 +187,7 @@ pub fn buttonFillColor(widget: Widget, tokens: DesignTokens) Color {
     }
     const pressed = widget.state.pressed;
     const selected = widget.state.selected;
-    const hovered = widget.state.hovered;
+    const hovered = washHovered(widget);
     // On the quiet variants `selected` means two different things by
     // kind: a toggle's on-state earns the muted wash, while a nav
     // button's currency (the current page, the open trigger) shows
@@ -397,7 +408,7 @@ pub fn textInputControlVisualTokens(widget: Widget, tokens: DesignTokens) Contro
 
 pub fn textInputFill(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Fill {
     if (widget.state.disabled) return colorFill(visual.disabled_background orelse tokens.colors.disabled);
-    return colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface)));
+    return colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, washHovered(widget), tokens.colors.surface)));
 }
 
 pub fn textInputBorderFill(widget: Widget, visual: ControlVisualTokens, fallback: Color) Fill {
@@ -495,16 +506,17 @@ pub fn componentPillRadius(widget: Widget, visual: ControlVisualTokens, fallback
 
 pub fn badgeBackgroundColor(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Color {
     if (widget.state.disabled) return visual.disabled_background orelse tokens.colors.disabled;
+    const hovered = washHovered(widget);
     return switch (widget.variant) {
-        .default, .primary => widgetAccentColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.accent)),
-        .secondary => widgetBackgroundColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface_subtle)),
-        .outline, .ghost => widgetBackgroundColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, widget.state.hovered, if (widget.state.hovered or widget.state.pressed) tokens.colors.surface_subtle else transparentColor())),
+        .default, .primary => widgetAccentColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, hovered, tokens.colors.accent)),
+        .secondary => widgetBackgroundColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, hovered, tokens.colors.surface_subtle)),
+        .outline, .ghost => widgetBackgroundColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, hovered, if (hovered or widget.state.pressed) tokens.colors.surface_subtle else transparentColor())),
         // The QUIET destructive chip: a translucent destructive wash
         // (`states.badge_destructive_wash_alpha`) under destructive
         // text (the composite tracks the scheme — pale pink on light
         // pages, a dark red tint on dark ones) instead of a filled
         // alarm block.
-        .destructive => widgetAccentColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, widget.state.hovered, colorWithAlpha(tokens.colors.destructive, tokens.states.badge_destructive_wash_alpha))),
+        .destructive => widgetAccentColor(widget, controlStateBackground(visual, widget.state.pressed, widget.state.pressed or widget.state.selected, hovered, colorWithAlpha(tokens.colors.destructive, tokens.states.badge_destructive_wash_alpha))),
     };
 }
 
@@ -550,13 +562,16 @@ pub fn buttonStrokeWidth(widget: Widget, tokens: DesignTokens) f32 {
 
 pub fn listItemFillColor(widget: Widget, tokens: DesignTokens, state: WidgetState) Color {
     const visual = listItemControlVisualTokens(widget, tokens);
+    // The quiet-surface knob reads through the widget, not the caller's
+    // state copy, so every row/cell path honors it identically.
+    const hovered = state.hovered and !widget.style.quiet_hover;
     const fallback = if (state.selected or state.pressed)
         tokens.colors.surface_pressed
-    else if (state.hovered)
+    else if (hovered)
         tokens.colors.surface_subtle
     else
         transparentColor();
-    return controlStateBackground(visual, state.pressed, state.selected or state.pressed, state.hovered, fallback);
+    return controlStateBackground(visual, state.pressed, state.selected or state.pressed, hovered, fallback);
 }
 
 pub fn transparentColor() Color {

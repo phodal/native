@@ -89,6 +89,7 @@ const surfaceControlVisualTokens = widget_render_style.surfaceControlVisualToken
 const buttonStrokeWidth = widget_render_style.buttonStrokeWidth;
 const listItemFillColor = widget_render_style.listItemFillColor;
 const disabledWash = widget_render_style.disabledWash;
+const washHovered = widget_render_style.washHovered;
 
 const max_widget_text_range_rects: usize = 4;
 
@@ -394,7 +395,7 @@ pub fn emitSelectWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
-        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed, widget.state.hovered, tokens.colors.surface))),
+        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed, washHovered(widget), tokens.colors.surface))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
@@ -666,7 +667,7 @@ pub fn emitTooltipWidget(builder: *Builder, widget: Widget, tokens: DesignTokens
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
-        .fill = widgetAccentFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.accent)),
+        .fill = widgetAccentFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, washHovered(widget), tokens.colors.accent)),
     });
     if (widget.text.len > 0) {
         const text_size = widgetLabelTextSize(widget, tokens);
@@ -765,10 +766,12 @@ pub fn emitMenuItemWidget(builder: *Builder, widget: Widget, tokens: DesignToken
 /// row and the hovered row share the hover wash, a press deepens it,
 /// and the committed row stays untinted (its marker is the trailing
 /// checkmark). `selected` deliberately does not reach the fill, and no
-/// state draws a focus ring.
+/// state draws a focus ring. The quiet-surface knob silences only the
+/// pointer half of the attention wash — the keyboard's active row still
+/// washes, because inside a menu that wash IS the keyboard affordance.
 fn menuItemWashColor(widget: Widget, tokens: DesignTokens, visual: ControlVisualTokens) Color {
     if (widget.state.pressed) return widget_render_style.controlStateBackground(visual, true, true, false, tokens.colors.surface_pressed);
-    if (widget.state.focused or widget.state.hovered) return buttonStateBackground(visual, false, true, tokens.colors.surface_subtle);
+    if (widget.state.focused or washHovered(widget)) return buttonStateBackground(visual, false, true, tokens.colors.surface_subtle);
     return widget_render_style.transparentColor();
 }
 
@@ -940,7 +943,7 @@ pub fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: Des
                     .id = widgetPartId(widget.id, 1),
                     .rect = widget.frame,
                     .radius = radius,
-                    .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, background))),
+                    .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, washHovered(widget), background))),
                 });
             }
             if (selected) {
@@ -965,7 +968,7 @@ pub fn emitSegmentedControlWidget(builder: *Builder, widget: Widget, tokens: Des
                     .id = widgetPartId(widget.id, 1),
                     .rect = widget.frame,
                     .radius = radius,
-                    .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, background))),
+                    .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, washHovered(widget), background))),
                 });
             }
             if (selected) {
@@ -1011,7 +1014,7 @@ pub fn emitCheckboxWidget(builder: *Builder, widget: Widget, tokens: DesignToken
         .fill = if (selected)
             colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled, tokens.states.disabled_alpha))
         else
-            colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface))),
+            colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, washHovered(widget), tokens.colors.surface))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
@@ -1056,7 +1059,7 @@ pub fn emitRadioWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) 
         .id = widgetPartId(widget.id, 1),
         .rect = circle,
         .radius = radius,
-        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface))),
+        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, false, washHovered(widget), tokens.colors.surface))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
@@ -1108,7 +1111,7 @@ pub fn emitToggleWidget(builder: *Builder, widget: Widget, tokens: DesignTokens)
         .fill = if (selected)
             colorFill(disabledWash(widgetAccentColor(widget, visual.active_background orelse tokens.colors.accent), widget.state.disabled, tokens.states.disabled_alpha))
         else
-            colorFill(disabledWash(widgetBackgroundColor(widget, buttonStateBackground(visual, false, widget.state.hovered, tokens.colors.surface_pressed)), widget.state.disabled, tokens.states.disabled_alpha)),
+            colorFill(disabledWash(widgetBackgroundColor(widget, buttonStateBackground(visual, false, washHovered(widget), tokens.colors.surface_pressed)), widget.state.disabled, tokens.states.disabled_alpha)),
     });
     // Borderless by default: the switch is a filled pill (primary when
     // on, the input wash when off) whose near-white thumb provides the

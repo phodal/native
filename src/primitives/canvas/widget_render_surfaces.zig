@@ -41,6 +41,7 @@ const widgetRadius = widget_render_style.widgetRadius;
 const controlRadius = widget_render_style.controlRadius;
 const controlStrokeWidth = widget_render_style.controlStrokeWidth;
 const buttonStateBackground = widget_render_style.buttonStateBackground;
+const washHovered = widget_render_style.washHovered;
 const alertControlVisualTokens = widget_render_style.alertControlVisualTokens;
 const cardControlVisualTokens = widget_render_style.cardControlVisualTokens;
 const dialogControlVisualTokens = widget_render_style.dialogControlVisualTokens;
@@ -55,7 +56,7 @@ pub fn emitAlertWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTo
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
-        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface))),
+        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, washHovered(widget), tokens.colors.surface))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
@@ -141,7 +142,7 @@ pub fn emitCardWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTok
         .id = widgetPartId(widget.id, 1),
         .rect = widget.frame,
         .radius = radius,
-        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface))),
+        .fill = colorFill(widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, washHovered(widget), tokens.colors.surface))),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 2),
@@ -204,7 +205,7 @@ pub fn emitModalSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: D
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
-        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface)),
+        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, washHovered(widget), tokens.colors.surface)),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 3),
@@ -239,7 +240,7 @@ pub fn emitModalSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: D
 pub fn emitPanelWidgetChrome(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {
     const visual = surfaceControlVisualTokens(widget, tokens);
     const radius = controlRadius(widget, visual, tokens.radius.lg);
-    const background = widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface));
+    const background = widgetBackgroundColor(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, washHovered(widget), tokens.colors.surface));
     const shadow_token = tokens.shadow.sm;
     // Only an opaque surface casts a drop shadow: a translucent or
     // fully transparent panel (a dismiss catcher, a tinted wash) has
@@ -688,7 +689,7 @@ pub fn emitPopoverWidgetChrome(builder: *Builder, widget: Widget, tokens: Design
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
-        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface)),
+        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, washHovered(widget), tokens.colors.surface)),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 3),
@@ -721,7 +722,7 @@ pub fn emitMenuSurfaceWidgetChrome(builder: *Builder, widget: Widget, tokens: De
         .id = widgetPartId(widget.id, 2),
         .rect = widget.frame,
         .radius = radius,
-        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, widget.state.hovered, tokens.colors.surface)),
+        .fill = widgetBackgroundFill(widget, buttonStateBackground(visual, widget.state.pressed or widget.state.selected, washHovered(widget), tokens.colors.surface)),
     });
     try builder.strokeRect(.{
         .id = widgetPartId(widget.id, 3),

@@ -376,6 +376,16 @@ pub const WidgetStyle = struct {
     focus_ring: ?Color = null,
     radius: ?f32 = null,
     stroke_width: ?f32 = null,
+    /// The quiet-surface knob: `true` removes this widget's HOVER wash —
+    /// the pointer resting on it paints no fill. For image-forward
+    /// content surfaces (a cover-art tile, a photo card) where the
+    /// pointer rests on content rather than a control register; acting
+    /// controls (list rows, menu items, buttons, tab triggers) keep
+    /// their washes — there the hover fill IS the affordance. Only the
+    /// hover channel of the state-fill ladder goes quiet: press and
+    /// selection fills, the focus ring, cursor intent, and hit testing
+    /// resolve on their own channels and stay exactly as they were.
+    quiet_hover: bool = false,
 };
 
 pub const WidgetVariant = enum {

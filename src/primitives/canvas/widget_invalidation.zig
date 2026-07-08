@@ -706,7 +706,8 @@ fn widgetStylesEqual(a: WidgetStyle, b: WidgetStyle) bool {
         optionalColorsEqual(a.border, b.border) and
         optionalColorsEqual(a.focus_ring, b.focus_ring) and
         optionalF32Equal(a.radius, b.radius) and
-        optionalF32Equal(a.stroke_width, b.stroke_width);
+        optionalF32Equal(a.stroke_width, b.stroke_width) and
+        a.quiet_hover == b.quiet_hover;
 }
 
 fn widgetSemanticsEqual(a: WidgetSemantics, b: WidgetSemantics) bool {

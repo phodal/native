@@ -1900,6 +1900,19 @@ test "the mobile entry is independent of the desktop window constants" {
     // desktop-shaped frame flashed onto a 390pt surface.
     const model = main.initModel();
     try testing.expectEqual(model_mod.FormFactor.compact, model.formFactor());
+
+    // The streaming track cache is wired at the mobile boot exactly like
+    // the desktop launch: `initModel` resolves the platform cache
+    // directory once (env-driven through libc — the embed entry has no
+    // `std.process.Init`), so `fx.playAudio` carries a real cache_path
+    // on phones and a streamed track downloads once, not on every play.
+    // A libc-less test build has no environment to read; there the boot
+    // honestly leaves the cache disabled and this pins that instead.
+    if (comptime @import("builtin").link_libc) {
+        try testing.expect(model.cacheDir().len > 0);
+    } else {
+        try testing.expectEqual(@as(usize, 0), model.cacheDir().len);
+    }
 }
 
 test "the shell switches at the boundary width through the live resize path" {

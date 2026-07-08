@@ -17,6 +17,7 @@
 //! both shells.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const runner = @import("runner");
 const native_sdk = @import("native_sdk");
 
@@ -296,7 +297,77 @@ pub fn initModel() Model {
     // before any view builds (registration is idempotent — one static
     // table — so the test harness's own install never conflicts).
     registerIcons();
-    return .{ .canvas_width = model_mod.compact_seed_canvas_width };
+    var model: Model = .{ .canvas_width = model_mod.compact_seed_canvas_width };
+    // Streaming configuration, resolved once at boot exactly like the
+    // desktop main() below — replay's deterministic-init contract holds
+    // on phones too: no env read ever happens inside update. Without
+    // this, every `fx.playAudio` would carry an empty cache_path and a
+    // streamed track would re-download on every single play; with it,
+    // the platform cache-fill installs the verified bytes under the
+    // resolved directory's audio/ child and the next play is local.
+    if (embedEnvValue("NATIVE_SDK_MUSIC_URL_BASE")) |base| model.setUrlBase(base);
+    var cache_dir_buffer: [model_mod.max_cache_dir]u8 = undefined;
+    const cache_dir = native_sdk.app_dirs.resolveOne(
+        .{ .name = "soundboard" },
+        native_sdk.app_dirs.currentPlatform(),
+        embedEnv(),
+        .cache,
+        &cache_dir_buffer,
+    ) catch "";
+    model.setCacheDir(cache_dir);
+    return model;
+}
+
+/// The embed entry's environment for directory resolution: there is no
+/// `std.process.Init` on this path (the host library calls `initModel()`
+/// directly), so instead of `native_sdk.debug.envFromMap` over an owned
+/// env map the values come from the process environment through libc.
+/// Both phone platforms publish the app's directory namespace there
+/// before any app code runs — iOS processes get HOME (the sandbox
+/// container root) and TMPDIR from the OS itself, and the toolkit's
+/// Android host exports HOME (the app data directory) and TMPDIR (its
+/// cache/ child) in its activity's onCreate — and HOME/TMPDIR are the
+/// only keys the phone resolvers read, so the desktop-only keys stay
+/// null. A build that cannot reach `getenv` (see `embed_env_readable`)
+/// has no environment to read: resolution fails honestly and the cache
+/// stays disabled ("" — streaming still plays, each play just
+/// re-downloads).
+fn embedEnv() native_sdk.app_dirs.Env {
+    return .{
+        .home = embedEnvValue("HOME"),
+        .tmpdir = embedEnvValue("TMPDIR"),
+    };
+}
+
+/// Whether this compilation can emit a `getenv` call at all. The embed
+/// static library declares no libc of its own (the Android slice
+/// cross-compiles pure-Zig, without an NDK sysroot, so `std.c` symbols
+/// are refused at compile time and `link_libc` is false) — but on the
+/// phone targets the enclosing host process always links the system C
+/// runtime (iOS apps link it unconditionally; the Android static lib
+/// lands inside the host .so, which links bionic), so a plain extern
+/// reference below resolves at the host link and the read is safe.
+/// Everywhere else the call is emitted only when libc is actually
+/// linked, so a libc-less desktop test build still links.
+const embed_env_readable = builtin.link_libc or
+    builtin.os.tag == .ios or
+    (@hasField(@TypeOf(builtin.abi), "android") and builtin.abi == .android);
+
+/// libc's environment lookup, declared as a bare external symbol (not
+/// through `std.c`, whose declarations demand a declared libc
+/// dependency): the symbol stays unreferenced unless
+/// `embed_env_readable` holds, and where it holds the final link always
+/// carries the C runtime that defines it.
+extern fn getenv(name: [*:0]const u8) ?[*:0]u8;
+
+/// One env read on the embed path (gated, see `embed_env_readable`). A
+/// set but empty value comes back as "" — exactly what an env map's
+/// `get` reports — so set-empty semantics (an empty URL base disables
+/// streaming) match the desktop launch path.
+fn embedEnvValue(name: [*:0]const u8) ?[]const u8 {
+    if (comptime !embed_env_readable) return null;
+    const value = getenv(name) orelse return null;
+    return std.mem.span(value);
 }
 
 pub fn mobileOptions() SoundboardApp.Options {

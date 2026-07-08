@@ -4,10 +4,10 @@ import { Fragment, useRef, useState } from "react";
 import { npmCli } from "@/lib/site";
 
 // The hero install block: a two-tab audience toggle above one pill-shaped
-// command line. Humans install the CLI; agents load the core skill it serves.
+// command line. Humans install the CLI; agents add the skill.
 const tabs = [
   { id: "humans", label: "For humans", command: `npm install -g ${npmCli}` },
-  { id: "agents", label: "For agents", command: "native skills get core" },
+  { id: "agents", label: "For agents", command: "npx skills add vercel-labs/native" },
 ] as const;
 
 type TabId = (typeof tabs)[number]["id"];

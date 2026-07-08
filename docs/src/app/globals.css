@@ -494,29 +494,3 @@ article dl code {
 button {
   cursor: pointer;
 }
-
-/* Homepage hero pointer highlight: a barely-there neutral bloom that follows
-   the cursor. Only exists for hover-capable pointers with no reduced-motion
-   preference; invisible in screenshots, alive under the mouse. */
-.hero-pointer {
-  display: none;
-}
-
-@media (hover: hover) and (prefers-reduced-motion: no-preference) {
-  .hero-pointer {
-    display: block;
-    background: radial-gradient(
-      22rem circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
-      rgba(0, 0, 0, 0.035),
-      transparent 70%
-    );
-  }
-
-  .dark .hero-pointer {
-    background: radial-gradient(
-      22rem circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
-      rgba(255, 255, 255, 0.05),
-      transparent 70%
-    );
-  }
-}

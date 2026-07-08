@@ -4,7 +4,6 @@ import { Code } from "@/components/code";
 import { Showcase } from "@/components/home/showcase";
 import { InstallToggle } from "@/components/home/install-toggle";
 import { HeroWindow } from "@/components/home/hero-window";
-import { HeroPointer } from "@/components/home/hero-pointer";
 import { githubUrl, siteName } from "@/lib/site";
 
 // ---------------------------------------------------------------- samples
@@ -254,7 +253,6 @@ export default function HomePage() {
     <div>
       {/* Hero */}
       <section className="relative overflow-hidden">
-        <HeroPointer />
         <div className="relative mx-auto max-w-[1200px] px-6 pt-16 text-center sm:pt-24">
           <p className="font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-gray-900 sm:text-xs sm:tracking-[0.25em]">
             macOS · Linux · Windows · iOS · Android

@@ -17,9 +17,11 @@
 #
 # Every copy is stripped of ALL source metadata (-map_metadata -1 plus
 # -map 0:a to drop the embedded cover-art stream) and retagged with exactly
-# four fields: title, artist, album, date. The script verifies each output
-# with ffprobe and fails loudly if any other tag survives, so no string
-# from the source files' tooling can leak into the prepared assets.
+# five fields: title, artist, album, date, track (the track's 1-based
+# position in its album's deterministic order, matching the manifest).
+# The script verifies each output with ffprobe and fails loudly if any
+# other tag survives, so no string from the source files' tooling can
+# leak into the prepared assets.
 #
 # Determinism: album splits, track order, and album years all derive from
 # SEED below via md5 — no shell RNG — so re-runs are byte-stable. Changing
@@ -156,20 +158,21 @@ tracks_for_album() {
 # output's self-reported duration is an estimate, so the manifest duration
 # is measured from the source file, whose header is still intact.
 prepare_track() {
-    local src="$1" dst="$2" title="$3" artist="$4" album="$5" year="$6"
+    local src="$1" dst="$2" title="$3" artist="$4" album="$5" year="$6" track_no="$7"
 
     "$FFMPEG" -y -v error -i "$src" -map 0:a -c:a copy \
         -map_metadata -1 -map_metadata:s:a -1 -bitexact -write_xing 0 \
         -metadata "title=$title" -metadata "artist=$artist" \
-        -metadata "album=$album" -metadata "date=$year" "$dst"
+        -metadata "album=$album" -metadata "date=$year" \
+        -metadata "track=$track_no" "$dst"
 
-    # Honesty check: the output must carry EXACTLY the four intended tags
+    # Honesty check: the output must carry EXACTLY the five intended tags
     # with the intended values, no stream tags, and a single audio stream
     # (no leftover cover art). Anything else means source metadata leaked.
     local got want
     got="$("$FFPROBE" -v error -show_entries format_tags -of flat=s=_ "$dst" | LC_ALL=C sort)"
-    want="$(printf 'format_tags_album="%s"\nformat_tags_artist="%s"\nformat_tags_date="%s"\nformat_tags_title="%s"\n' \
-        "$album" "$artist" "$year" "$title" | LC_ALL=C sort)"
+    want="$(printf 'format_tags_album="%s"\nformat_tags_artist="%s"\nformat_tags_date="%s"\nformat_tags_title="%s"\nformat_tags_track="%s"\n' \
+        "$album" "$artist" "$year" "$title" "$track_no" | LC_ALL=C sort)"
     if [ "$got" != "$want" ]; then
         echo "error: unexpected metadata survived in $dst:" >&2
         diff <(echo "$want") <(echo "$got") >&2 || true
@@ -233,14 +236,16 @@ for entry in "${CATALOG[@]}"; do
     fi
 
     tracks_zon=""
+    track_no=0
     while IFS= read -r file; do
         [ -n "$file" ] || continue
+        track_no=$((track_no + 1))
         title="${file%.mp3}"
         track_slug="$(slug_of "$title")"
         dst_rel="music/$album_slug/$track_slug.mp3"
         mkdir -p "$OUT_ROOT/$album_slug"
         read -r duration_ms track_bytes <<< "$(prepare_track "$SRC_ROOT/$folder/$file" "$OUT_ROOT/$album_slug/$track_slug.mp3" \
-            "$title" "$artist" "$album" "$year")"
+            "$title" "$artist" "$album" "$year" "$track_no")"
         tracks_zon+="$(printf '                .{ .title = "%s", .file = "%s", .duration_ms = %s, .bytes = %s },' \
             "$(zon_escape "$title")" "$(zon_escape "$dst_rel")" "$duration_ms" "$track_bytes")"$'\n'
         total_tracks=$((total_tracks + 1))

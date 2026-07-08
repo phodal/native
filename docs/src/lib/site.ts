@@ -19,4 +19,4 @@ export const tagline = "The Complete Toolkit for Native Apps";
 
 /** The one-sentence description used in metadata. */
 export const description =
-  "Native SDK is the complete toolkit for building beautiful native desktop and mobile applications: declarative markup, a predictable message-based state model, a modern component library, and its own native renderer — no browser, no WebView, no compromise.";
+  "Native SDK is the complete toolkit for building beautiful native desktop applications: declarative markup, a predictable message-based state model, a modern component library, and its own native renderer — no browser, no WebView, no compromise.";

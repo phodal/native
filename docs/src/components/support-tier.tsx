@@ -93,6 +93,22 @@ export function Tier({ tier, note, fn }: { tier: SupportTier; note?: string; fn?
   );
 }
 
+/**
+ * Column-level maturity badge for experimental platforms. Cell tiers state
+ * what works; this badge states how settled the platform experience is —
+ * verified on the simulator/emulator, with APIs and tooling still evolving.
+ */
+export function Experimental() {
+  return (
+    <span
+      title="Experimental: verified on the simulator/emulator; APIs and tooling may still change — desktop is the mature surface"
+      className="inline-block rounded border border-amber-400 px-1 py-px align-[1px] text-[9px] font-medium uppercase tracking-wider text-amber-900"
+    >
+      Experimental
+    </span>
+  );
+}
+
 /** The legend mapping each mark to its meaning, shown above the matrix. */
 export function TierLegend() {
   const entries: { tier: SupportTier; text: ReactNode }[] = [
@@ -112,6 +128,13 @@ export function TierLegend() {
           <span>{text}</span>
         </li>
       ))}
+      <li className="flex items-center gap-2 pl-0 text-neutral-600 dark:text-neutral-400">
+        <Experimental />
+        <span>
+          Platform is experimental — verified on the simulator/emulator; APIs and tooling may
+          still change
+        </span>
+      </li>
     </ul>
   );
 }

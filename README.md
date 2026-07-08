@@ -1,6 +1,6 @@
 # Native SDK
 
-**Native SDK is the complete toolkit for building native desktop and mobile applications.**
+**Native SDK is the complete toolkit for building native desktop applications.**
 
 Native SDK exists because expressive UI and native performance should not be competing goals. Developers often choose web-based runtimes because they offer freedom, speed and control over the product experience. But that freedom often comes with a heavy runtime. Native SDK keeps the expressive authoring model and replaces the runtime with native rendering.
 
@@ -105,7 +105,7 @@ The full catalog in [examples/README.md](./examples/README.md) also covers guard
 
 ## Platforms
 
-macOS is the primary development platform and carries the deepest support: Metal presentation, OS scroll physics, native context menus, app menus, tray, and dialogs. Linux runs the full showcase through the deterministic software renderer in real windows, with pointer, keyboard, scroll, IME composition, and HiDPI; Windows runs on a Win32 host with IME composition and is exercised in CI, including real input injection. iOS is simulator-proven through the embed library, Android cross-compiles with the full embed ABI, and WebView surfaces coexist on every desktop platform. The [platform support matrix](https://zero-native.dev/platform-support) documents exactly what each host supports today.
+macOS is the primary development platform and carries the deepest support: Metal presentation, OS scroll physics, native context menus, app menus, tray, and dialogs. Linux runs the full showcase through the deterministic software renderer in real windows, with pointer, keyboard, scroll, IME composition, and HiDPI; Windows runs on a Win32 host with IME composition and is exercised in CI, including real input injection. Mobile support is experimental: iOS is simulator-proven through the embed library and Android cross-compiles with the full embed ABI, but APIs and tooling on both are still evolving — desktop is the mature surface. WebView surfaces coexist on every desktop platform. The [platform support matrix](https://zero-native.dev/platform-support) documents exactly what each host supports today.
 
 ## Documentation
 

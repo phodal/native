@@ -337,8 +337,8 @@ fn usage() void {
         \\commands:
         \\  init [path] [--frontend <native|next|vite|react|svelte|vue>] [--framework <sdk path>] [--full]   (default: native)
         \\  dev [dir] [--yes] [-D... zig build flags]      build a Debug binary and run it (markup hot reload)
-        \\  dev [dir] --target ios [--device name]         build for the iOS simulator, install + launch, stream the log
-        \\  dev [dir] --target android [--device name]     build a debug APK, install + launch on an emulator via adb, stream the log
+        \\  dev [dir] --target ios [--device name]         build for the iOS simulator, install + launch, stream the log (experimental)
+        \\  dev [dir] --target android [--device name]     build a debug APK, install + launch on an emulator via adb, stream the log (experimental)
         \\  build [dir] [--yes] [-D... zig build flags]    build a ReleaseFast binary into zig-out/bin/
         \\  test [dir] [--yes] [-D... zig build flags]     run the app's test suite
         \\  check [dir] [--strict]                         validate src/*.native markup and app.zon (uses zig-out/model-contract.zon when fresh)

@@ -1,12 +1,12 @@
-import { Tier, TierLegend } from "@/components/support-tier";
+import { Experimental, Tier, TierLegend } from "@/components/support-tier";
 
 # Platform Support
 
-Native SDK is the complete toolkit for building native desktop and mobile applications — one runtime model, with native affordances landing per platform. This page states exactly what each platform gets today, at what tier, with the caveats attached. Unsupported operations return explicit runtime errors instead of pretending every host can do the same thing.
+Native SDK is the complete toolkit for building native desktop applications, with experimental mobile support riding the same runtime — one runtime model, with native affordances landing per platform. This page states exactly what each platform gets today, at what tier, with the caveats attached. Unsupported operations return explicit runtime errors instead of pretending every host can do the same thing.
 
 ## Support Matrix
 
-macOS, Linux, and Windows run full desktop apps through their own platform hosts. iOS and Android canvas apps are host-tier: the toolkit owns the entire mobile application — `native dev --target ios|android` and `native package --target ios|android` build and generate the platform host from app.zon, and your project carries zero host code. Embedding in a host app you own remains first-class on both mobile platforms — see [Mobile](#mobile) below.
+macOS, Linux, and Windows run full desktop apps through their own platform hosts. Mobile is experimental — the marked columns are verified on the simulator and emulator, but APIs and tooling there may still change, and desktop is the mature surface. iOS and Android canvas apps are host-tier: the toolkit owns the entire mobile application — `native dev --target ios|android` and `native package --target ios|android` build and generate the platform host from app.zon, and your project carries zero host code. Embedding in a host app you own works on both mobile platforms and shares the same experimental status — see [Mobile](#mobile) below.
 
 <TierLegend />
 
@@ -17,8 +17,8 @@ macOS, Linux, and Windows run full desktop apps through their own platform hosts
       <th>macOS</th>
       <th>Windows</th>
       <th>Linux</th>
-      <th>iOS</th>
-      <th>Android</th>
+      <th>iOS <Experimental /></th>
+      <th>Android <Experimental /></th>
     </tr>
   </thead>
   <tbody>
@@ -97,7 +97,7 @@ macOS, Linux, and Windows run full desktop apps through their own platform hosts
   </tbody>
 </table>
 
-1. iOS and Android canvas apps run full screen inside toolkit-owned hosts, which the SDK builds ON the [embed C ABI](/embed) — `native dev` and `native package` with `--target ios|android` generate everything from app.zon, so the app project carries zero host code. Multi-window scenes are desktop-only. Embedding the runtime in a host app you control, driven over the same embed C ABI, remains first-class on both platforms.
+1. iOS and Android canvas apps run full screen inside toolkit-owned hosts, which the SDK builds ON the [embed C ABI](/embed) — `native dev` and `native package` with `--target ios|android` generate everything from app.zon, so the app project carries zero host code. Multi-window scenes are desktop-only. Embedding the runtime in a host app you control, driven over the same embed C ABI, works on both platforms and shares the mobile experimental status.
 2. macOS presents through Metal and hands scrolling to OS scroll drivers. Linux and Windows present the deterministic software renderer through the platform blit path and report `backend=software`; a manifest that requests another backend falls back to software there instead of erroring. The iOS toolkit host reads the software renderer's pixels over the ABI and presents them through Metal with the macOS host's presentation discipline — presents are gated on the canvas revision (an idle app acquires no drawables and uploads nothing), the drawable is acquired only after the frame's CPU work is done, and the pump pauses in the background and re-presents the retained canvas on return; the Android toolkit host copies the same pixels into its surface's window buffer (mobile GPU rendering is a later phase); embed hosts present the pixels in their own surfaces.
 3. Windows maps native IME composition onto the shared IME events, with real-hardware IME verification still pending. The iOS toolkit host forwards touch, the system keyboard, and IME composition, verified with real injected input on the simulator; the Android toolkit host forwards touch, shows and hides the soft keyboard from the runtime's focus state, and routes committed text and IME composition through the same embed IME events, verified with injected input on the emulator.
 4. App menus are native on all three desktops. Hosts without a native context-menu presenter — Linux and Windows today — present the same declared context menu as an anchored canvas surface; authors declare one menu either way.
@@ -317,6 +317,8 @@ Chromium builds are currently enabled on macOS only. Linux and Windows Chromium 
 
 ## Mobile
 
+<Experimental /> Mobile support is experimental — the host tier and the embedding path alike. Everything below is real and verified — iOS on the simulator, Android on the emulator — but the APIs and tooling on these platforms may still change, and desktop is the mature surface. The label describes maturity: what each platform does today is stated exactly.
+
 ### The iOS host tier
 
 iOS canvas apps ship without you ever opening Xcode as an editor: the toolkit owns the entire iOS application, built on the same embed C ABI that standalone embedding uses. `native dev --target ios` builds the app's embed static library for the simulator, wraps it in the SDK's UIKit host — a full-screen canvas surface view with touch/keyboard/IME forwarding, CoreText text measurement, and safe-area reporting — installs and launches it via `simctl`, and streams the app log to your terminal. `native package --target ios` emits a complete, deterministic Xcode project around the same host (generated Info.plist, asset catalog from the single-source icon pipeline, shared scheme, device-slice library) that `xcodebuild archive` builds with zero edits; code signing stays a manual step, like macOS notarization.
@@ -331,7 +333,7 @@ Display-cutout and system-bar insets ride the same `on_chrome` window-chrome cha
 
 ### Embedded hosts
 
-Embedding remains first-class on both mobile platforms. The mobile examples own native header/navigation layout in UIKit or Android views, embed a `WKWebView` or Android `WebView` as the workspace, and drive the Native SDK through the C/JNI lifecycle, activation, resize, and command calls documented in [Embedded App](/embed).
+Embedding works on both mobile platforms and carries the same experimental status as the rest of the mobile experience. The mobile examples own native header/navigation layout in UIKit or Android views, embed a `WKWebView` or Android `WebView` as the workspace, and drive the Native SDK through the C/JNI lifecycle, activation, resize, and command calls documented in [Embedded App](/embed).
 
 <table>
   <thead>

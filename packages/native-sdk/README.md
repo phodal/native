@@ -1,6 +1,6 @@
 # @native-sdk/cli
 
-The command line for [Native SDK](https://zero-native.dev): the complete toolkit for building native desktop and mobile applications.
+The command line for [Native SDK](https://zero-native.dev): the complete toolkit for building native desktop applications.
 
 Views are declarative markup in `.native` files, logic is plain Zig, and Native SDK's own engine draws every pixel into real OS windows — no browser, no WebView, no interpreter in the binary.
 

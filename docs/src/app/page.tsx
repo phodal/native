@@ -235,13 +235,13 @@ const platforms = [
   },
   {
     name: "iOS",
-    status: "Simulator-proven",
+    status: "Experimental",
     detail:
       "Apps compile into an embed library and present via CAMetalLayer. Verified on the iOS Simulator; device support is in progress.",
   },
   {
     name: "Android",
-    status: "Compile-proven",
+    status: "Experimental",
     detail:
       "Cross-compiles with the full embed ABI and a NativeActivity shim. On-device runs are not yet verified.",
   },
@@ -265,12 +265,12 @@ export default function HomePage() {
             macOS · Linux · Windows · iOS · Android
           </p>
           <h1 className="mx-auto mt-4 max-w-5xl heading-40 text-gray-1000 sm:heading-64 lg:heading-72">
-            Build beautiful native{" "}
+            Build beautiful{" "}
             <br className="hidden sm:block" />
-            desktop and mobile apps.
+            native desktop apps.
           </h1>
           <p className="mx-auto mt-4 max-w-2xl copy-16 text-gray-900 sm:copy-18">
-            The complete toolkit for building native desktop and mobile applications. Expressive
+            The complete toolkit for building native desktop applications. Expressive
             interfaces, rendered by its own engine into real OS windows. No browser. No WebView.
           </p>
           <div className="mx-auto mt-8 w-full max-w-xs sm:max-w-sm">
@@ -550,8 +550,10 @@ export default function HomePage() {
           <SectionLabel>Cross-platform</SectionLabel>
           <SectionTitle>One SDK, desktop and mobile</SectionTitle>
           <SectionLede>
-            One codebase compiles for macOS, Linux, Windows, iOS, and Android. These statuses
-            describe what ships and is verified today — not a roadmap.
+            One codebase compiles for macOS, Linux, Windows, iOS, and Android. Desktop is the
+            mature surface; mobile is experimental — verified on the simulator and emulator, with
+            APIs and tooling still evolving. These statuses describe what ships and is verified
+            today — not a roadmap.
           </SectionLede>
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {platforms.map((platform) => (

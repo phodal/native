@@ -152,10 +152,17 @@ function InlineCode({ children }: { children: React.ReactNode }) {
 
 // ----------------------------------------------------------------- data
 
-// Verified in this repository: sizes are `ls -lh` of
-// `zig build -Doptimize=ReleaseFast` outputs on macOS arm64; launch is
-// process spawn to first presented frame, warm, via the engine's
-// launch-timing channel (NATIVE_SDK_WINDOW_TIMING).
+// Verified in this repository on macOS arm64 (Apple silicon):
+// - Sizes: fresh release build per app —
+//   `cd examples/<app> && native build && ls -lh zig-out/bin/<app>`;
+//   the largest of the seven showcase apps measures 4.8M unstripped
+//   (4.3M after `strip -x`), so "<6 MB" holds for every binary either way.
+// - Launch: process spawn to the window shown with its first frame present,
+//   warm median of 6 launches per app on an idle box, measured 71-131 ms
+//   across the showcase apps (the ~131 ms outlier carries a known host-side
+//   present-to-shown gap, tracked as an open item). Reproduce per app with
+//   `NATIVE_SDK_WINDOW_TIMING=1 ./zig-out/bin/<app>` and wall-clock the
+//   spawn externally, differencing the printed launch-phase laps.
 const stats = [
   {
     value: "<6 MB",
@@ -163,7 +170,7 @@ const stats = [
   },
   {
     value: "~100 ms",
-    label: "From launch to the first frame on the glass, measured warm on macOS arm64.",
+    label: "From launch to the first frame on the glass — 71–131 ms warm across these apps on macOS arm64.",
   },
   {
     value: "0",

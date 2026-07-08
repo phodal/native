@@ -22,8 +22,12 @@ interface ShowcaseApp {
   stack?: { src: string; alt: string; width: number; height: number }[];
 }
 
-// Every number below is measured from the repository: binary sizes are
-// `ls -lh` of `zig build -Doptimize=ReleaseFast` outputs on macOS arm64.
+// Every number below is measured from the repository on macOS arm64.
+// Binary sizes are stripped release binaries, one method for all seven:
+//   cd examples/<app> && native build && strip -x zig-out/bin/<app> && ls -lh zig-out/bin/<app>
+// (`native build` compiles ReleaseFast; `strip -x` drops local symbols the
+// way a shipped binary would. Unstripped adds ~0.3-0.5 MB per app and every
+// app still lands well under 6 MB either way.)
 const apps: ShowcaseApp[] = [
   {
     id: "markdown-viewer",
@@ -31,7 +35,7 @@ const apps: ShowcaseApp[] = [
     tagline: "A split-pane editor whose preview is native widgets.",
     detail:
       "Headings, tables, task lists, links, and blockquotes on the right are ordinary widgets rendered live from the editor on the left — keystroke for keystroke, with no WebView and no HTML.",
-    facts: [{ label: "Binary", value: "3.5 MB" }],
+    facts: [{ label: "Binary", value: "3.4 MB" }],
     width: 2400,
     height: 1520,
   },
@@ -41,7 +45,7 @@ const apps: ShowcaseApp[] = [
     tagline: "A music library with album art, search, and a live transport.",
     detail:
       "Album covers are PNGs decoded and registered by the engine itself. Playback runs on effect timers, the seek bar mirrors runtime state, and queueing a track is a native context menu.",
-    facts: [{ label: "Binary", value: "5.7 MB" }],
+    facts: [{ label: "Binary", value: "4.3 MB" }],
     width: 2160,
     height: 1440,
   },
@@ -51,7 +55,7 @@ const apps: ShowcaseApp[] = [
     tagline: "Soundboard’s twin, rebuilt as vintage hi-fi rack hardware.",
     detail:
       "The same library, transport, and search in two fixed chromeless windows: a 512×264 enamel player chassis and a playlist rack the PL key docks beneath it. The fascia — cream enamel, recessed screws, smoked-glass bays, seven-segment timecode, a rotary volume knob — is a custom chrome pass over the same widgets, one finish by design.",
-    facts: [{ label: "Binary", value: "4.2 MB" }],
+    facts: [{ label: "Binary", value: "4.3 MB" }],
     width: 1024,
     height: 528,
     darkOnly: true,
@@ -90,7 +94,7 @@ const apps: ShowcaseApp[] = [
     tagline: "Three-pane notes: folders, full-text search, autosave.",
     detail:
       "The list re-sorts by edit time, the first line of a note becomes its title, and everything persists across launches through the same typed file effects the app uses for export.",
-    facts: [{ label: "Binary", value: "3.5 MB" }],
+    facts: [{ label: "Binary", value: "3.4 MB" }],
     width: 2360,
     height: 1520,
   },
@@ -110,7 +114,7 @@ const apps: ShowcaseApp[] = [
     tagline: "Classic immediate-execution arithmetic in a small window.",
     detail:
       "Every keypad face dispatches a typed message, the keyboard routes through real focus and text-input events, and the whole app — engine, widgets, renderer — is one small static binary.",
-    facts: [{ label: "Binary", value: "3.6 MB" }],
+    facts: [{ label: "Binary", value: "3.5 MB" }],
     width: 640,
     height: 980,
     portrait: true,

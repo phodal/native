@@ -117,6 +117,8 @@ extern fn native_sdk_gtk_set_menus(host: *GtkHost, menu_titles: [*]const [*]cons
 extern fn native_sdk_gtk_set_shortcuts(host: *GtkHost, ids: [*]const [*]const u8, id_lens: [*]const usize, keys: [*]const [*]const u8, key_lens: [*]const usize, modifiers: [*]const u32, count: usize) void;
 extern fn native_sdk_gtk_create_window(host: *GtkHost, window_id: u64, window_title: [*]const u8, window_title_len: usize, window_label: [*]const u8, window_label_len: usize, x: f64, y: f64, width: f64, height: f64, restore_frame: c_int, resizable: c_int, titlebar_style: c_int, min_width: f64, min_height: f64) c_int;
 extern fn native_sdk_gtk_start_window_drag(host: *GtkHost, window_id: u64) c_int;
+extern fn native_sdk_gtk_set_window_drag_regions(host: *GtkHost, window_id: u64, label: [*]const u8, label_len: usize, rects: [*]const f64, exclusions: [*]const c_int, count: usize) c_int;
+extern fn native_sdk_gtk_window_chrome(host: *GtkHost, window_id: u64, top: *f64, left: *f64, bottom: *f64, right: *f64, buttons_x: *f64, buttons_y: *f64, buttons_width: *f64, buttons_height: *f64) c_int;
 extern fn native_sdk_gtk_start_timer(host: *GtkHost, timer_id: u64, interval_ns: u64, repeats: c_int) void;
 extern fn native_sdk_gtk_cancel_timer(host: *GtkHost, timer_id: u64) void;
 extern fn native_sdk_gtk_focus_window(host: *GtkHost, window_id: u64) c_int;
@@ -262,6 +264,8 @@ pub const LinuxPlatform = struct {
                 .focus_window_fn = focusWindow,
                 .close_window_fn = closeWindow,
                 .start_window_drag_fn = startWindowDrag,
+                .set_window_drag_regions_fn = setWindowDragRegions,
+                .window_chrome_fn = windowChrome,
                 .create_view_fn = createView,
                 .update_view_fn = updateView,
                 .set_view_frame_fn = setViewFrame,
@@ -703,6 +707,61 @@ fn closeWindow(context: ?*anyopaque, window_id: platform_mod.WindowId) anyerror!
 fn startWindowDrag(context: ?*anyopaque, window_id: platform_mod.WindowId) anyerror!void {
     const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
     if (native_sdk_gtk_start_window_drag(self.host, window_id) == 0) return error.WindowNotFound;
+}
+
+/// Drag-region mirror capacity per push: the runtime's own per-view cap
+/// (`max_canvas_widget_window_drag_regions_per_view` = 32) bounds it in
+/// practice; the flat buffers below are sized for that with headroom.
+const max_drag_region_push: usize = 64;
+
+/// Push the canvas view's window-drag region mirror to the host. The
+/// GTK host consults it at the press gesture — a primary press inside a
+/// region (and outside its press-claiming exclusions) becomes a system
+/// interactive move, with the user's titlebar double-click convention
+/// applied on double press — so markup `window-drag` regions behave
+/// like the window's own titlebar without a round trip into the
+/// runtime.
+fn setWindowDragRegions(context: ?*anyopaque, window_id: platform_mod.WindowId, label: []const u8, regions: []const platform_mod.WindowDragRegion) anyerror!void {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    if (regions.len > max_drag_region_push) return error.WindowLimitReached;
+    var rects: [max_drag_region_push * 4]f64 = undefined;
+    var exclusions: [max_drag_region_push]c_int = undefined;
+    for (regions, 0..) |region, index| {
+        rects[index * 4 + 0] = region.frame.x;
+        rects[index * 4 + 1] = region.frame.y;
+        rects[index * 4 + 2] = region.frame.width;
+        rects[index * 4 + 3] = region.frame.height;
+        exclusions[index] = if (region.exclusion) 1 else 0;
+    }
+    if (native_sdk_gtk_set_window_drag_regions(self.host, window_id, label.ptr, label.len, &rects, &exclusions, regions.len) == 0) return error.ViewNotFound;
+}
+
+/// Chrome overlay geometry for hidden-titlebar windows: the header-bar
+/// band height on top plus the window-control cluster's extent on the
+/// leading or trailing edge — whichever side the user's
+/// gtk-decoration-layout setting put the buttons — and the cluster's
+/// frame in the band's coordinates, all in logical points.
+/// Standard-chrome windows report zero.
+fn windowChrome(context: ?*anyopaque, window_id: platform_mod.WindowId) platform_mod.WindowChrome {
+    const self: *LinuxPlatform = @ptrCast(@alignCast(context.?));
+    var top: f64 = 0;
+    var left: f64 = 0;
+    var bottom: f64 = 0;
+    var right: f64 = 0;
+    var buttons_x: f64 = 0;
+    var buttons_y: f64 = 0;
+    var buttons_width: f64 = 0;
+    var buttons_height: f64 = 0;
+    if (native_sdk_gtk_window_chrome(self.host, window_id, &top, &left, &bottom, &right, &buttons_x, &buttons_y, &buttons_width, &buttons_height) == 0) return .{};
+    return .{
+        .insets = .{
+            .top = @floatCast(top),
+            .left = @floatCast(left),
+            .bottom = @floatCast(bottom),
+            .right = @floatCast(right),
+        },
+        .buttons = geometry.RectF.init(@floatCast(buttons_x), @floatCast(buttons_y), @floatCast(buttons_width), @floatCast(buttons_height)),
+    };
 }
 
 fn startTimer(context: ?*anyopaque, id: u64, interval_ns: u64, repeats: bool) anyerror!void {

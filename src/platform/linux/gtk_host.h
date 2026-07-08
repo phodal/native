@@ -134,9 +134,11 @@ typedef struct {
 } native_sdk_gtk_message_dialog_opts_t;
 
 /* resizable/titlebar_style/min_width/min_height mirror the AppKit host's
- * window options: titlebar_style 0 = standard decorations, >= 1 = the
- * hidden styles (the app draws its own chrome, so the window is created
- * undecorated); min_width/min_height <= 0 leave that axis unfloored. */
+ * window options: titlebar_style 0 = standard decorations, 1 =
+ * hidden_inset, 2 = hidden_inset_tall (the hidden styles create the
+ * window with client-side decorations — a header bar carrying the
+ * desktop-themed window controls and system drag behavior, no title
+ * text); min_width/min_height <= 0 leave that axis unfloored. */
 native_sdk_gtk_host_t *native_sdk_gtk_create(const char *app_name, size_t app_name_len, const char *window_title, size_t window_title_len, const char *bundle_id, size_t bundle_id_len, const char *icon_path, size_t icon_path_len, const char *window_label, size_t window_label_len, double x, double y, double width, double height, int restore_frame, int resizable, int titlebar_style, double min_width, double min_height);
 void native_sdk_gtk_destroy(native_sdk_gtk_host_t *host);
 void native_sdk_gtk_run(native_sdk_gtk_host_t *host, native_sdk_gtk_event_callback_t callback, void *context);
@@ -170,6 +172,23 @@ int native_sdk_gtk_create_window(native_sdk_gtk_host_t *host, uint64_t window_id
  * pointer press (the widget `window_drag` channel). Returns 0 when the
  * window is unknown or no press has been recorded yet. */
 int native_sdk_gtk_start_window_drag(native_sdk_gtk_host_t *host, uint64_t window_id);
+/* Replace a gpu_surface view's window-drag region mirror (the runtime
+ * pushes it after every layout install whose regions changed). Rects
+ * arrive flat as x,y,w,h in the view's logical coordinates; exclusions
+ * mark the press-claiming carve-outs inside a region. The press gesture
+ * consults the mirror so a press inside a region (and outside every
+ * exclusion) begins a system window move instead of a widget press.
+ * Returns 0 when the window or view is unknown. */
+int native_sdk_gtk_set_window_drag_regions(native_sdk_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, const double *rects, const int *exclusions, size_t count);
+/* Chrome geometry for hidden-titlebar (client-side decorated) windows:
+ * the header-bar band height on top, the window-control cluster's
+ * extent on the left or right edge (whichever side the user's
+ * decoration layout put the buttons), and the cluster's frame in the
+ * band's coordinates (top-left origin at the band's top-left corner) —
+ * all logical pixels. Standard-chrome windows and fullscreen (where
+ * the band is hidden) report zero. Returns 0 only when the window is
+ * unknown. */
+int native_sdk_gtk_window_chrome(native_sdk_gtk_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right, double *buttons_x, double *buttons_y, double *buttons_width, double *buttons_height);
 /* App timers on the GLib main loop: starting an id that is already
  * scheduled replaces it; a non-repeating timer drops its slot before
  * emitting so the handler may re-arm the same id. */

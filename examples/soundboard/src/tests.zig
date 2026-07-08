@@ -1790,6 +1790,20 @@ test "chrome geometry pads the header and matches its height to the tall band" {
     try testing.expectEqual(@as(f32, 139), model.chrome_trailing);
     try testing.expectEqual(model_mod.header_natural_height, model.header_height);
 
+    // Linux (GTK client-side decorations) delivers the tall header-bar
+    // band at exactly the 52 floor with the window-control cluster on
+    // whichever edge the user's decoration layout picked — trailing
+    // under the stock layout. The header keeps its natural height and
+    // pads the trailing edge clear of the controls column.
+    const gtk_chrome = main.onChrome(.{
+        .insets = .{ .top = 52, .right = 114 },
+        .buttons = native_sdk.geometry.RectF.init(962, 8, 100, 36),
+    }) orelse return error.TestUnexpectedResult;
+    model_mod.update(&model, gtk_chrome, &fx);
+    try testing.expectEqual(@as(f32, 0), model.chrome_leading);
+    try testing.expectEqual(@as(f32, 114), model.chrome_trailing);
+    try testing.expectEqual(@max(model_mod.header_natural_height, 52), model.header_height);
+
     // Fullscreen zeroes the chrome: the pads collapse and the height
     // falls back to the header's natural floor.
     const cleared = main.onChrome(.{}) orelse return error.TestUnexpectedResult;

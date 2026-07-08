@@ -17,6 +17,13 @@
 #define NATIVE_SDK_MAX_SHORTCUTS 64
 #define NATIVE_SDK_MAX_MENU_ITEMS 128
 
+/* Tall hidden-titlebar band floor in logical pixels: the same 52 the
+ * macOS host's unified-toolbar band settles at, so a toolbar-height app
+ * header meets the same band across platforms. Applied as a size
+ * REQUEST on the header bar — a theme that needs more keeps its own
+ * height; nothing is ever clipped. */
+#define NATIVE_SDK_GTK_TALL_TITLEBAR_PX 52
+
 #define NATIVE_SDK_SHORTCUT_MODIFIER_PRIMARY (1u << 0)
 #define NATIVE_SDK_SHORTCUT_MODIFIER_COMMAND (1u << 1)
 #define NATIVE_SDK_SHORTCUT_MODIFIER_CONTROL (1u << 2)
@@ -58,6 +65,18 @@ typedef struct native_sdk_gtk_menu_action {
     char *command;
     struct native_sdk_gtk_host *host;
 } native_sdk_gtk_menu_action_t;
+
+/* One rectangle of the runtime-pushed window-drag mirror (markup
+ * `window-drag="true"`), in the owning gpu_surface view's logical
+ * coordinates. Exclusions are the press-claiming widgets INSIDE a drag
+ * region — a button in a drag header keeps its press. */
+typedef struct native_sdk_gtk_drag_region {
+    double x;
+    double y;
+    double width;
+    double height;
+    int exclusion;
+} native_sdk_gtk_drag_region_t;
 
 typedef struct native_sdk_gtk_webview {
     char *label;
@@ -127,6 +146,16 @@ typedef struct native_sdk_gtk_native_view {
     double gpu_pointer_y;
     GtkIMContext *gpu_im_context;
     char *gpu_preedit_text;
+    /* Window-drag region mirror (see native_sdk_gtk_drag_region_t),
+     * malloc'd on each runtime push and replaced wholesale. The press
+     * gesture consults it BEFORE emitting pointer_down, so a drag-region
+     * press becomes a system window move the widget pipeline never sees
+     * — the GTK reading of the Win32 host answering WM_NCHITTEST with
+     * HTCAPTION. gpu_drag_claimed_press remembers a claimed press so the
+     * matching release is swallowed too (no orphaned pointer_up). */
+    native_sdk_gtk_drag_region_t *drag_regions;
+    size_t drag_region_count;
+    int gpu_drag_claimed_press;
 } native_sdk_gtk_native_view_t;
 
 typedef struct native_sdk_gtk_app_timer {
@@ -184,6 +213,14 @@ typedef struct native_sdk_gtk_window {
     GtkWidget *root_box;
     GtkWidget *menu_bar;
     GtkWidget *stack_root;
+    /* Client-side decoration state for the hidden titlebar styles: the
+     * GtkHeaderBar installed as the window's titlebar and the two
+     * GtkWindowControls packed at its ends (either may render empty,
+     * depending on which side the user's gtk-decoration-layout puts the
+     * buttons). NULL on .standard windows. */
+    GtkWidget *header_bar;
+    GtkWidget *window_controls_start;
+    GtkWidget *window_controls_end;
     WebKitUserContentManager *content_manager;
     struct native_sdk_gtk_host *host;
     char *label;
@@ -262,6 +299,7 @@ struct native_sdk_gtk_host {
 };
 
 static void native_sdk_emit(native_sdk_gtk_host_t *host, native_sdk_gtk_event_t event);
+static gboolean native_sdk_nudge_chrome_requery(gpointer data);
 static gboolean native_sdk_on_file_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer data);
 static GtkWindow *native_sdk_parent_window(native_sdk_gtk_host_t *host);
 static const char *native_sdk_shortcut_key_for_keyval(guint keyval, char *buffer, size_t buffer_len, int *uses_implicit_shift);
@@ -974,12 +1012,67 @@ static void native_sdk_gpu_surface_draw(GtkDrawingArea *area, cairo_t *cr, int w
     cairo_surface_destroy(surface);
 }
 
+/* Begin the windowing system's interactive move from the window's last
+ * recorded pointer press. Shared by the runtime `window_drag` channel
+ * (native_sdk_gtk_start_window_drag) and the press-time drag-mirror
+ * claim below. */
+static void native_sdk_window_begin_interactive_move(native_sdk_gtk_window_t *win) {
+    if (!win || !win->gtk_window) return;
+    if (!win->last_press_device || win->last_press_time == 0) return;
+    GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win->gtk_window));
+    if (!surface || !GDK_IS_TOPLEVEL(surface)) return;
+    gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), win->last_press_device,
+                            win->last_press_button > 0 ? win->last_press_button : 1,
+                            win->last_press_x, win->last_press_y, win->last_press_time);
+}
+
+/* A double press in a drag region follows the user's titlebar
+ * double-click convention (the gtk-titlebar-double-click setting), the
+ * same way the header bar itself would: toggle-maximize by default,
+ * minimize/lower as configured, none disables it. The maximize variants
+ * all toggle; a non-resizable window never maximizes. */
+static void native_sdk_window_apply_titlebar_double_click(native_sdk_gtk_window_t *win) {
+    if (!win || !win->gtk_window) return;
+    char *configured = NULL;
+    GtkSettings *settings = gtk_settings_get_default();
+    if (settings) g_object_get(settings, "gtk-titlebar-double-click", &configured, NULL);
+    const char *action = configured ? configured : "toggle-maximize";
+    if (strncmp(action, "toggle-maximize", strlen("toggle-maximize")) == 0) {
+        if (gtk_window_is_maximized(win->gtk_window)) {
+            gtk_window_unmaximize(win->gtk_window);
+        } else if (gtk_window_get_resizable(win->gtk_window)) {
+            gtk_window_maximize(win->gtk_window);
+        }
+    } else if (strcmp(action, "minimize") == 0) {
+        gtk_window_minimize(win->gtk_window);
+    } else if (strcmp(action, "lower") == 0) {
+        GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win->gtk_window));
+        if (surface && GDK_IS_TOPLEVEL(surface)) gdk_toplevel_lower(GDK_TOPLEVEL(surface));
+    }
+    g_free(configured);
+}
+
+/* A view-local logical point against the runtime-pushed drag mirror:
+ * inside any exclusion rect -> not draggable (the widget keeps its
+ * press), else inside any region rect -> draggable. */
+static int native_sdk_gpu_point_in_drag_region(const native_sdk_gtk_native_view_t *view, double x, double y) {
+    for (size_t i = 0; i < view->drag_region_count; i++) {
+        const native_sdk_gtk_drag_region_t *rect = &view->drag_regions[i];
+        if (!rect->exclusion) continue;
+        if (x >= rect->x && x < rect->x + rect->width && y >= rect->y && y < rect->y + rect->height) return 0;
+    }
+    for (size_t i = 0; i < view->drag_region_count; i++) {
+        const native_sdk_gtk_drag_region_t *rect = &view->drag_regions[i];
+        if (rect->exclusion) continue;
+        if (x >= rect->x && x < rect->x + rect->width && y >= rect->y && y < rect->y + rect->height) return 1;
+    }
+    return 0;
+}
+
 static void native_sdk_gpu_pointer_pressed(GtkGestureClick *gesture, int n_press, double x, double y, gpointer data) {
-    (void)n_press;
     native_sdk_gtk_native_view_t *view = data;
     if (!view || !view->widget) return;
     gtk_widget_grab_focus(view->widget);
-    view->gpu_pointer_down = 1;
     view->gpu_pointer_x = x;
     view->gpu_pointer_y = y;
     const int button = (int)gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) - 1;
@@ -1001,6 +1094,24 @@ static void native_sdk_gpu_pointer_pressed(GtkGestureClick *gesture, int n_press
         view->window->last_press_x = window_point.x;
         view->window->last_press_y = window_point.y;
     }
+    /* The drag-region mirror is consumed HERE, at the press — the GTK
+     * reading of the Win32 host answering WM_NCHITTEST with HTCAPTION:
+     * a primary press inside a markup `window-drag` region (and outside
+     * its press-claiming exclusions) hands the gesture to the window
+     * before the widget pipeline ever hears about it, so no widget is
+     * left pressed while the compositor owns the pointer. A double
+     * press applies the user's titlebar double-click convention instead
+     * of beginning a move, exactly like the real titlebar. */
+    if (button == 0 && view->window && native_sdk_gpu_point_in_drag_region(view, x, y)) {
+        view->gpu_drag_claimed_press = 1;
+        if (n_press >= 2) {
+            native_sdk_window_apply_titlebar_double_click(view->window);
+        } else {
+            native_sdk_window_begin_interactive_move(view->window);
+        }
+        return;
+    }
+    view->gpu_pointer_down = 1;
     native_sdk_emit_gpu_surface_input(view, NATIVE_SDK_GTK_GPU_INPUT_POINTER_DOWN, x, y, button < 0 ? 0 : button, 0, 0, "", "", modifiers);
 }
 
@@ -1011,6 +1122,12 @@ static void native_sdk_gpu_pointer_released(GtkGestureClick *gesture, int n_pres
     view->gpu_pointer_down = 0;
     view->gpu_pointer_x = x;
     view->gpu_pointer_y = y;
+    /* The matching release of a drag-claimed press: the widget pipeline
+     * never saw the down, so it must not see an orphaned up either. */
+    if (view->gpu_drag_claimed_press) {
+        view->gpu_drag_claimed_press = 0;
+        return;
+    }
     const int button = (int)gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)) - 1;
     const uint32_t modifiers = native_sdk_gpu_modifier_flags(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
     native_sdk_emit_gpu_surface_input(view, NATIVE_SDK_GTK_GPU_INPUT_POINTER_UP, x, y, button < 0 ? 0 : button, 0, 0, "", "", modifiers);
@@ -1365,6 +1482,7 @@ static void native_sdk_clear_native_view(native_sdk_gtk_window_t *win, native_sd
     free(view->accessibility_label);
     free(view->text);
     free(view->command);
+    free(view->drag_regions);
     memset(view, 0, sizeof(*view));
     if (win && win->native_view_count > 0) win->native_view_count--;
 }
@@ -1899,8 +2017,18 @@ static void native_sdk_emit_app_active_if_changed(native_sdk_gtk_host_t *host) {
  * layout runs (hosts with synchronous window creation always report the
  * real initial frame). */
 static void native_sdk_window_content_size(native_sdk_gtk_window_t *win, int *out_width, int *out_height) {
-    int w = gtk_widget_get_width(GTK_WIDGET(win->gtk_window));
-    int h = gtk_widget_get_height(GTK_WIDGET(win->gtk_window));
+    /* The area the runtime lays views into is the window CHILD's
+     * allocation: on hidden-titlebar (client-side decorated) windows
+     * the header bar owns the top band and the child sits below it, so
+     * the window widget's own height would over-report by the bar.
+     * Standard windows allocate the child the full widget, so the two
+     * reads agree there. */
+    int w = win->root_box ? gtk_widget_get_width(win->root_box) : 0;
+    int h = win->root_box ? gtk_widget_get_height(win->root_box) : 0;
+    if (w <= 0 || h <= 0) {
+        w = gtk_widget_get_width(GTK_WIDGET(win->gtk_window));
+        h = gtk_widget_get_height(GTK_WIDGET(win->gtk_window));
+    }
     if (w <= 0 || h <= 0) {
         int default_w = 0, default_h = 0;
         gtk_window_get_default_size(win->gtk_window, &default_w, &default_h);
@@ -1949,12 +2077,57 @@ static void native_sdk_on_appearance_setting_changed(GObject *settings, GParamSp
     native_sdk_emit_appearance((native_sdk_gtk_host_t *)data);
 }
 
+/* The user moved the window buttons (the gtk-decoration-layout
+ * setting): the header-bar control clusters re-fill on the next layout
+ * pass, so nudge every hidden-titlebar canvas with its current
+ * geometry once idle — the runtime re-queries window chrome on every
+ * canvas resize event and dispatches to the app only when the geometry
+ * actually changed. Low priority so the nudge lands after the bar has
+ * re-laid out. */
+static gboolean native_sdk_nudge_chrome_requery(gpointer data) {
+    native_sdk_gtk_host_t *host = data;
+    for (int i = 0; i < host->window_count; i++) {
+        native_sdk_gtk_window_t *win = &host->windows[i];
+        if (!win->gtk_window || !win->header_bar) continue;
+        for (int v = 0; v < NATIVE_SDK_MAX_NATIVE_VIEWS; v++) {
+            native_sdk_gtk_native_view_t *view = &win->native_views[v];
+            if (!view->label || view->kind != NATIVE_SDK_GTK_VIEW_GPU_SURFACE) continue;
+            if (view->gpu_emitted_width <= 0 || view->gpu_emitted_height <= 0) continue;
+            native_sdk_emit(host, (native_sdk_gtk_event_t){
+                .kind = NATIVE_SDK_GTK_EVENT_GPU_SURFACE_RESIZE,
+                .window_id = win->id,
+                .view_label = view->label,
+                .view_label_len = strlen(view->label),
+                .x = view->x,
+                .y = view->y,
+                .width = view->gpu_emitted_width,
+                .height = view->gpu_emitted_height,
+                .scale = view->gpu_emitted_scale,
+                .timestamp_ns = native_sdk_gpu_timestamp_ns(),
+            });
+        }
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void native_sdk_on_decoration_layout_changed(GObject *settings, GParamSpec *pspec, gpointer data) {
+    (void)settings;
+    (void)pspec;
+    g_idle_add_full(G_PRIORITY_LOW, native_sdk_nudge_chrome_requery, data, NULL);
+}
+
+static void native_sdk_on_header_bar_mapped(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    g_idle_add_full(G_PRIORITY_LOW, native_sdk_nudge_chrome_requery, data, NULL);
+}
+
 static void native_sdk_watch_appearance(native_sdk_gtk_host_t *host) {
     GtkSettings *settings = gtk_settings_get_default();
     if (!settings) return;
     g_signal_connect(settings, "notify::gtk-application-prefer-dark-theme", G_CALLBACK(native_sdk_on_appearance_setting_changed), host);
     g_signal_connect(settings, "notify::gtk-theme-name", G_CALLBACK(native_sdk_on_appearance_setting_changed), host);
     g_signal_connect(settings, "notify::gtk-enable-animations", G_CALLBACK(native_sdk_on_appearance_setting_changed), host);
+    g_signal_connect(settings, "notify::gtk-decoration-layout", G_CALLBACK(native_sdk_on_decoration_layout_changed), host);
 }
 
 static void native_sdk_emit_window_frame(native_sdk_gtk_host_t *host, native_sdk_gtk_window_t *win, int open) {
@@ -2326,10 +2499,46 @@ static native_sdk_gtk_window_t *native_sdk_create_window_internal(native_sdk_gtk
     gtk_window_set_title(win->gtk_window, win->title);
     gtk_window_set_default_size(win->gtk_window, (int)width, (int)height);
     gtk_window_set_resizable(win->gtk_window, resizable ? TRUE : FALSE);
-    /* The hidden titlebar styles mean the app draws its own chrome (drag
-     * regions, close affordances); the toolkit equivalent is an
-     * undecorated window. */
-    if (titlebar_style >= 1) gtk_window_set_decorated(win->gtk_window, FALSE);
+    /* The hidden titlebar styles are client-side decorations, never an
+     * undecorated window: a real GtkHeaderBar titlebar keeps the
+     * desktop-themed close/minimize/maximize buttons, the system drag
+     * and double-click conventions, and the compositor's shadows and
+     * resize borders all genuine. The app's canvas stays the full
+     * client area below the bar; the bar carries only the window
+     * controls. */
+    if (titlebar_style >= 1) {
+        GtkWidget *bar = gtk_header_bar_new();
+        /* Explicit GtkWindowControls at both ends instead of the header
+         * bar's built-in title buttons: the same themed clusters GTK
+         * itself would compose, but as addressable children the chrome
+         * channel can measure. Each cluster renders its half of the
+         * user's gtk-decoration-layout setting (the part before the
+         * colon fills the start side, the part after fills the end
+         * side), so button side and order follow the desktop and update
+         * live when the user changes the setting; a side with no
+         * entries renders empty. */
+        gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(bar), FALSE);
+        win->window_controls_start = gtk_window_controls_new(GTK_PACK_START);
+        win->window_controls_end = gtk_window_controls_new(GTK_PACK_END);
+        gtk_header_bar_pack_start(GTK_HEADER_BAR(bar), win->window_controls_start);
+        gtk_header_bar_pack_end(GTK_HEADER_BAR(bar), win->window_controls_end);
+        /* Hidden styles hide the title text (the AppKit host's
+         * NSWindowTitleHidden): the app's own header owns the visible
+         * title. An empty title widget keeps the band's center clear. */
+        gtk_header_bar_set_title_widget(GTK_HEADER_BAR(bar), gtk_label_new(NULL));
+        if (titlebar_style == 2) {
+            gtk_widget_set_size_request(bar, -1, NATIVE_SDK_GTK_TALL_TITLEBAR_PX);
+        }
+        gtk_window_set_titlebar(win->gtk_window, bar);
+        win->header_bar = bar;
+        /* The canvas's first resize can fire in the same layout pass
+         * that allocates the bar, BEFORE the bar has its geometry — the
+         * chrome query answered then carries the band height (a measure)
+         * but no control clusters yet. Nudge a re-query once the bar is
+         * mapped and laid out, the way the AppKit host re-emits resizes
+         * off its settled contentLayoutRect. */
+        g_signal_connect(bar, "map", G_CALLBACK(native_sdk_on_header_bar_mapped), win->host);
+    }
 
     win->content_manager = webkit_user_content_manager_new();
     WebKitWebView *wv = WEBKIT_WEB_VIEW(
@@ -2904,12 +3113,109 @@ int native_sdk_gtk_start_window_drag(native_sdk_gtk_host_t *host, uint64_t windo
     /* No recorded press (synthetic automation input, or a drag request
      * outside any pointer gesture): succeed as a no-op — only an unknown
      * window is an error, matching the AppKit host. */
-    if (!win->last_press_device || win->last_press_time == 0) return 1;
-    GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win->gtk_window));
-    if (!surface || !GDK_IS_TOPLEVEL(surface)) return 1;
-    gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), win->last_press_device,
-                            win->last_press_button > 0 ? win->last_press_button : 1,
-                            win->last_press_x, win->last_press_y, win->last_press_time);
+    native_sdk_window_begin_interactive_move(win);
+    return 1;
+}
+
+int native_sdk_gtk_set_window_drag_regions(native_sdk_gtk_host_t *host, uint64_t window_id, const char *label, size_t label_len, const double *rects, const int *exclusions, size_t count) {
+    if (!host || !label || label_len == 0) return 0;
+    native_sdk_gtk_window_t *win = native_sdk_find_window(host, window_id);
+    if (!win) return 0;
+    char *label_copy = native_sdk_strndup(label, label_len);
+    if (!label_copy) return 0;
+    native_sdk_gtk_native_view_t *view = native_sdk_find_native_view(win, label_copy);
+    free(label_copy);
+    if (!view || view->kind != NATIVE_SDK_GTK_VIEW_GPU_SURFACE) return 0;
+    free(view->drag_regions);
+    view->drag_regions = NULL;
+    view->drag_region_count = 0;
+    if (count == 0) return 1;
+    view->drag_regions = malloc(count * sizeof(*view->drag_regions));
+    if (!view->drag_regions) return 0;
+    for (size_t i = 0; i < count; i++) {
+        view->drag_regions[i].x = rects[i * 4 + 0];
+        view->drag_regions[i].y = rects[i * 4 + 1];
+        view->drag_regions[i].width = rects[i * 4 + 2];
+        view->drag_regions[i].height = rects[i * 4 + 3];
+        view->drag_regions[i].exclusion = exclusions[i];
+    }
+    view->drag_region_count = count;
+    return 1;
+}
+
+/* Chrome geometry for hidden-titlebar (client-side decorated) windows.
+ * Everything is live widget geometry, never a hardcoded pixel count:
+ * the band height is the header bar's allocation (its natural measure
+ * before the first layout pass), and the control insets come from the
+ * two GtkWindowControls clusters, so a theme change or a user flipping
+ * gtk-decoration-layout is reflected on the next query. Side is decided
+ * by MEASURED position, not by pack end — right-to-left locales mirror
+ * the packing, and the inset is a visual-edge fact. The inset formula
+ * mirrors the AppKit host: the cluster's far edge plus the margin the
+ * bar leaves before it, so padded content stays visually symmetric.
+ * The buttons frame is reported in the BAND's coordinates (top-left
+ * origin at the band's top-left): on this toolkit the band sits above
+ * the canvas rather than overlaying it, so the band, not the content,
+ * is the frame the cluster lives in. Fullscreen hides the titlebar and
+ * honestly reports zero; .standard windows report zero always. */
+int native_sdk_gtk_window_chrome(native_sdk_gtk_host_t *host, uint64_t window_id, double *top, double *left, double *bottom, double *right, double *buttons_x, double *buttons_y, double *buttons_width, double *buttons_height) {
+    *top = 0;
+    *left = 0;
+    *bottom = 0;
+    *right = 0;
+    *buttons_x = 0;
+    *buttons_y = 0;
+    *buttons_width = 0;
+    *buttons_height = 0;
+    native_sdk_gtk_window_t *win = native_sdk_find_window(host, window_id);
+    if (!win || !win->gtk_window) return 0;
+    if (!win->header_bar) return 1;
+    if (gtk_window_is_fullscreen(win->gtk_window)) return 1;
+    int bar_height = gtk_widget_get_height(win->header_bar);
+    const int bar_width = gtk_widget_get_width(win->header_bar);
+    if (bar_height <= 0) {
+        int minimum = 0;
+        int natural = 0;
+        gtk_widget_measure(win->header_bar, GTK_ORIENTATION_VERTICAL, -1, &minimum, &natural, NULL, NULL);
+        bar_height = natural > minimum ? natural : minimum;
+    }
+    if (bar_height <= 0) return 1;
+    *top = (double)bar_height;
+    /* Pre-first-allocation there is no measured control geometry yet;
+     * the runtime re-queries chrome on every canvas resize, and the
+     * first real layout pass delivers the clusters. */
+    if (bar_width <= 0) return 1;
+    GtkWidget *clusters[2] = { win->window_controls_start, win->window_controls_end };
+    graphene_rect_t united;
+    int have_cluster = 0;
+    for (int i = 0; i < 2; i++) {
+        GtkWidget *controls = clusters[i];
+        if (!controls || gtk_window_controls_get_empty(GTK_WINDOW_CONTROLS(controls))) continue;
+        graphene_rect_t bounds;
+        if (!gtk_widget_compute_bounds(controls, win->header_bar, &bounds)) continue;
+        if (bounds.size.width <= 0 || bounds.size.height <= 0) continue;
+        const double min_x = bounds.origin.x;
+        const double max_x = bounds.origin.x + bounds.size.width;
+        if ((min_x + max_x) / 2 < (double)bar_width / 2) {
+            const double inset = max_x + min_x;
+            if (inset > *left) *left = inset;
+        } else {
+            const double inset = ((double)bar_width - min_x) + ((double)bar_width - max_x);
+            if (inset > *right) *right = inset;
+        }
+        if (have_cluster) {
+            graphene_rect_union(&united, &bounds, &united);
+        } else {
+            united = bounds;
+            have_cluster = 1;
+        }
+    }
+    if (have_cluster) {
+        *buttons_x = united.origin.x;
+        *buttons_y = united.origin.y;
+        *buttons_width = united.size.width;
+        *buttons_height = united.size.height;
+    }
     return 1;
 }
 

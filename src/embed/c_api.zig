@@ -632,6 +632,75 @@ pub fn MobileCApi(comptime Host: type) type {
             self.last_error = null;
             return 1;
         }
+
+        /// Incremental sibling of `native_sdk_app_render_pixels` for a
+        /// host that keeps `pixels` RETAINED across calls (one buffer,
+        /// one consumer). The fast path copies only the pixels the
+        /// frames since the previous call changed — captured off the
+        /// runtime's own dirty-scissored pixel present, so no second
+        /// raster happens — and `out` reports that region in device
+        /// pixels (an empty damage rect means the buffer already shows
+        /// the current frame; skip the upload). The first call, a
+        /// surface size or scale change, or the absence of a captured
+        /// present fall back to a full render with full damage. The old
+        /// entry keeps its render-every-call contract unchanged.
+        pub fn native_sdk_app_render_pixels_damage(app: ?*anyopaque, scale: f32, pixels: ?[*]u8, pixels_len: usize, out: ?*types.MobileCanvasPixelsDamage) callconv(.c) c_int {
+            const self = hostApp(Host, app) orelse return 0;
+            const output = out orelse {
+                recordError(self, error.InvalidCommand);
+                return 0;
+            };
+            const buffer_ptr = pixels orelse {
+                recordError(self, error.InvalidCommand);
+                return 0;
+            };
+            const effective_scale = renderScale(scale) orelse 1;
+            if (host.deliverPresentedPixels(self, effective_scale, buffer_ptr[0..pixels_len], output)) {
+                // The buffer reflects everything the runtime has
+                // PRESENTED (or planned as no visual change); a change
+                // still waiting for its present reports the old revision
+                // so the host calls again next tick.
+                output.revision = self.embedded.canvasRevisions().presented;
+                self.last_error = null;
+                return 1;
+            }
+            // No matching capture: render the retained scene in full
+            // (exactly the render-every-call sibling) and report the
+            // whole surface damaged. Any pending capture delivery state
+            // is reset so the next fast-path delivery re-syncs with a
+            // full copy rather than trusting a buffer this full render
+            // may have written at another scale.
+            self.presented.delivered_epoch = 0;
+            const allocator = std.heap.page_allocator;
+            const scratch = allocator.alloc(u8, pixels_len) catch |err| {
+                recordError(self, err);
+                return 0;
+            };
+            defer allocator.free(scratch);
+            const screenshot = self.embedded.runtime.renderCanvasScreenshot(
+                1,
+                mobile_gpu_surface_label,
+                renderScale(scale),
+                buffer_ptr[0..pixels_len],
+                scratch,
+            ) catch |err| {
+                recordError(self, err);
+                return 0;
+            };
+            output.* = .{
+                .width = screenshot.width,
+                .height = screenshot.height,
+                .byte_len = screenshot.rgba8.len,
+                .damage_x = 0,
+                .damage_y = 0,
+                .damage_width = screenshot.width,
+                .damage_height = screenshot.height,
+                // The full render painted the CURRENT retained scene.
+                .revision = self.embedded.canvasRevisions().current,
+            };
+            self.last_error = null;
+            return 1;
+        }
     };
 }
 
@@ -685,3 +754,4 @@ pub const native_sdk_app_widget_text_geometry = FixedShellApi.native_sdk_app_wid
 pub const native_sdk_app_widget_action = FixedShellApi.native_sdk_app_widget_action;
 pub const native_sdk_app_render_pixel_size = FixedShellApi.native_sdk_app_render_pixel_size;
 pub const native_sdk_app_render_pixels = FixedShellApi.native_sdk_app_render_pixels;
+pub const native_sdk_app_render_pixels_damage = FixedShellApi.native_sdk_app_render_pixels_damage;

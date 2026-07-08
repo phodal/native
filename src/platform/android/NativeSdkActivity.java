@@ -343,11 +343,14 @@ public final class NativeSdkActivity extends Activity implements SurfaceHolder.C
         if (!surfaceReady) return;
         long revision = nativeCanvasRevision(nativeApp);
         if (!needsPresent && revision >= 0 && hasPresentedRevision && revision == lastCanvasRevision) return;
-        if (nativePresent(nativeApp, density)) {
-            if (revision >= 0) {
-                lastCanvasRevision = revision;
-                hasPresentedRevision = true;
-            }
+        // nativePresent returns the revision the glass now REFLECTS (-1
+        // on failure) - a change whose frame has not presented yet
+        // reports the old revision, keeping the gate open so the next
+        // tick delivers its damage instead of stranding it.
+        long delivered = nativePresent(nativeApp, density);
+        if (delivered >= 0) {
+            lastCanvasRevision = delivered;
+            hasPresentedRevision = true;
             needsPresent = false;
         }
     }
@@ -1349,7 +1352,7 @@ public final class NativeSdkActivity extends Activity implements SurfaceHolder.C
     private native void nativeViewport(long app, float width, float height, float scale, float safeTop, float safeRight, float safeBottom, float safeLeft, float keyboardTop, float keyboardRight, float keyboardBottom, float keyboardLeft);
     private native void nativeFrame(long app);
     private native long nativeCanvasRevision(long app);
-    private native boolean nativePresent(long app, float scale);
+    private native long nativePresent(long app, float scale);
     private native void nativeTouch(long app, long id, int phase, float x, float y, float pressure);
     private native void nativeScroll(long app, long id, float x, float y, float deltaX, float deltaY);
     private native void nativeKey(long app, int phase, String key, int modifiers);

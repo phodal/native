@@ -56,6 +56,26 @@ typedef struct native_sdk_canvas_pixels {
   uintptr_t byte_len;
 } native_sdk_canvas_pixels_t;
 
+// Result of native_sdk_app_render_pixels_damage: the surface dimensions
+// plus the damaged region the call wrote into the caller's RETAINED
+// buffer, in device pixels. damage_width == 0 (or damage_height == 0)
+// means nothing changed since the previous call: the buffer already
+// shows the current frame and the host skips its upload entirely.
+typedef struct native_sdk_canvas_pixels_damage {
+  uintptr_t width;
+  uintptr_t height;
+  uintptr_t byte_len;
+  uintptr_t damage_x;
+  uintptr_t damage_y;
+  uintptr_t damage_width;
+  uintptr_t damage_height;
+  // The retained-canvas revision the buffer now REFLECTS: gate re-renders
+  // on canvas_revision != this value (a change whose frame has not
+  // presented yet reports the OLD revision with empty damage - call again
+  // next tick), never on your own last sighting of canvas_revision.
+  uint64_t revision;
+} native_sdk_canvas_pixels_damage_t;
+
 // Form-factor ordinals accepted by native_sdk_app_set_form_factor.
 enum {
   NATIVE_SDK_FORM_FACTOR_UNKNOWN = 0,
@@ -165,6 +185,13 @@ void native_sdk_app_frame(void *app);
 const char *native_sdk_app_last_error_name(void *app);
 int native_sdk_app_render_pixel_size(void *app, float scale, native_sdk_canvas_pixels_t *out);
 int native_sdk_app_render_pixels(void *app, float scale, uint8_t *pixels, uintptr_t pixels_len, native_sdk_canvas_pixels_t *out);
+// Incremental sibling of native_sdk_app_render_pixels for a host that
+// keeps `pixels` RETAINED across calls (one buffer, one consumer): the
+// fast path copies only the pixels changed since the previous call —
+// captured off the runtime's own dirty-scissored raster, no second
+// render — and reports that region; the first call (and any size or
+// scale change) fills the whole buffer with full damage.
+int native_sdk_app_render_pixels_damage(void *app, float scale, uint8_t *pixels, uintptr_t pixels_len, native_sdk_canvas_pixels_damage_t *out);
 void native_sdk_app_touch(void *app, uint64_t id, int phase, float x, float y, float pressure);
 void native_sdk_app_scroll(void *app, uint64_t id, float x, float y, float delta_x, float delta_y);
 void native_sdk_app_key(void *app, int phase, const char *key, uintptr_t key_len, const char *text, uintptr_t text_len, uint32_t modifiers_mask);

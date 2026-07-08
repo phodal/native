@@ -81,6 +81,7 @@ pub const mobile_export_symbol_names = [_][]const u8{
     "native_sdk_app_widget_action",
     "native_sdk_app_render_pixel_size",
     "native_sdk_app_render_pixels",
+    "native_sdk_app_render_pixels_damage",
 };
 
 pub const MobileSceneOption = enum {

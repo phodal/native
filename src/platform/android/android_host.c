@@ -11,15 +11,20 @@
 //
 // Presentation mirrors the iOS host's raster path (uikit_host.m): the
 // embed host renders the retained scene through the CPU reference
-// renderer (`native_sdk_app_render_pixels`, RGBA8) and this bridge copies
-// those bytes into the SurfaceView's ANativeWindow buffer. The window's
-// buffer format is pinned to RGBA_8888, whose byte order matches the
-// renderer's output exactly, so unlike the Metal path no swizzle is
-// needed — only a row copy that honors the window buffer's stride. The
-// Java side pumps `native_sdk_app_frame` from a Choreographer callback
-// and gates re-renders on the canvas revision from
-// `native_sdk_app_gpu_frame_state`, so unchanged frames cost one ABI
-// call and no copy.
+// renderer into this bridge's RETAINED staging buffer
+// (`native_sdk_app_render_pixels_damage`, RGBA8) — each changed frame
+// rasters only its dirty region embed-side and reports the damaged rect
+// — and this bridge locks the SurfaceView's ANativeWindow with that rect
+// as the dirty region, copying only the rows the lock's (possibly
+// buffer-age-expanded) out-rect requires from the always-current
+// staging. The window's buffer format is pinned to RGBA_8888, whose byte
+// order matches the renderer's output exactly, so unlike the Metal path
+// no swizzle is needed — only row copies that honor the window buffer's
+// stride. The Java side pumps `native_sdk_app_frame` from a
+// Choreographer callback and gates re-renders on the canvas revision
+// from `native_sdk_app_gpu_frame_state`, so unchanged frames cost one
+// ABI call and no copy; a revision bump with no visual change locks and
+// posts nothing.
 //
 // The ANativeWindow is acquired once per surface (surfaceChanged) and
 // released on surfaceDestroyed; the held pointer doubles as the embed
@@ -54,6 +59,13 @@ static struct {
     ANativeWindow *window;
     uint8_t *pixels;
     size_t pixels_capacity;
+    // Dirty-rect post bookkeeping: whether THIS window has received a
+    // post since it was acquired (a fresh window's buffers hold nothing,
+    // so the first post must cover the full surface) and at what
+    // geometry. Reset on surfaceChanged/surfaceDestroyed.
+    int posted_since_acquire;
+    uintptr_t posted_width;
+    uintptr_t posted_height;
     JavaVM *vm;
     jobject activity; // global ref while text measurement is registered
     jmethodID measure_method;
@@ -160,6 +172,7 @@ JNIEXPORT void JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativeSurface
     ANativeWindow *window = surface ? ANativeWindow_fromSurface(env, surface) : NULL;
     if (host_state.window) ANativeWindow_release(host_state.window);
     host_state.window = window;
+    host_state.posted_since_acquire = 0;
 }
 
 JNIEXPORT void JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativeSurfaceDestroyed(JNIEnv *env, jobject self, jlong app) {
@@ -170,6 +183,7 @@ JNIEXPORT void JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativeSurface
         ANativeWindow_release(host_state.window);
         host_state.window = NULL;
     }
+    host_state.posted_since_acquire = 0;
 }
 
 // Report the viewport in density-independent points (the same coordinate
@@ -208,45 +222,101 @@ static int host_ensure_pixel_capacity(size_t byte_len) {
     return host_state.pixels_capacity != 0;
 }
 
-// Render the retained scene at `scale` and copy it into the window
-// buffer. RGBA8 renderer bytes match WINDOW_FORMAT_RGBA_8888 byte order,
-// so the copy is a per-row memcpy honoring the buffer stride.
-JNIEXPORT jboolean JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativePresent(JNIEnv *env, jobject self, jlong app, jfloat scale) {
+// Render the retained scene at `scale` into the RETAINED staging buffer
+// — the embed side copies only the damaged region and names it — then
+// lock the window with that rect as the dirty region and copy the rows
+// the lock's out-rect requires. Returns the revision the glass now
+// reflects (-1 on failure): the Java gate compares the live revision
+// against THIS value, so a present the runtime produces one pump after
+// its change still gets delivered instead of stranding off the glass. RGBA8 renderer bytes match
+// WINDOW_FORMAT_RGBA_8888 byte order, so the copies are per-row memcpys
+// honoring the buffer stride. The lock may EXPAND the dirty rect to
+// cover the dequeued buffer's age (the pool rotates buffers holding
+// older frames); the staging buffer always holds the complete current
+// frame, so every expanded pixel copies from truth.
+JNIEXPORT jlong JNICALL Java_dev_native_1sdk_host_NativeSdkActivity_nativePresent(JNIEnv *env, jobject self, jlong app, jfloat scale) {
     (void)env;
     (void)self;
     ANativeWindow *window = host_state.window;
-    if (!window) return JNI_FALSE;
+    if (!window) return -1;
 
     native_sdk_canvas_pixels_t info;
     memset(&info, 0, sizeof(info));
-    if (!native_sdk_app_render_pixel_size((void *)app, scale, &info)) return JNI_FALSE;
-    if (info.width == 0 || info.height == 0 || info.byte_len != info.width * info.height * 4) return JNI_FALSE;
-    if (!host_ensure_pixel_capacity(info.byte_len)) return JNI_FALSE;
+    if (!native_sdk_app_render_pixel_size((void *)app, scale, &info)) return -1;
+    if (info.width == 0 || info.height == 0 || info.byte_len != info.width * info.height * 4) return -1;
+    if (!host_ensure_pixel_capacity(info.byte_len)) return -1;
 
-    native_sdk_canvas_pixels_t rendered;
+    native_sdk_canvas_pixels_damage_t rendered;
     memset(&rendered, 0, sizeof(rendered));
-    if (!native_sdk_app_render_pixels((void *)app, scale, host_state.pixels, info.byte_len, &rendered)) {
-        host_log_error((void *)app, "render_pixels");
-        return JNI_FALSE;
+    if (!native_sdk_app_render_pixels_damage((void *)app, scale, host_state.pixels, info.byte_len, &rendered)) {
+        host_log_error((void *)app, "render_pixels_damage");
+        return -1;
     }
-    if (rendered.width == 0 || rendered.height == 0 || rendered.byte_len != rendered.width * rendered.height * 4) return JNI_FALSE;
+    if (rendered.width == 0 || rendered.height == 0 || rendered.byte_len != rendered.width * rendered.height * 4) {
+        host_state.posted_since_acquire = 0;
+        return -1;
+    }
+    if (rendered.damage_x + rendered.damage_width > rendered.width ||
+        rendered.damage_y + rendered.damage_height > rendered.height) {
+        host_state.posted_since_acquire = 0;
+        return -1;
+    }
 
-    if (ANativeWindow_setBuffersGeometry(window, (int32_t)rendered.width, (int32_t)rendered.height, WINDOW_FORMAT_RGBA_8888) != 0) return JNI_FALSE;
+    // A fresh window (or a geometry change) needs a full first post; a
+    // steady-state frame with EMPTY damage needs no post at all — the
+    // glass already shows it.
+    const int full_needed = !host_state.posted_since_acquire ||
+        host_state.posted_width != rendered.width ||
+        host_state.posted_height != rendered.height;
+    const int has_damage = rendered.damage_width > 0 && rendered.damage_height > 0;
+    if (!full_needed && !has_damage) return (jlong)rendered.revision;
+
+    // From here on the staging buffer is ahead of the glass (the damage
+    // delivery above already consumed the accumulated region): any
+    // failure before the post forces the NEXT present to cover the full
+    // surface, so a failed lock can never strand delivered damage.
+    host_state.posted_since_acquire = 0;
+    if (ANativeWindow_setBuffersGeometry(window, (int32_t)rendered.width, (int32_t)rendered.height, WINDOW_FORMAT_RGBA_8888) != 0) return -1;
+    ARect dirty;
+    if (full_needed) {
+        dirty.left = 0;
+        dirty.top = 0;
+        dirty.right = (int32_t)rendered.width;
+        dirty.bottom = (int32_t)rendered.height;
+    } else {
+        dirty.left = (int32_t)rendered.damage_x;
+        dirty.top = (int32_t)rendered.damage_y;
+        dirty.right = (int32_t)(rendered.damage_x + rendered.damage_width);
+        dirty.bottom = (int32_t)(rendered.damage_y + rendered.damage_height);
+    }
     ANativeWindow_Buffer buffer;
-    if (ANativeWindow_lock(window, &buffer, NULL) != 0) return JNI_FALSE;
+    if (ANativeWindow_lock(window, &buffer, &dirty) != 0) return -1;
     if ((uintptr_t)buffer.width < rendered.width || (uintptr_t)buffer.height < rendered.height) {
         ANativeWindow_unlockAndPost(window);
-        return JNI_FALSE;
+        return -1;
     }
-    const size_t src_stride = rendered.width * 4;
-    const size_t dst_stride = (size_t)buffer.stride * 4;
-    uint8_t *dst = buffer.bits;
-    const uint8_t *src = host_state.pixels;
-    for (uintptr_t row = 0; row < rendered.height; row++) {
-        memcpy(dst + row * dst_stride, src + row * src_stride, src_stride);
+    // Clamp the (possibly expanded) out-rect to the frame and copy
+    // exactly the rows and columns it names from the staging buffer.
+    if (dirty.left < 0) dirty.left = 0;
+    if (dirty.top < 0) dirty.top = 0;
+    if (dirty.right > (int32_t)rendered.width) dirty.right = (int32_t)rendered.width;
+    if (dirty.bottom > (int32_t)rendered.height) dirty.bottom = (int32_t)rendered.height;
+    if (dirty.right > dirty.left && dirty.bottom > dirty.top) {
+        const size_t src_stride = rendered.width * 4;
+        const size_t dst_stride = (size_t)buffer.stride * 4;
+        const size_t first_byte = (size_t)dirty.left * 4;
+        const size_t span = (size_t)(dirty.right - dirty.left) * 4;
+        uint8_t *dst = buffer.bits;
+        const uint8_t *src = host_state.pixels;
+        for (int32_t row = dirty.top; row < dirty.bottom; row++) {
+            memcpy(dst + (size_t)row * dst_stride + first_byte, src + (size_t)row * src_stride + first_byte, span);
+        }
     }
     ANativeWindow_unlockAndPost(window);
-    return JNI_TRUE;
+    host_state.posted_since_acquire = 1;
+    host_state.posted_width = rendered.width;
+    host_state.posted_height = rendered.height;
+    return (jlong)rendered.revision;
 }
 
 // ------------------------------------------------------------------ input

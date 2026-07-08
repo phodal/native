@@ -321,6 +321,32 @@ pub const MobileCanvasPixels = extern struct {
     byte_len: usize = 0,
 };
 
+/// Result of `native_sdk_app_render_pixels_damage`: the surface
+/// dimensions (identical meaning to `MobileCanvasPixels`) plus the
+/// damaged region this call wrote into the caller's RETAINED buffer, in
+/// device pixels. `damage_width == 0 or damage_height == 0` means
+/// nothing changed since the previous call — the buffer already shows
+/// the current frame and the host skips its upload entirely. A first
+/// call (and any size or scale change) reports the full surface.
+pub const MobileCanvasPixelsDamage = extern struct {
+    width: usize = 0,
+    height: usize = 0,
+    byte_len: usize = 0,
+    damage_x: usize = 0,
+    damage_y: usize = 0,
+    damage_width: usize = 0,
+    damage_height: usize = 0,
+    /// The retained-canvas revision the buffer now REFLECTS. The host's
+    /// re-render gate must compare `native_sdk_app_gpu_frame_state`'s
+    /// `canvas_revision` against THIS value, not against its own last
+    /// sighting: a revision whose frame has not presented yet delivers
+    /// empty damage with the OLD revision, telling the host to call
+    /// again next tick (the runtime presents one frame pump after the
+    /// change that produced it — gating on sightings alone strands that
+    /// present's damage and leaves stale pixels on the glass).
+    revision: u64 = 0,
+};
+
 pub const MobileGpuFrameState = extern struct {
     surface_id: u64 = 0,
     window_id: u64 = 0,

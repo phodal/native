@@ -229,6 +229,213 @@ pub fn setImageService(self: anytype, service: types.MobileImageService, context
     services.decode_image_fn = if (complete) Bridge.decodeImage else null;
 }
 
+// -------------------------------------------------- presented-pixel capture
+//
+// The damage seam behind `native_sdk_app_render_pixels_damage`. The
+// runtime's frame dispatch presents the mobile surface through the CPU
+// pixel path once per changed frame — an INCREMENTAL, dirty-scissored
+// raster into the ui-app's retained pixel buffer (the same machinery the
+// desktop software platforms use). The capture below rides that present:
+// it remembers a borrowed view of the presented buffer plus the damage
+// accumulated since the shim last consumed it, so the ABI call can hand
+// the shim exactly the changed pixels without a second raster. Every
+// changed frame therefore costs ONE dirty-region raster and one
+// damage-region copy — never the full-surface re-render the plain
+// `native_sdk_app_render_pixels` screenshot pays.
+
+/// The platform pixel presenter the capture bridge chains
+/// (`PlatformServices.present_gpu_surface_pixels_fn`'s shape).
+pub const MobilePresentPixelsFn = *const fn (context: ?*anyopaque, pixels: platform.GpuSurfacePixels) anyerror!void;
+
+/// One rectangle in device-pixel units.
+pub const MobilePixelRect = struct {
+    x: usize = 0,
+    y: usize = 0,
+    width: usize = 0,
+    height: usize = 0,
+
+    fn unionWith(self: MobilePixelRect, other: MobilePixelRect) MobilePixelRect {
+        if (self.width == 0 or self.height == 0) return other;
+        if (other.width == 0 or other.height == 0) return self;
+        const min_x = @min(self.x, other.x);
+        const min_y = @min(self.y, other.y);
+        const max_x = @max(self.x + self.width, other.x + other.width);
+        const max_y = @max(self.y + self.height, other.y + other.height);
+        return .{ .x = min_x, .y = min_y, .width = max_x - min_x, .height = max_y - min_y };
+    }
+};
+
+/// Host-owned mirror of the last presented mobile-surface pixels: a
+/// BORROWED view of the runtime's presented buffer (the ui-app owns it;
+/// the slice is refreshed on every capture, and every buffer
+/// reallocation is a surface-size change whose present re-captures
+/// before any ABI read — the embed entry points all run on the shim's
+/// single loop thread), the accumulated damage since the shim's last
+/// `native_sdk_app_render_pixels_damage` delivery, and the delivery
+/// bookkeeping for the shim's single retained buffer.
+pub const MobilePresentedCanvas = struct {
+    pixels: []const u8 = &.{},
+    width: usize = 0,
+    height: usize = 0,
+    scale: f32 = 0,
+    /// Captured presents; 0 = nothing presented yet.
+    epoch: u64 = 0,
+    /// Damage accumulated since the last delivery (device pixels); null
+    /// with `epoch > 0` means no visual change since then.
+    damage: ?MobilePixelRect = null,
+    /// Delivery bookkeeping: which capture epoch (and at what
+    /// dimensions) the shim's retained buffer last received. A zero
+    /// epoch or dimension drift forces the next delivery to copy the
+    /// full surface.
+    delivered_epoch: u64 = 0,
+    delivered_width: usize = 0,
+    delivered_height: usize = 0,
+};
+
+/// The dirty rect's device-pixel coverage, mirroring the reference
+/// renderer's rounding exactly (`referencePixelRect`: floor(min) ..
+/// ceil(max), clipped) so the reported damage covers every pixel the
+/// dirty-scissored raster touched.
+fn mobilePixelRectFromBounds(bounds: geometry.RectF, scale: f32, width: usize, height: usize) ?MobilePixelRect {
+    const normalized = bounds.normalized();
+    if (normalized.isEmpty() or width == 0 or height == 0) return null;
+    const effective_scale = if (!std.math.isFinite(scale) or scale <= 0) 1 else scale;
+    const min_x = @floor(normalized.minX() * effective_scale);
+    const min_y = @floor(normalized.minY() * effective_scale);
+    const max_x = @ceil(normalized.maxX() * effective_scale);
+    const max_y = @ceil(normalized.maxY() * effective_scale);
+    const width_f: f32 = @floatFromInt(width);
+    const height_f: f32 = @floatFromInt(height);
+    const x0: usize = @intFromFloat(std.math.clamp(min_x, 0, width_f));
+    const y0: usize = @intFromFloat(std.math.clamp(min_y, 0, height_f));
+    const x1: usize = @intFromFloat(std.math.clamp(max_x, 0, width_f));
+    const y1: usize = @intFromFloat(std.math.clamp(max_y, 0, height_f));
+    if (x1 <= x0 or y1 <= y0) return null;
+    return .{ .x = x0, .y = y0, .width = x1 - x0, .height = y1 - y0 };
+}
+
+fn mobileFullPixelRect(width: usize, height: usize) MobilePixelRect {
+    return .{ .x = 0, .y = 0, .width = width, .height = height };
+}
+
+/// Record one pixel present into the host's capture state. Dimension or
+/// scale changes reset the delivery bookkeeping (the shim's buffer no
+/// longer matches) and mark the full surface damaged; steady-state
+/// presents union their dirty rect in. A present with no dirty rect is
+/// conservatively a full-surface damage (full repaints report the full
+/// surface as their dirty bounds anyway).
+pub fn recordPresentedPixels(state: *MobilePresentedCanvas, pixels: platform.GpuSurfacePixels) void {
+    const byte_len = pixels.expectedByteLen() orelse return;
+    if (pixels.rgba8.len != byte_len) return;
+    const changed_shape = state.epoch == 0 or
+        state.width != pixels.width or
+        state.height != pixels.height or
+        state.scale != pixels.scale_factor;
+    state.pixels = pixels.rgba8;
+    state.width = pixels.width;
+    state.height = pixels.height;
+    state.scale = pixels.scale_factor;
+    state.epoch += 1;
+    if (changed_shape) {
+        state.damage = mobileFullPixelRect(pixels.width, pixels.height);
+        state.delivered_epoch = 0;
+        return;
+    }
+    const incoming = if (pixels.dirty_bounds) |bounds|
+        mobilePixelRectFromBounds(bounds, pixels.scale_factor, pixels.width, pixels.height) orelse return
+    else
+        mobileFullPixelRect(pixels.width, pixels.height);
+    state.damage = if (state.damage) |current| current.unionWith(incoming) else incoming;
+}
+
+/// Platform-services bridge that chains the platform's own pixel
+/// presenter (the null platform's recording present — nonblank sample,
+/// present counters) and then captures the presented frame for the
+/// damage ABI. Context recovery mirrors the audio bridge: the services
+/// table carries the host's embedded `NullPlatform`, and the host is
+/// recovered from that field.
+fn MobilePresentCaptureBridge(comptime Host: type) type {
+    return struct {
+        fn hostFromContext(context: ?*anyopaque) *Host {
+            const null_platform: *platform.NullPlatform = @ptrCast(@alignCast(context.?));
+            return @alignCast(@fieldParentPtr("null_platform", null_platform));
+        }
+
+        fn presentGpuSurfacePixels(context: ?*anyopaque, pixels: platform.GpuSurfacePixels) anyerror!void {
+            const self = hostFromContext(context);
+            if (self.present_pixels_chain) |chain| try chain(context, pixels);
+            recordPresentedPixels(&self.presented, pixels);
+        }
+    };
+}
+
+/// Wire the presented-pixel capture into the embedded runtime: chain the
+/// platform's pixel presenter behind the capture bridge, drop the packet
+/// presenters (no mobile shim consumes packets, and their presence
+/// forces the pixel path to a FULL repaint every changed frame), opt
+/// the runtime into the pixel-present retained baseline so per-frame
+/// dirty bounds refine to the commands that actually changed, and attach
+/// the host's render memo so heavyweight per-pixel commands replay and
+/// scaled image draws blend from scale-once panels. Call once from the
+/// host's `create`, after the embedded runtime is initialized.
+pub fn installPresentCapture(self: anytype) void {
+    const Host = std.meta.Child(@TypeOf(self));
+    const Bridge = MobilePresentCaptureBridge(Host);
+    const services = &self.embedded.runtime.options.platform.services;
+    self.present_pixels_chain = services.present_gpu_surface_pixels_fn;
+    services.present_gpu_surface_pixels_fn = Bridge.presentGpuSurfacePixels;
+    services.present_gpu_surface_packet_fn = null;
+    services.present_gpu_surface_packet_binary_fn = null;
+    self.embedded.runtime.options.pixel_present_retained_baseline = true;
+    self.render_memo = canvas.ReferenceRenderMemo.init(std.heap.page_allocator);
+    self.embedded.runtime.options.pixel_present_render_memo = &self.render_memo;
+}
+
+/// Deliver the captured present into the shim's RETAINED buffer: copies
+/// only the damage accumulated since the previous delivery (the full
+/// surface when the buffer is out of sync — first call, size or scale
+/// change) and reports the copied region. Returns false when no capture
+/// matches the request (nothing presented yet, scale drift, byte-length
+/// mismatch) — the caller falls back to a full render.
+pub fn deliverPresentedPixels(self: anytype, scale: f32, buffer: []u8, out: *types.MobileCanvasPixelsDamage) bool {
+    const state: *MobilePresentedCanvas = &self.presented;
+    if (state.epoch == 0) return false;
+    if (state.scale != scale) return false;
+    const byte_len = state.width * state.height * 4;
+    if (state.pixels.len != byte_len or buffer.len < byte_len) return false;
+
+    const in_sync = state.delivered_epoch != 0 and
+        state.delivered_width == state.width and
+        state.delivered_height == state.height;
+    const copy_rect: ?MobilePixelRect = if (in_sync) state.damage else mobileFullPixelRect(state.width, state.height);
+    var damage = MobilePixelRect{};
+    if (copy_rect) |rect| {
+        damage = rect;
+        const row_stride = state.width * 4;
+        const first_byte = rect.x * 4;
+        const span = rect.width * 4;
+        var row: usize = 0;
+        while (row < rect.height) : (row += 1) {
+            const offset = (rect.y + row) * row_stride + first_byte;
+            @memcpy(buffer[offset .. offset + span], state.pixels[offset .. offset + span]);
+        }
+    }
+    out.* = .{
+        .width = state.width,
+        .height = state.height,
+        .byte_len = byte_len,
+        .damage_x = damage.x,
+        .damage_y = damage.y,
+        .damage_width = damage.width,
+        .damage_height = damage.height,
+    };
+    state.delivered_epoch = state.epoch;
+    state.delivered_width = state.width;
+    state.delivered_height = state.height;
+    state.damage = null;
+    return true;
+}
+
 pub const EmbeddedApp = struct {
     app: runtime.App,
     runtime: runtime.Runtime,
@@ -350,6 +557,26 @@ pub const EmbeddedApp = struct {
         return self.runtime.gpuSurfaceFrame(1, mobile_gpu_surface_label);
     }
 
+    /// The mobile surface's retained-canvas revisions: `current` is what
+    /// `gpu_frame_state` reports, `presented` is the revision the last
+    /// planned present reflects (it advances at plan time even when a
+    /// change turned out to move no pixels, so a host gating on it
+    /// converges instead of polling forever). Zeros when the view does
+    /// not exist yet.
+    pub const CanvasRevisions = struct {
+        current: u64 = 0,
+        presented: u64 = 0,
+    };
+
+    pub fn canvasRevisions(self: *const EmbeddedApp) CanvasRevisions {
+        for (self.runtime.views[0..self.runtime.view_count]) |*view| {
+            if (!view.open or view.window_id != 1 or view.kind != .gpu_surface) continue;
+            if (!std.mem.eql(u8, view.label, mobile_gpu_surface_label)) continue;
+            return .{ .current = view.canvas_revision, .presented = view.presented_canvas_revision };
+        }
+        return .{};
+    }
+
     pub fn widgetTextGeometry(self: *const EmbeddedApp, id: canvas.ObjectId) anyerror!canvas.WidgetTextGeometry {
         return self.runtime.canvasWidgetTextGeometry(1, mobile_gpu_surface_label, id);
     }
@@ -456,6 +683,13 @@ pub const MobileHostApp = struct {
     /// chrome publish.
     form_factor: platform.FormFactor = .unknown,
     chrome_tabs_projected: bool = false,
+    /// Presented-pixel capture state for the damage ABI. The fixed
+    /// WebView shell presents no gpu-surface pixels, so this stays at
+    /// its empty zero-epoch state and `native_sdk_app_render_pixels_damage`
+    /// answers through the full-render fallback — the same honest error
+    /// path as `native_sdk_app_render_pixels`.
+    presented: MobilePresentedCanvas = .{},
+    present_pixels_chain: ?MobilePresentPixelsFn = null,
     last_command_name: [max_mobile_command_name_bytes + 1]u8 = [_]u8{0} ** (max_mobile_command_name_bytes + 1),
 
     pub fn create() !*MobileHostApp {
@@ -509,6 +743,8 @@ pub const MobileHostApp = struct {
         self.image = .{};
         self.form_factor = .unknown;
         self.chrome_tabs_projected = false;
+        self.presented = .{};
+        self.present_pixels_chain = null;
         self.last_command_name = [_]u8{0} ** (max_mobile_command_name_bytes + 1);
         self.embedded.initInPlace(.{
             .context = self,

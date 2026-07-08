@@ -184,6 +184,12 @@ pub const RuntimeView = struct {
     /// `canvas_limits.max_canvas_retained_packet_commands_per_view`.
     canvas_packet_generation: u64 = 0,
     canvas_packet_baseline_valid: bool = false,
+    /// True when the current baseline was adopted by a PIXEL present
+    /// (`Options.pixel_present_retained_baseline` hosts): the mirror then
+    /// describes what the pixel buffer shows — good for refining dirty
+    /// bounds — but no host retains a command dictionary, so a packet
+    /// patch must never be encoded against it. Packet adoptions clear it.
+    canvas_packet_baseline_pixels: bool = false,
     canvas_packet_baseline_count: usize = 0,
     canvas_packet_baseline_surface_size: geometry.SizeF = geometry.SizeF.init(0, 0),
     canvas_packet_baseline_scale: f32 = 1,

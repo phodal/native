@@ -1549,3 +1549,102 @@ test "reference renderer skips absent images and rejects corrupt ones" {
     const corrupt_surface = (try ReferenceRenderSurface.init(2, 2, &pixels)).withImages(&corrupt);
     try std.testing.expectError(error.ReferenceRenderUnsupportedCommand, corrupt_surface.renderPass(frame.renderPass(), Color.rgb8(0, 0, 0)));
 }
+
+test "reference renderer scale-once image panels replay byte-identical samples at any position with the same phase" {
+    // The scaled-image panel is pure memoization: at integer device
+    // alignment a destination pixel's sample depends only on its offset
+    // inside the destination rect, so the panel must produce the same
+    // bytes as direct sampling — cold, warm, AND after the draw moves to
+    // a different integer position (the position-independence that makes
+    // scrolling grids cheap). Fractional alignment must bypass the panel
+    // entirely, and changed image content must miss.
+    const Scene = struct {
+        fn render(dst: geometry.RectF, images: []const ReferenceImage, pixels: []u8, memo: ?*canvas.ReferenceRenderMemo) !void {
+            const commands = [_]CanvasCommand{.{ .draw_image = .{
+                .id = 1,
+                .image_id = 7,
+                .dst = dst,
+                .fit = .cover,
+                .sampling = .linear,
+                .radius = Radius.all(2),
+            } }};
+            var render_commands: [1]RenderCommand = undefined;
+            const plan = try (DisplayList{ .commands = &commands }).renderPlan(&render_commands);
+            const surface = (try ReferenceRenderSurface.init(32, 32, pixels)).withImages(images).withRenderMemo(memo);
+            try surface.renderPass(.{
+                .surface_size = geometry.SizeF.init(32, 32),
+                .scale = 1,
+                .full_repaint = true,
+                .commands = plan.commands,
+            }, Color.rgb8(9, 12, 20));
+        }
+    };
+
+    var image_pixels: [8 * 8 * 4]u8 = undefined;
+    for (&image_pixels, 0..) |*byte, index| byte.* = @intCast((index * 37 + 11) % 256);
+    for (0..8 * 8) |pixel| image_pixels[pixel * 4 + 3] = 255;
+    const images = [_]ReferenceImage{.{ .id = 7, .width = 8, .height = 8, .pixels = &image_pixels }};
+
+    var memo = canvas.ReferenceRenderMemo.init(std.testing.allocator);
+    defer memo.deinit();
+    // The production threshold skips small draws; the test panel is
+    // tiny, so cache everything.
+    memo.min_pixels = 0;
+
+    var baseline: [32 * 32 * 4]u8 = undefined;
+    var pixels: [32 * 32 * 4]u8 = undefined;
+
+    // Cold panel: one miss, bytes equal the unmemoized render.
+    const first_rect = geometry.RectF.init(2, 3, 16, 16);
+    try Scene.render(first_rect, &images, &baseline, null);
+    try Scene.render(first_rect, &images, &pixels, &memo);
+    try std.testing.expectEqual(@as(u64, 0), memo.image_scale_hits);
+    try std.testing.expectEqual(@as(u64, 1), memo.image_scale_misses);
+    try std.testing.expectEqualSlices(u8, &baseline, &pixels);
+
+    // Warm panel at the same position.
+    try Scene.render(first_rect, &images, &pixels, &memo);
+    try std.testing.expectEqual(@as(u64, 1), memo.image_scale_hits);
+    try std.testing.expectEqualSlices(u8, &baseline, &pixels);
+
+    // Moved to a different INTEGER position: still a hit (the panel is
+    // position-independent), and still byte-identical to the direct
+    // render at the new position.
+    const moved_rect = geometry.RectF.init(11, 9, 16, 16);
+    try Scene.render(moved_rect, &images, &baseline, null);
+    try Scene.render(moved_rect, &images, &pixels, &memo);
+    try std.testing.expectEqual(@as(u64, 2), memo.image_scale_hits);
+    try std.testing.expectEqual(@as(u64, 1), memo.image_scale_misses);
+    try std.testing.expectEqualSlices(u8, &baseline, &pixels);
+
+    // A FRACTIONAL position keys a different subpixel phase: a fresh
+    // panel fills (miss) and its bytes still equal direct sampling.
+    const fractional_rect = geometry.RectF.init(2.5, 3.25, 16, 16);
+    try Scene.render(fractional_rect, &images, &baseline, null);
+    try Scene.render(fractional_rect, &images, &pixels, &memo);
+    try std.testing.expectEqual(@as(u64, 2), memo.image_scale_hits);
+    try std.testing.expectEqual(@as(u64, 2), memo.image_scale_misses);
+    try std.testing.expectEqualSlices(u8, &baseline, &pixels);
+
+    // Moved by WHOLE pixels from the fractional position (same phase):
+    // a hit, byte-identical at the new position.
+    const fractional_moved = geometry.RectF.init(6.5, 8.25, 16, 16);
+    try Scene.render(fractional_moved, &images, &baseline, null);
+    try Scene.render(fractional_moved, &images, &pixels, &memo);
+    try std.testing.expectEqual(@as(u64, 3), memo.image_scale_hits);
+    try std.testing.expectEqual(@as(u64, 2), memo.image_scale_misses);
+    try std.testing.expectEqualSlices(u8, &baseline, &pixels);
+
+    // Changed image content under the same id: the content hash moves,
+    // so the draw misses and matches the direct render of the new
+    // pixels.
+    var changed_pixels: [8 * 8 * 4]u8 = undefined;
+    for (&changed_pixels, 0..) |*byte, index| byte.* = @intCast((index * 53 + 5) % 256);
+    for (0..8 * 8) |pixel| changed_pixels[pixel * 4 + 3] = 255;
+    const changed_images = [_]ReferenceImage{.{ .id = 7, .width = 8, .height = 8, .pixels = &changed_pixels }};
+    try Scene.render(first_rect, &changed_images, &baseline, null);
+    try Scene.render(first_rect, &changed_images, &pixels, &memo);
+    try std.testing.expectEqual(@as(u64, 3), memo.image_scale_hits);
+    try std.testing.expectEqual(@as(u64, 3), memo.image_scale_misses);
+    try std.testing.expectEqualSlices(u8, &baseline, &pixels);
+}

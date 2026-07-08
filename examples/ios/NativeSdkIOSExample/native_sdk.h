@@ -146,6 +146,26 @@ typedef struct native_sdk_canvas_pixels {
   uintptr_t byte_len;
 } native_sdk_canvas_pixels_t;
 
+// Result of native_sdk_app_render_pixels_damage: the surface dimensions
+// plus the damaged region the call wrote into the caller's RETAINED
+// buffer, in device pixels. damage_width == 0 (or damage_height == 0)
+// means nothing changed since the previous call: the buffer already
+// shows the current frame and the host skips its upload entirely.
+typedef struct native_sdk_canvas_pixels_damage {
+  uintptr_t width;
+  uintptr_t height;
+  uintptr_t byte_len;
+  uintptr_t damage_x;
+  uintptr_t damage_y;
+  uintptr_t damage_width;
+  uintptr_t damage_height;
+  // The retained-canvas revision the buffer now REFLECTS: gate re-renders
+  // on canvas_revision != this value (a change whose frame has not
+  // presented yet reports the OLD revision with empty damage - call again
+  // next tick), never on your own last sighting of canvas_revision.
+  uint64_t revision;
+} native_sdk_canvas_pixels_damage_t;
+
 typedef struct native_sdk_text_input_state {
   int active;
   uint64_t widget_id;
@@ -283,3 +303,10 @@ int native_sdk_app_set_text_measure(void *app, native_sdk_text_measure_fn measur
 int native_sdk_app_set_automation_dir(void *app, const char *path, uintptr_t len);
 int native_sdk_app_render_pixel_size(void *app, float scale, native_sdk_canvas_pixels_t *out);
 int native_sdk_app_render_pixels(void *app, float scale, uint8_t *pixels, uintptr_t pixels_len, native_sdk_canvas_pixels_t *out);
+// Incremental sibling of native_sdk_app_render_pixels for a host that
+// keeps `pixels` RETAINED across calls (one buffer, one consumer): the
+// fast path copies only the pixels changed since the previous call —
+// captured off the runtime's own dirty-scissored raster, no second
+// render — and reports that region; the first call (and any size or
+// scale change) fills the whole buffer with full damage.
+int native_sdk_app_render_pixels_damage(void *app, float scale, uint8_t *pixels, uintptr_t pixels_len, native_sdk_canvas_pixels_damage_t *out);

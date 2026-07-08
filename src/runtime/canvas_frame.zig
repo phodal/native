@@ -379,7 +379,7 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 try canvas.ReferenceRenderSurface.initWithScratch(pixel_size.width, pixel_size.height, pixels, scratch)
             else
                 try canvas.ReferenceRenderSurface.init(pixel_size.width, pixel_size.height, pixels);
-            surface = surface.withImages(canvas_frame.image_resources).withFonts(canvas_frame.font_resources);
+            surface = surface.withImages(canvas_frame.image_resources).withFonts(canvas_frame.font_resources).withRenderMemo(self.options.pixel_present_render_memo);
             // Frame-profile `present` stage for the CPU pixel path: the
             // reference raster + the host present call (the software
             // equivalent of the packet host's decode+draw).
@@ -402,10 +402,25 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 // points and the packet-fallback route alike).
                 self.views[index].gpu_present_path = .pixels;
                 recordCanvasPresentInputLatency(&self.views[index]);
-                // Pixels on the glass no longer match the retained
-                // command dictionary (the host drops its copy on pixel
-                // presents too): the next packet present must be FULL.
-                self.views[index].canvas_packet_baseline_valid = false;
+                // Pixels-only hosts that opted in keep the keyed mirror
+                // ALIVE across pixel presents: the buffer now shows this
+                // frame's keyed list, so the next plan refines its dirty
+                // bounds from the key+fingerprint edit script instead of
+                // the summary union (which marks every keyed command
+                // changed on a Msg rebuild). The pixel adoption is marked
+                // so the packet patch gate can never encode against it.
+                var baseline_adopted = false;
+                if (self.options.pixel_present_retained_baseline) {
+                    if (gatherCanvasPacketCurrentCommands(record_frame)) |current| {
+                        adoptCanvasPixelPresentBaseline(&self.views[index], current, record_frame.surface_size, record_frame.scale);
+                        baseline_adopted = true;
+                    }
+                }
+                // Otherwise: pixels on the glass no longer match the
+                // retained command dictionary (the host drops its copy on
+                // pixel presents too) — the next packet present must be
+                // FULL.
+                if (!baseline_adopted) self.views[index].canvas_packet_baseline_valid = false;
                 self.views[index].gpu_present_packet_mode = .none;
                 self.views[index].gpu_present_patch_bytes = 0;
                 self.views[index].gpu_present_patch_upsert_count = 0;
@@ -529,6 +544,10 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                     const current_commands = current orelse break :stats null;
                     const view = &self.views[view_index.?];
                     if (!view.canvas_packet_baseline_valid) break :stats null;
+                    // A baseline a PIXEL present adopted refines dirty
+                    // bounds only — no host retains a dictionary for it,
+                    // so a patch encoded against it would edit nothing.
+                    if (view.canvas_packet_baseline_pixels) break :stats null;
                     if (!sizesEqual(view.canvas_packet_baseline_surface_size, packet.surface_size) or
                         view.canvas_packet_baseline_scale != packet.scale) break :stats null;
                     break :stats computeCanvasPacketPatchStats(view, current_commands);
@@ -1018,7 +1037,10 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 // (a measured ~17 ms of direct-command re-raster on a
                 // 68-command dashboard) where the derived rect costs a
                 // sub-millisecond sort over at most the retained-packet
-                // command budget.
+                // command budget. Pixel-adopted baselines raise the
+                // stakes further: a full-window repaint there means a
+                // full-surface CPU raster AND a full-surface upload, so
+                // refinement must run at any command count.
                 if (canvas_changed and
                     self.views[index].canvas_packet_baseline_valid and
                     sizesEqual(self.views[index].canvas_packet_baseline_surface_size, frame_options.surface_size) and
@@ -1498,14 +1520,29 @@ fn canvasPacketFullBinaryByteSize(
 /// A successful retained present (full or patch) makes `current` the
 /// view's baseline: the engine-side mirror of what the host now retains.
 fn adoptCanvasPacketBaseline(view: anytype, current: []const CanvasPacketCurrentCommand, packet: canvas.CanvasGpuPacket) void {
+    adoptCanvasBaselineEntries(view, current, packet.surface_size, packet.scale);
+    view.canvas_packet_baseline_pixels = false;
+}
+
+/// The pixel-present twin of `adoptCanvasPacketBaseline`
+/// (`Options.pixel_present_retained_baseline` hosts): the mirror now
+/// describes what the presented PIXEL buffer shows. Marked so the packet
+/// patch gate refuses it — only the frame planner's dirty-bounds
+/// refinement may consume a pixel-adopted baseline.
+fn adoptCanvasPixelPresentBaseline(view: anytype, current: []const CanvasPacketCurrentCommand, surface_size: geometry.SizeF, scale: f32) void {
+    adoptCanvasBaselineEntries(view, current, surface_size, scale);
+    view.canvas_packet_baseline_pixels = true;
+}
+
+fn adoptCanvasBaselineEntries(view: anytype, current: []const CanvasPacketCurrentCommand, surface_size: geometry.SizeF, scale: f32) void {
     for (current, 0..) |entry, index| {
         view.canvas_packet_baseline_keys[index] = entry.key;
         view.canvas_packet_baseline_fingerprints[index] = entry.fingerprint;
         view.canvas_packet_baseline_bounds[index] = entry.bounds;
     }
     view.canvas_packet_baseline_count = current.len;
-    view.canvas_packet_baseline_surface_size = packet.surface_size;
-    view.canvas_packet_baseline_scale = packet.scale;
+    view.canvas_packet_baseline_surface_size = surface_size;
+    view.canvas_packet_baseline_scale = scale;
     view.canvas_packet_baseline_valid = true;
 }
 

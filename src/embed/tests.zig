@@ -2264,3 +2264,189 @@ test "declared chrome projection replays deterministically" {
     try std.testing.expectEqualSlices(isize, &selected_a, &selected_b);
     try std.testing.expectEqualDeep(model_a, model_b);
 }
+
+// ------------------------------------------------------- damage render ABI
+//
+// The incremental pixel seam mobile hosts upload from: the runtime's frame
+// dispatch presents changed frames through the dirty-scissored CPU raster
+// (packet presenters dropped, pixel-present retained baseline on — see
+// `host.installPresentCapture`), the host captures each present, and
+// `native_sdk_app_render_pixels_damage` copies only the damaged region
+// into the shim's retained buffer and names it, so a keystroke's upload is
+// the field, not the surface.
+
+const MobileDamageDef = struct {
+    pub const Model = struct {
+        count: u32 = 0,
+    };
+
+    pub const Msg = union(enum) {
+        increment,
+    };
+
+    const App = runtime.UiApp(Model, Msg);
+
+    pub fn initModel() Model {
+        return .{};
+    }
+
+    pub fn mobileOptions() App.Options {
+        return .{
+            .name = "mobile-damage",
+            .scene = ui_host.mobile_shell_scene,
+            .canvas_label = mobile_gpu_surface_label,
+            .update = update,
+            .view = view,
+        };
+    }
+
+    fn update(model: *Model, msg: Msg) void {
+        switch (msg) {
+            .increment => model.count += 1,
+        }
+    }
+
+    fn rowKey(index: *const usize) canvas.UiKey {
+        return canvas.uiKey(@as(u64, index.*));
+    }
+
+    fn rowView(ui: *App.Ui, index: *const usize) App.Ui.Node {
+        return ui.text(.{}, ui.fmt("row {d}", .{index.*}));
+    }
+
+    fn indices(arena: std.mem.Allocator) []const usize {
+        const items = arena.alloc(usize, 20) catch return &.{};
+        for (items, 0..) |*item, item_index| item.* = item_index;
+        return items;
+    }
+
+    fn view(ui: *App.Ui, model: *const Model) App.Ui.Node {
+        // Deliberately UNDER the packet hosts' small-list gate: the
+        // pixel-adopted baseline refines dirty bounds at any command
+        // count (a full window would mean a full raster AND a full
+        // upload on mobile). The CHANGING content is pinned to the top
+        // of the surface so refined damage stays a small band.
+        return ui.column(.{ .gap = 2, .padding = 8 }, .{
+            ui.text(.{}, ui.fmt("Count {d}", .{model.count})),
+            ui.button(.{ .variant = .primary, .on_press = .increment }, "Increment"),
+            ui.column(.{ .gap = 2 }, ui.each(indices(ui.arena), rowKey, rowView)),
+        });
+    }
+};
+
+const MobileDamageHost = ui_host.UiAppHost(MobileDamageDef);
+const MobileDamageApi = c_api.MobileCApi(MobileDamageHost);
+
+fn findDamageSemanticsByRole(app: ?*anyopaque, role: MobileWidgetRole) !MobileWidgetSemantics {
+    const count = MobileDamageApi.native_sdk_app_widget_semantics_count(app);
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        var node: MobileWidgetSemantics = .{};
+        try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_widget_semantics_at(app, index, &node));
+        if (node.role == @intFromEnum(role)) return node;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "mobile damage render copies only changed regions from the presented capture" {
+    const app = MobileDamageApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileDamageApi.native_sdk_app_destroy(app);
+    const self: *MobileDamageHost = @ptrCast(@alignCast(app));
+
+    MobileDamageApi.native_sdk_app_start(app);
+    var surface_token: u8 = 0;
+    MobileDamageApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    MobileDamageApi.native_sdk_app_frame(app);
+    try std.testing.expectEqualStrings("", std.mem.span(MobileDamageApi.native_sdk_app_last_error_name(app)));
+    try std.testing.expectEqual(@as(usize, 1), self.null_platform.gpu_surface_present_count);
+
+    var info: MobileCanvasPixels = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixel_size(app, 1, &info));
+    const retained = try std.testing.allocator.alloc(u8, info.byte_len);
+    defer std.testing.allocator.free(retained);
+
+    // First delivery: the whole surface with full damage.
+    var damage: types.MobileCanvasPixelsDamage = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixels_damage(app, 1, retained.ptr, retained.len, &damage));
+    try std.testing.expectEqual(info.width, damage.width);
+    try std.testing.expectEqual(info.height, damage.height);
+    try std.testing.expectEqual(info.byte_len, damage.byte_len);
+    try std.testing.expectEqual(@as(usize, 0), damage.damage_x);
+    try std.testing.expectEqual(@as(usize, 0), damage.damage_y);
+    try std.testing.expectEqual(info.width, damage.damage_width);
+    try std.testing.expectEqual(info.height, damage.damage_height);
+    var nonblank = false;
+    for (retained) |byte| {
+        if (byte != 0) {
+            nonblank = true;
+            break;
+        }
+    }
+    try std.testing.expect(nonblank);
+
+    // Idle frame: nothing presents, and the next delivery reports EMPTY
+    // damage — the host skips its upload entirely.
+    MobileDamageApi.native_sdk_app_frame(app);
+    try std.testing.expectEqual(@as(usize, 1), self.null_platform.gpu_surface_present_count);
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixels_damage(app, 1, retained.ptr, retained.len, &damage));
+    try std.testing.expectEqual(@as(usize, 0), damage.damage_width);
+    try std.testing.expectEqual(@as(usize, 0), damage.damage_height);
+
+    // A model change presents INCREMENTALLY: the dirty region refines to
+    // the changed commands (the counter text and the button's state, both
+    // pinned near the top), never the whole window. Between the change
+    // and its present, a delivery must report the OLD revision with
+    // empty damage — the host's signal to call again next tick (the
+    // gate-on-sightings race that once stranded a boot relayout off the
+    // glass).
+    const revision_before_tap = damage.revision;
+    const button = try findDamageSemanticsByRole(app, .button);
+    const tap_x = button.x + button.width / 2;
+    const tap_y = button.y + button.height / 2;
+    MobileDamageApi.native_sdk_app_touch(app, 1, 0, tap_x, tap_y, 1);
+    MobileDamageApi.native_sdk_app_touch(app, 1, 1, tap_x, tap_y, 0);
+    try std.testing.expectEqual(@as(u32, 1), self.ui.model.count);
+    var frame_state: MobileGpuFrameState = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_gpu_frame_state(app, &frame_state));
+    try std.testing.expect(frame_state.canvas_revision > revision_before_tap);
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixels_damage(app, 1, retained.ptr, retained.len, &damage));
+    try std.testing.expectEqual(@as(usize, 0), damage.damage_width);
+    try std.testing.expectEqual(revision_before_tap, damage.revision);
+    try std.testing.expect(damage.revision < frame_state.canvas_revision);
+    MobileDamageApi.native_sdk_app_frame(app);
+    try std.testing.expectEqual(@as(usize, 2), self.null_platform.gpu_surface_present_count);
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixels_damage(app, 1, retained.ptr, retained.len, &damage));
+    try std.testing.expect(damage.damage_width > 0);
+    try std.testing.expect(damage.damage_height > 0);
+    try std.testing.expect(damage.damage_height < info.height / 2);
+    try std.testing.expectEqual(frame_state.canvas_revision, damage.revision);
+
+    // Anti-tearing invariant: after the incremental copy the retained
+    // buffer is byte-identical to a fresh full-surface render of the
+    // same retained scene.
+    const full = try std.testing.allocator.alloc(u8, info.byte_len);
+    defer std.testing.allocator.free(full);
+    var rendered: MobileCanvasPixels = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixels(app, 1, full.ptr, full.len, &rendered));
+    try std.testing.expectEqualSlices(u8, full, retained);
+}
+
+test "mobile damage render falls back to a full render without a capture" {
+    const app = MobileDamageApi.native_sdk_app_create() orelse return error.TestUnexpectedResult;
+    defer MobileDamageApi.native_sdk_app_destroy(app);
+
+    MobileDamageApi.native_sdk_app_start(app);
+    var surface_token: u8 = 0;
+    MobileDamageApi.native_sdk_app_viewport(app, 390, 844, 1, &surface_token, 0, 0, 0, 0, 0, 0, 0, 0);
+    // No frame pumped: nothing has presented, so the damage entry takes
+    // the full-render fallback with full damage — exactly the plain
+    // render_pixels contract plus an honest damage report.
+    var info: MobileCanvasPixels = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixel_size(app, 1, &info));
+    const buffer = try std.testing.allocator.alloc(u8, info.byte_len);
+    defer std.testing.allocator.free(buffer);
+    var damage: types.MobileCanvasPixelsDamage = .{};
+    try std.testing.expectEqual(@as(c_int, 1), MobileDamageApi.native_sdk_app_render_pixels_damage(app, 1, buffer.ptr, buffer.len, &damage));
+    try std.testing.expectEqual(info.width, damage.damage_width);
+    try std.testing.expectEqual(info.height, damage.damage_height);
+}

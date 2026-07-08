@@ -397,6 +397,25 @@ pub const Options = struct {
     window_state_store: ?window_state.Store = null,
     js_window_api: bool = false,
     gpu_surface_frame_diagnostics: bool = true,
+    /// Pixels-only presentation hosts (the mobile embed host) opt in to
+    /// keeping the view's keyed command mirror alive across PIXEL
+    /// presents: the mirror then describes what the presented pixel
+    /// buffer shows, so the next frame's dirty bounds refine to the
+    /// commands that actually changed (a keystroke repaints the field,
+    /// not the window) instead of degrading to the summary union on
+    /// every Msg rebuild. Must stay false on any platform that wires a
+    /// gpu-surface packet presenter — a later packet patch would target
+    /// a dictionary the host never adopted (the patch gate additionally
+    /// refuses pixel-adopted baselines as defense in depth).
+    pixel_present_retained_baseline: bool = false,
+    /// Optional render memo for the CPU pixel present path (see
+    /// `canvas.ReferenceRenderMemo`): pixels-only hosts that re-render
+    /// the retained scene every changed frame attach one so heavyweight
+    /// per-pixel commands replay their stored output and scaled image
+    /// draws blend from scale-once panels. Purely an optimization —
+    /// output bytes are identical with or without it. Must outlive the
+    /// runtime; null (the default) changes nothing.
+    pixel_present_render_memo: ?*canvas.ReferenceRenderMemo = null,
     /// The process environment spawned effect children inherit (the app
     /// runner threads it through from `std.process.Init`). `null` lets
     /// the effect system resolve a fallback for hosts without a process

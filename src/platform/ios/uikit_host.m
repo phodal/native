@@ -9,21 +9,23 @@
 //
 // Presentation mirrors the macOS raster path in
 // src/platform/macos/appkit_host.m — the embed host renders the retained
-// scene through the CPU reference renderer (`native_sdk_app_render_pixels`,
-// RGBA8); the host uploads those bytes into a shared RGBA8 MTLTexture and
-// presents it as a fullscreen quad sampled by the same tiny pipeline the
-// macOS host's canvas presenter compiles (the render pass converts to the
+// scene through the CPU reference renderer into the host's RETAINED
+// staging buffer (`native_sdk_app_render_pixels_damage`, RGBA8): each
+// changed frame the embed side rasters only its dirty region and reports
+// the damaged rect, so the host uploads exactly that region into a
+// shared RGBA8 MTLTexture (`replaceRegion` with the rect) and presents
+// it as a fullscreen quad sampled by the same tiny pipeline the macOS
+// host's canvas presenter compiles (the render pass converts to the
 // drawable's BGRA on the way out, so no CPU swizzle pass exists). A
 // CADisplayLink pumps `native_sdk_app_frame` and the canvas revision from
 // `native_sdk_app_gpu_frame_state` gates re-renders, so an idle app costs
-// one ABI call per tick and acquires no drawable and uploads no bytes.
-// The embed pixel ABI carries no damage rects (the desktop dirty-rect
-// machinery lives behind the packet path, which mobile bypasses), so a
-// changed frame re-renders and re-uploads the full surface — the gate is
-// the revision, not a region. NATIVE_SDK_GPU_FRAME_TRACE=1 prints the
-// same per-present/nil-drawable trace lines the macOS host does, plus a
-// once-per-second structural summary (ticks, idle short-circuits,
-// presents, drawables acquired, upload bytes, present-path CPU).
+// one ABI call per tick and acquires no drawable and uploads no bytes;
+// a revision bump with no visual change vends no drawable either
+// (path=no-damage in the trace). NATIVE_SDK_GPU_FRAME_TRACE=1 prints the
+// same per-present/nil-drawable trace lines the macOS host does — now
+// carrying the damage rect — plus a once-per-second structural summary
+// (ticks, idle short-circuits, presents, drawables acquired, upload
+// bytes, present-path CPU).
 //
 // Lifecycle follows the app's scene state the way the macOS host follows
 // window occlusion: on entering the background the display link pauses
@@ -1761,12 +1763,13 @@ static const CGFloat NativeSdkTouchSlop = 8.0;
     }
 
     if ([self renderAndPresent]) {
-        if (haveState) {
-            self.lastCanvasRevision = state.canvas_revision;
-            self.hasPresentedRevision = YES;
-        }
+        // renderAndPresent recorded the revision the DELIVERED buffer
+        // reflects (never this tick's sighting): a change whose frame
+        // has not presented yet keeps the gate open, so the next tick
+        // delivers its damage instead of stranding it off the glass.
         self.needsPresent = NO;
     }
+    (void)haveState;
 }
 
 /* Once-per-second cumulative counter line while the frame trace is on. */
@@ -1866,19 +1869,36 @@ static const CGFloat NativeSdkTouchSlop = 8.0;
     if (![self ensureStagingCapacity:info.byte_len]) return NO;
     if (![self ensureCanvasPresenter]) return NO;
 
-    native_sdk_canvas_pixels_t rendered = {0};
-    if (native_sdk_app_render_pixels(self.nativeApp, scale, self.rgbaBytes, info.byte_len, &rendered) != 1) {
-        [self logNativeErrorIfAny:@"render_pixels"];
+    // Damage render: the staging buffer is RETAINED across frames, so the
+    // embed side copies only the region the frames since the last call
+    // changed (captured off the runtime's own dirty-scissored raster —
+    // no full-surface re-render) and names it. A keystroke costs the
+    // field's pixels here, not 12+MB of surface.
+    native_sdk_canvas_pixels_damage_t rendered = {0};
+    if (native_sdk_app_render_pixels_damage(self.nativeApp, scale, self.rgbaBytes, info.byte_len, &rendered) != 1) {
+        [self logNativeErrorIfAny:@"render_pixels_damage"];
         return NO;
     }
     const uint64_t renderEndNs = trace ? NativeSdkTimestampNanoseconds() : 0;
+    // The delivery names the revision the buffer now reflects; the idle
+    // gate compares the live revision against THIS, so a present the
+    // runtime produces one pump after its change still gets delivered.
+    self.lastCanvasRevision = rendered.revision;
+    self.hasPresentedRevision = YES;
     NSUInteger width = rendered.width;
     NSUInteger height = rendered.height;
-    if (width == 0 || height == 0 || rendered.byte_len != width * height * 4) return NO;
+    if (width == 0 || height == 0 || rendered.byte_len != width * height * 4) {
+        // The damage delivery above already consumed the accumulated
+        // region: dropping the texture forces the next present to a
+        // full upload, so a refused frame can never strand it.
+        self.canvasTexture = nil;
+        return NO;
+    }
 
     // The canvas texture carries the renderer's bytes verbatim: RGBA8,
     // uploaded straight from the staging buffer (the presenter's render
     // pass converts to the drawable's BGRA — see ensureCanvasPresenter).
+    BOOL textureCreated = NO;
     if (!self.canvasTexture || self.canvasTexture.width != width || self.canvasTexture.height != height) {
         MTLTextureDescriptor *descriptor =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -1888,21 +1908,60 @@ static const CGFloat NativeSdkTouchSlop = 8.0;
         descriptor.usage = MTLTextureUsageShaderRead;
         descriptor.storageMode = MTLStorageModeShared;
         self.canvasTexture = [self.device newTextureWithDescriptor:descriptor];
+        textureCreated = YES;
     }
     if (!self.canvasTexture) return NO;
+
+    // Upload only the damaged region (`replaceRegion` with the damage
+    // rect; `bytesPerRow` stays the full staging stride so the pointer
+    // offset addresses the rect in place). A fresh texture holds no
+    // pixels yet, so it takes the full surface regardless of the report.
+    NSUInteger damageX = rendered.damage_x;
+    NSUInteger damageY = rendered.damage_y;
+    NSUInteger damageWidth = rendered.damage_width;
+    NSUInteger damageHeight = rendered.damage_height;
+    if (textureCreated) {
+        damageX = 0;
+        damageY = 0;
+        damageWidth = width;
+        damageHeight = height;
+    }
+    if (damageX + damageWidth > width || damageY + damageHeight > height) {
+        self.canvasTexture = nil;
+        return NO;
+    }
+    const BOOL hasDamage = damageWidth > 0 && damageHeight > 0;
     const uint64_t uploadBeginNs = trace ? NativeSdkTimestampNanoseconds() : 0;
-    [self.canvasTexture replaceRegion:MTLRegionMake2D(0, 0, width, height)
-                          mipmapLevel:0
-                            withBytes:self.rgbaBytes
-                          bytesPerRow:width * 4];
+    if (hasDamage) {
+        [self.canvasTexture replaceRegion:MTLRegionMake2D(damageX, damageY, damageWidth, damageHeight)
+                              mipmapLevel:0
+                                withBytes:self.rgbaBytes + (damageY * width + damageX) * 4
+                              bytesPerRow:width * 4];
+    }
     const uint64_t uploadEndNs = trace ? NativeSdkTimestampNanoseconds() : 0;
-    if (trace) self.traceUploadBytes += (uint64_t)width * (uint64_t)height * 4;
+    const uint64_t uploadBytes = (uint64_t)damageWidth * (uint64_t)damageHeight * 4;
+    if (trace) self.traceUploadBytes += uploadBytes;
 
     CAMetalLayer *layer = [self metalLayer];
     CGSize drawableSize = CGSizeMake(width, height);
-    if (!CGSizeEqualToSize(self.appliedDrawableSize, drawableSize)) {
+    const BOOL drawableSizeChanged = !CGSizeEqualToSize(self.appliedDrawableSize, drawableSize);
+    if (drawableSizeChanged) {
         layer.drawableSize = drawableSize;
         self.appliedDrawableSize = drawableSize;
+    }
+
+    // No damage and nothing forcing a flush (no viewport/lifecycle
+    // re-present pending, texture and drawable both current): the glass
+    // already shows this frame — vend no drawable, encode nothing. A
+    // revision bump with no visual change costs a copy of zero bytes.
+    if (!hasDamage && !textureCreated && !drawableSizeChanged && !self.needsPresent && self.hasPresentedRevision) {
+        // Not counted as a present: no drawable moved. The structural
+        // counters keep presents == drawables.
+        if (trace) {
+            fprintf(stderr, "native-sdk: gpu frame-trace path=no-damage render_us=%llu\n",
+                    (unsigned long long)((renderEndNs - presentBeginNs) / 1000));
+        }
+        return YES;
     }
 
     // Drawable acquisition discipline: a CAMetalLayer vends a small fixed
@@ -1962,12 +2021,16 @@ static const CGFloat NativeSdkTouchSlop = 8.0;
          * drawable vend + encode/commit. The render is the renderer's
          * cost, not the presentation seam's. */
         self.tracePresentCpuNs += presentEndNs - renderEndNs;
-        fprintf(stderr, "native-sdk: gpu frame-trace path=present frame=%llu render_us=%llu upload_us=%llu vend_us=%llu upload_bytes=%llu total_us=%llu\n",
+        fprintf(stderr, "native-sdk: gpu frame-trace path=present frame=%llu render_us=%llu upload_us=%llu vend_us=%llu upload_bytes=%llu damage=%llux%llu+%llu+%llu total_us=%llu\n",
                 (unsigned long long)self.tracePresentCount,
                 (unsigned long long)((renderEndNs - presentBeginNs) / 1000),
                 (unsigned long long)((uploadEndNs - uploadBeginNs) / 1000),
                 (unsigned long long)((vendEndNs - vendBeginNs) / 1000),
-                (unsigned long long)((uint64_t)width * (uint64_t)height * 4),
+                (unsigned long long)uploadBytes,
+                (unsigned long long)damageWidth,
+                (unsigned long long)damageHeight,
+                (unsigned long long)damageX,
+                (unsigned long long)damageY,
                 (unsigned long long)((presentEndNs - presentBeginNs) / 1000));
     }
     return YES;

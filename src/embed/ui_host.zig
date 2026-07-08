@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const app_manifest = @import("app_manifest");
+const canvas = @import("canvas");
 const runtime = @import("../runtime/root.zig");
 const platform = @import("../platform/root.zig");
 const types = @import("types.zig");
@@ -93,6 +94,17 @@ pub fn UiAppHost(comptime AppDef: type) type {
         /// viewport-driven chrome publish.
         form_factor: platform.FormFactor = .unknown,
         chrome_tabs_projected: bool = false,
+        /// Presented-pixel capture behind
+        /// `native_sdk_app_render_pixels_damage` (see
+        /// `host.installPresentCapture`): the last present's borrowed
+        /// pixels plus accumulated damage, and the chained platform
+        /// pixel presenter the capture bridge forwards to.
+        presented: host.MobilePresentedCanvas = .{},
+        present_pixels_chain: ?host.MobilePresentPixelsFn = null,
+        /// Render memo for the pixel present path (heavyweight command
+        /// replay + scale-once image panels); attached to the runtime by
+        /// `host.installPresentCapture`, freed on destroy.
+        render_memo: canvas.ReferenceRenderMemo = undefined,
 
         pub fn create() !*Self {
             const allocator = std.heap.page_allocator;
@@ -132,6 +144,8 @@ pub fn UiAppHost(comptime AppDef: type) type {
             self.image = .{};
             self.form_factor = .unknown;
             self.chrome_tabs_projected = false;
+            self.presented = .{};
+            self.present_pixels_chain = null;
             // In-place init + pointer-targeted model assignment:
             // `initModel()`'s result writes straight into the heap
             // struct via result-location semantics, so a multi-MB Model
@@ -146,11 +160,19 @@ pub fn UiAppHost(comptime AppDef: type) type {
                 .event_fn = hostEvent,
                 .stop_fn = hostStop,
             }, self.null_platform.platform());
+            // The damage seam: capture pixel presents (chained through
+            // the null platform's recording present, so nonblank
+            // sampling keeps working), drop the packet presenters no
+            // mobile shim consumes, and keep the keyed baseline alive
+            // across pixel presents so changed frames raster only their
+            // dirty region.
+            host.installPresentCapture(self);
             return self;
         }
 
         pub fn destroy(self: *Self) void {
             host.disableAutomation(self);
+            self.render_memo.deinit();
             self.ui.deinit();
             std.heap.page_allocator.destroy(self);
         }

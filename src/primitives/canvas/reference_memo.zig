@@ -26,6 +26,12 @@
 //! pass (one per live scene). Misses allocate entry pixel storage from
 //! the memo's allocator; allocation failure simply skips storing — the
 //! command still renders, just unmemoized.
+//!
+//! `max_image_scale_fills_per_pass` bounds how many scaled-image panels
+//! one pass may FILL (hits are free): panel fills are the one memo
+//! operation costlier than the work they replace when the very next
+//! frame re-keys every panel (fractional scroll phases), so the budget
+//! pins the worst case at roughly the unmemoized raster.
 
 const std = @import("std");
 
@@ -83,6 +89,18 @@ pub const ReferenceRenderMemo = struct {
     /// Hit/miss counters: observability for tests and profiling only.
     hits: u64 = 0,
     misses: u64 = 0,
+    /// Scaled-image sample pool state (see the pool section below).
+    image_scale_entries: [max_image_scale_entries]ImageScaleEntry = @splat(.{}),
+    image_scale_total_bytes: usize = 0,
+    image_scale_hits: u64 = 0,
+    image_scale_misses: u64 = 0,
+    /// Panel fills spent in the CURRENT render pass (reset by
+    /// `renderPass`): a fill costs a full-panel resample, so a pass that
+    /// keeps missing (a fractional-offset kinetic scroll re-phases every
+    /// draw every frame) must not pay fill + store for panels the next
+    /// frame re-misses anyway. Beyond the budget, draws sample directly
+    /// — the exact pixels either way, only the caching stops.
+    image_scale_fills_this_pass: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) ReferenceRenderMemo {
         return .{ .allocator = allocator };
@@ -93,6 +111,11 @@ pub const ReferenceRenderMemo = struct {
             if (entry.pixels.len > 0) self.allocator.free(entry.pixels);
             entry.* = .{};
         }
+        for (&self.image_scale_entries) |*entry| {
+            if (entry.pixels.len > 0) self.allocator.free(entry.pixels);
+            entry.* = .{};
+        }
+        self.image_scale_total_bytes = 0;
     }
 
     /// Build the key for a command about to run: hashes the destination
@@ -167,5 +190,133 @@ pub const ReferenceRenderMemo = struct {
         victim.stamp = self.clock;
         victim.used = true;
         return victim.pixels;
+    }
+
+    // ------------------------------------------------ scaled-image samples
+    //
+    // Scale-once pool for `draw_image`: at integer device alignment a
+    // destination pixel's sampled color depends only on its offset
+    // INSIDE the destination rect (the sampler's coordinate math reduces
+    // exactly — see the alignment proof at the renderer's cache site),
+    // so one sampled panel serves the draw at EVERY position. This is
+    // what makes a scrolling album grid cheap: the covers' expensive
+    // linear resampling runs once per (image content, panel size), and
+    // every later frame blends from the panel. Same honesty contract as
+    // the command memo: a hit replays bytes equal to what direct
+    // sampling would produce, by construction — only time moves.
+
+    /// Distinct (image, size) panels one retained scene realistically
+    /// draws (a grid of covers plus a hero). LRU beyond that.
+    pub const max_image_scale_entries: usize = 12;
+    /// Per-panel and pool-wide byte bounds: a panel bigger than a 4K
+    /// frame is not a cache citizen, and the pool never grows past the
+    /// total budget (LRU eviction makes room first, then the panel is
+    /// simply not cached).
+    pub const max_image_scale_entry_bytes: usize = 8 * 1024 * 1024;
+    pub const max_image_scale_total_bytes: usize = 48 * 1024 * 1024;
+    /// Panel fills one pass may pay (see the module doc): hits are
+    /// free, and over-budget misses simply sample directly.
+    pub const max_image_scale_fills_per_pass: u64 = 3;
+
+    /// Everything a panel's bytes are a pure function of: the source
+    /// image content (id + dimensions + pixel bytes, hashed with the
+    /// same fingerprint the render plans key image uploads by), the
+    /// source sub-rect, the panel's pixel dimensions, and the sampling
+    /// mode. Position is deliberately absent — that is the point.
+    pub const ImageScaleKey = struct {
+        content_hash: u64,
+        src_x: f32,
+        src_y: f32,
+        src_width: f32,
+        src_height: f32,
+        /// Destination extent in f32 (the sampler divides by these
+        /// exact values) and the destination origin's subpixel phase
+        /// (`x - floor(x)`, exactly representable for any f32): panels
+        /// depend on size and phase, never on position, so a draw moved
+        /// by whole pixels reuses its panel.
+        dst_width: f32,
+        dst_height: f32,
+        phase_x: f32,
+        phase_y: f32,
+        dst_width_px: usize,
+        dst_height_px: usize,
+        sampling: u8,
+    };
+
+    const ImageScaleEntry = struct {
+        key: ImageScaleKey = undefined,
+        pixels: []u8 = &.{},
+        used: bool = false,
+        stamp: u64 = 0,
+    };
+
+    /// The stored panel for this key, or null on miss. A hit refreshes
+    /// the entry's LRU stamp.
+    pub fn findImageScale(self: *ReferenceRenderMemo, key: ImageScaleKey) ?[]const u8 {
+        for (&self.image_scale_entries) |*entry| {
+            if (!entry.used) continue;
+            if (!std.meta.eql(entry.key, key)) continue;
+            self.clock += 1;
+            entry.stamp = self.clock;
+            self.image_scale_hits += 1;
+            return entry.pixels;
+        }
+        self.image_scale_misses += 1;
+        return null;
+    }
+
+    /// Claim storage for this key's panel and return it for the caller
+    /// to fill (`dst_width_px * dst_height_px * 4` bytes). Evicts least
+    /// recently used panels until the pool budget fits; returns null for
+    /// over-bound panels or on allocation failure (the draw simply
+    /// samples directly).
+    pub fn storeImageScale(self: *ReferenceRenderMemo, key: ImageScaleKey) ?[]u8 {
+        const byte_len = key.dst_width_px * key.dst_height_px * 4;
+        if (byte_len == 0 or byte_len > max_image_scale_entry_bytes) return null;
+        // Budget first: evict least-recently-used panels until the new
+        // one fits the pool.
+        while (self.image_scale_total_bytes + byte_len > max_image_scale_total_bytes) {
+            const oldest = self.oldestImageScaleEntry() orelse return null;
+            self.evictImageScale(oldest);
+        }
+        // Then a slot: a free one, else evict the LRU panel.
+        var slot: ?*ImageScaleEntry = null;
+        for (&self.image_scale_entries) |*entry| {
+            if (!entry.used) {
+                slot = entry;
+                break;
+            }
+        }
+        if (slot == null) {
+            const oldest = self.oldestImageScaleEntry() orelse return null;
+            self.evictImageScale(oldest);
+            slot = oldest;
+        }
+        const entry = slot.?;
+        entry.pixels = self.allocator.alloc(u8, byte_len) catch {
+            entry.* = .{};
+            return null;
+        };
+        self.image_scale_total_bytes += byte_len;
+        self.clock += 1;
+        entry.key = key;
+        entry.stamp = self.clock;
+        entry.used = true;
+        return entry.pixels;
+    }
+
+    fn oldestImageScaleEntry(self: *ReferenceRenderMemo) ?*ImageScaleEntry {
+        var oldest: ?*ImageScaleEntry = null;
+        for (&self.image_scale_entries) |*entry| {
+            if (!entry.used) continue;
+            if (oldest == null or entry.stamp < oldest.?.stamp) oldest = entry;
+        }
+        return oldest;
+    }
+
+    fn evictImageScale(self: *ReferenceRenderMemo, entry: *ImageScaleEntry) void {
+        self.image_scale_total_bytes -= entry.pixels.len;
+        if (entry.pixels.len > 0) self.allocator.free(entry.pixels);
+        entry.* = .{};
     }
 };

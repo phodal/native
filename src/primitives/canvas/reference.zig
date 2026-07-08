@@ -40,6 +40,7 @@ const nextTextOffset = text_model.nextTextOffset;
 
 const reference_blur = @import("reference_blur.zig");
 const reference_paths = @import("reference_paths.zig");
+const render_fingerprints = @import("render_fingerprints.zig");
 const vector = @import("vector.zig");
 const font_ttf = @import("font_ttf.zig");
 
@@ -224,6 +225,11 @@ pub const ReferenceRenderSurface = struct {
     }
 
     pub fn renderPass(self: ReferenceRenderSurface, pass: CanvasRenderPass, clear_color: Color) Error!void {
+        // One-time sRGB decode table fill (see the table's doc comment);
+        // outside the per-pixel loops so the hot path pays no checks.
+        ensureSrgbToLinearByteTable();
+        // Fresh per-pass panel-fill budget (see the memo's doc comment).
+        if (self.render_memo) |memo| memo.image_scale_fills_this_pass = 0;
         const scale = referencePassScale(pass.scale);
         const scissor = if (pass.scissorBounds()) |bounds| referenceScaleRect(bounds, scale) else null;
         switch (pass.loadAction()) {
@@ -422,6 +428,49 @@ pub const ReferenceRenderSurface = struct {
         const clipped = geometry.RectF.intersection(dst_rect, draw_bounds.normalized());
         const pixel_rect = referencePixelRect(clipped, self.width, self.height) orelse return;
         const image_opacity = std.math.clamp(value.opacity, 0, 1);
+        // Scale-once panel (memo-attached surfaces): a destination
+        // pixel's sampled color depends only on its offset inside
+        // `dst_rect` and the rect's subpixel phase. `(px + 0.5) -
+        // dst_rect.x` and `(offset + 0.5) - phase_x` name the SAME exact
+        // real number (`px + 0.5`, `offset + 0.5`, `dst_rect.x`, and its
+        // exactly-representable fractional part are all exact f32
+        // values), and one IEEE subtraction rounds one exact value one
+        // way — so a panel filled with the phase-relative formula holds
+        // bit-identical samples to direct evaluation at ANY position
+        // with the same phase. The expensive linear resampling then runs
+        // once per (image content, size, phase) and every later repaint
+        // — the cover-loading cascade, a re-opened view, a whole-pixel
+        // move — blends from the panel.
+        if (self.imageScalePanel(image, value, src_rect, dst_rect, pixel_rect)) |panel| {
+            const dst_x0: i64 = @intFromFloat(@floor(dst_rect.x));
+            const dst_y0: i64 = @intFromFloat(@floor(dst_rect.y));
+            var y = pixel_rect.y;
+            while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
+                var x = pixel_rect.x;
+                while (x < pixel_rect.x + pixel_rect.width) : (x += 1) {
+                    const point = referencePixelCenter(x, y);
+                    if (!dst_rect.containsPoint(point)) continue;
+                    if (has_mask and !referencePointInRoundedRect(point, mask_rect, mask_radius)) continue;
+                    const column: usize = @intCast(@as(i64, @intCast(x)) - dst_x0);
+                    const row: usize = @intCast(@as(i64, @intCast(y)) - dst_y0);
+                    const offset = (row * panel.width + column) * 4;
+                    const sample = [4]u8{ panel.pixels[offset], panel.pixels[offset + 1], panel.pixels[offset + 2], panel.pixels[offset + 3] };
+                    const index = (y * self.width + x) * 4;
+                    const dst = [4]u8{
+                        self.pixels[index + 0],
+                        self.pixels[index + 1],
+                        self.pixels[index + 2],
+                        self.pixels[index + 3],
+                    };
+                    const out = blendRgba8(dst, rgba8ToColor(sample), command.opacity * image_opacity);
+                    self.pixels[index + 0] = out[0];
+                    self.pixels[index + 1] = out[1];
+                    self.pixels[index + 2] = out[2];
+                    self.pixels[index + 3] = out[3];
+                }
+            }
+            return;
+        }
         var y = pixel_rect.y;
         while (y < pixel_rect.y + pixel_rect.height) : (y += 1) {
             var x = pixel_rect.x;
@@ -446,6 +495,81 @@ pub const ReferenceRenderSurface = struct {
                 self.pixels[index + 3] = out[3];
             }
         }
+    }
+
+    /// A borrowed sampled panel for this draw, or null when the draw
+    /// samples directly (no memo attached, fractional alignment, too
+    /// small to matter, over the pool bounds, or allocation failure).
+    /// See the alignment proof at the call site.
+    const ImageScalePanel = struct {
+        pixels: []const u8,
+        width: usize,
+    };
+
+    fn imageScalePanel(self: ReferenceRenderSurface, image: ReferenceImage, value: DrawImage, src_rect: geometry.RectF, dst_rect: geometry.RectF, pixel_rect: ReferencePixelRect) ?ImageScalePanel {
+        const memo = self.render_memo orelse return null;
+        // Exact-arithmetic bounds: pixel offsets and phases must stay in
+        // f32's exact-integer range for the phase-relative identity
+        // (2^22 leaves a full bit of headroom under 2^24).
+        const limit: f32 = 4_194_304;
+        if (!(dst_rect.width > 0 and dst_rect.height > 0)) return null;
+        if (@abs(dst_rect.x) > limit or @abs(dst_rect.y) > limit or dst_rect.width > limit or dst_rect.height > limit) return null;
+        // The panel spans the rect's full pixel coverage: columns
+        // floor(minX) .. ceil(maxX)-1, exactly the extent
+        // `referencePixelRect` can ever visit for this rect.
+        const x_floor = @floor(dst_rect.x);
+        const y_floor = @floor(dst_rect.y);
+        const phase_x = dst_rect.x - x_floor;
+        const phase_y = dst_rect.y - y_floor;
+        const x_end: i64 = referenceCeil(dst_rect.maxX());
+        const y_end: i64 = referenceCeil(dst_rect.maxY());
+        const panel_width: usize = @intCast(@max(0, x_end - @as(i64, @intFromFloat(x_floor))));
+        const panel_height: usize = @intCast(@max(0, y_end - @as(i64, @intFromFloat(y_floor))));
+        if (panel_width == 0 or panel_height == 0) return null;
+        if (panel_width * panel_height < memo.min_pixels) return null;
+        const key = ReferenceRenderMemo.ImageScaleKey{
+            .content_hash = render_fingerprints.renderImageFingerprintForResource(value.image_id, image),
+            .src_x = src_rect.x,
+            .src_y = src_rect.y,
+            .src_width = src_rect.width,
+            .src_height = src_rect.height,
+            .dst_width = dst_rect.width,
+            .dst_height = dst_rect.height,
+            .phase_x = phase_x,
+            .phase_y = phase_y,
+            .dst_width_px = panel_width,
+            .dst_height_px = panel_height,
+            .sampling = @intFromEnum(value.sampling),
+        };
+        if (memo.findImageScale(key)) |pixels| return .{ .pixels = pixels, .width = panel_width };
+        // Fill only when this draw would render the WHOLE panel anyway
+        // (fully on-surface, unclipped by the scissor) and the pass has
+        // fill budget left: a clipped or over-budget miss samples its
+        // visible pixels directly instead of paying a full-panel fill
+        // for a panel a re-phasing scroll may never reuse.
+        if (pixel_rect.width != panel_width or pixel_rect.height != panel_height) return null;
+        if (memo.image_scale_fills_this_pass >= ReferenceRenderMemo.max_image_scale_fills_per_pass) return null;
+        const buffer = memo.storeImageScale(key) orelse return null;
+        memo.image_scale_fills_this_pass += 1;
+        // Fill with the phase-relative formula — bit-identical to the
+        // absolute one (see the call site). Edge cells whose center
+        // falls outside the rect hold clamped samples the blend loop's
+        // containment check never reads.
+        var row: usize = 0;
+        while (row < panel_height) : (row += 1) {
+            const v = std.math.clamp(((@as(f32, @floatFromInt(row)) + 0.5) - phase_y) / dst_rect.height, 0, 1);
+            var column: usize = 0;
+            while (column < panel_width) : (column += 1) {
+                const u = std.math.clamp(((@as(f32, @floatFromInt(column)) + 0.5) - phase_x) / dst_rect.width, 0, 1);
+                const sample = referenceSampleImage(image, src_rect, u, v, value.sampling);
+                const offset = (row * panel_width + column) * 4;
+                buffer[offset] = sample[0];
+                buffer[offset + 1] = sample[1];
+                buffer[offset + 2] = sample[2];
+                buffer[offset + 3] = sample[3];
+            }
+        }
+        return .{ .pixels = buffer, .width = panel_width };
     }
 
     fn drawShadow(self: ReferenceRenderSurface, command: RenderCommand, value: Shadow, draw_bounds: geometry.RectF) Error!void {
@@ -869,6 +993,7 @@ fn referenceScaleRect(rect: geometry.RectF, scale: f32) geometry.RectF {
     return geometry.RectF.init(rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale);
 }
 
+
 fn referencePixelCenter(x: usize, y: usize) geometry.PointF {
     return geometry.PointF.init(@as(f32, @floatFromInt(x)) + 0.5, @as(f32, @floatFromInt(y)) + 0.5);
 }
@@ -1123,6 +1248,10 @@ fn referenceSampleImageNearest(image: ReferenceImage, src: geometry.RectF, u: f3
 }
 
 fn referenceSampleImageLinear(image: ReferenceImage, src: geometry.RectF, u: f32, v: f32) [4]u8 {
+    // Belt over the renderPass-level fill: direct sampler callers (unit
+    // tests, future paths) stay correct. One predictable branch per
+    // output pixel — noise next to the twelve pows the table replaces.
+    ensureSrgbToLinearByteTable();
     const sample_x_f = src.x + std.math.clamp(u, 0, 1) * src.width - 0.5;
     const sample_y_f = src.y + std.math.clamp(v, 0, 1) * src.height - 0.5;
     const x_floor = referenceFloor(sample_x_f);
@@ -1167,12 +1296,31 @@ fn referenceBilinearPremultipliedLinearColor(top_left: [4]u8, top_right: [4]u8, 
     return referenceMixPremultipliedLinearColor(top, bottom, ty);
 }
 
+/// Precomputed `referenceSrgbToLinear(byte / 255.0)` for every byte
+/// value: the linear image sampler decodes twelve sRGB channels per
+/// output pixel, and each decode costs a `pow` — the single hottest
+/// operation in a full-surface raster with photographic covers. Filled
+/// lazily by evaluating the function itself over its exact 256 possible
+/// inputs, so lookups are bit-identical to direct evaluation — this
+/// only moves time, never pixels. The benign-race fill (any two fills
+/// write identical bytes) keeps the hot path free of atomics.
+var srgb_to_linear_byte_table: [256]f32 = undefined;
+var srgb_to_linear_byte_table_ready: bool = false;
+
+fn ensureSrgbToLinearByteTable() void {
+    if (srgb_to_linear_byte_table_ready) return;
+    for (&srgb_to_linear_byte_table, 0..) |*value, index| {
+        value.* = referenceSrgbToLinear(@as(f32, @floatFromInt(index)) / 255.0);
+    }
+    srgb_to_linear_byte_table_ready = true;
+}
+
 fn referencePremultiplySrgba8(pixel: [4]u8) ReferencePremultipliedLinearColor {
     const alpha = @as(f32, @floatFromInt(pixel[3])) / 255.0;
     return .{
-        .r = referenceSrgbToLinear(@as(f32, @floatFromInt(pixel[0])) / 255.0) * alpha,
-        .g = referenceSrgbToLinear(@as(f32, @floatFromInt(pixel[1])) / 255.0) * alpha,
-        .b = referenceSrgbToLinear(@as(f32, @floatFromInt(pixel[2])) / 255.0) * alpha,
+        .r = srgb_to_linear_byte_table[pixel[0]] * alpha,
+        .g = srgb_to_linear_byte_table[pixel[1]] * alpha,
+        .b = srgb_to_linear_byte_table[pixel[2]] * alpha,
         .a = alpha,
     };
 }

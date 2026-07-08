@@ -974,3 +974,78 @@ test "command fingerprints cover every encoded field" {
     moved.command_index = 4;
     try std.testing.expect(canvas.canvasGpuPacketCommandKey(moved, unkeyed_fingerprint) != synthetic);
 }
+
+test "pixel presents adopt a dirty-refinement baseline only for opted-in hosts and never feed patches" {
+    // The mobile embed host presents through the CPU pixel path only and
+    // opts in (`Options.pixel_present_retained_baseline`): pixel presents
+    // then keep the keyed mirror alive so a one-command rebuild's dirty
+    // bounds refine to that command. The mirror is marked pixel-adopted,
+    // and a packet present that arrives against it must resync FULL —
+    // no host ever retained a dictionary for a pixel present.
+    var app_state: PatchHarnessApp = .{};
+    const harness = try createPatchHarness(&app_state);
+    defer harness.destroy(std.testing.allocator);
+    var buffers = try PresentBuffers.init(std.testing.allocator);
+    defer buffers.deinit(std.testing.allocator);
+    harness.runtime.options.pixel_present_retained_baseline = true;
+
+    // 72 keyed rects (past the small-list refinement gate) in a 8-wide grid.
+    var rects: [72]canvas.CanvasCommand = undefined;
+    const buildGrid = struct {
+        fn rectAt(index: usize) geometry.RectF {
+            const col: f32 = @floatFromInt(index % 8);
+            const row: f32 = @floatFromInt(index / 8);
+            return geometry.RectF.init(col * 38 + 2, row * 24 + 2, 30, 18);
+        }
+    };
+    for (&rects, 0..) |*command, index| {
+        command.* = .{ .fill_rect = .{
+            .id = @intCast(3_000 + index),
+            .rect = buildGrid.rectAt(index),
+            .fill = .{ .color = canvas.Color.rgb8(30, 41, 59) },
+        } };
+    }
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &rects });
+    _ = try harness.runtime.presentNextCanvasFramePixels(1, "canvas", .{
+        .frame_index = 70,
+        .timestamp_ns = 70 * 16_000,
+        .surface_size = geometry.SizeF.init(patch_surface_width, patch_surface_height),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), buffers.pixels, buffers.scratch, canvas.Color.rgb8(15, 23, 42));
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_present_count);
+    try std.testing.expect(harness.runtime.views[0].canvas_packet_baseline_valid);
+    try std.testing.expect(harness.runtime.views[0].canvas_packet_baseline_pixels);
+
+    // One changed rect: the next PIXEL present's dirty bounds are that
+    // command's rect (the pixel-adopted mirror refined them), so a
+    // mobile host uploads the rect, not the surface.
+    rects[13].fill_rect.fill = .{ .color = canvas.Color.rgb8(37, 99, 235) };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &rects });
+    const toggled = try harness.runtime.presentNextCanvasFramePixels(1, "canvas", .{
+        .frame_index = 71,
+        .timestamp_ns = 71 * 16_000,
+        .surface_size = geometry.SizeF.init(patch_surface_width, patch_surface_height),
+        .scale = 1,
+    }, canvasFrameScratchStorage(&harness.runtime), buffers.pixels, buffers.scratch, canvas.Color.rgb8(15, 23, 42));
+    try std.testing.expect(!toggled.full_repaint);
+    try std.testing.expectEqualDeep(buildGrid.rectAt(13), toggled.dirty_bounds.?);
+    try std.testing.expectEqualDeep(buildGrid.rectAt(13), harness.null_platform.gpu_surface_present_dirty_bounds.?);
+
+    // A packet present against the pixel-adopted mirror resyncs FULL —
+    // the patch gate refuses it even though the baseline is valid.
+    rects[14].fill_rect.fill = .{ .color = canvas.Color.rgb8(220, 38, 38) };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &rects });
+    const packet_resync = try presentFrame(harness, &buffers, 72);
+    try std.testing.expectEqual(CanvasPresentationMode.gpu_packet, packet_resync.mode);
+    try std.testing.expectEqual(@as(u8, 2), harness.null_platform.gpu_surface_packet_present_binary_load_action);
+    try std.testing.expectEqual(platform.GpuPresentPacketMode.full, harness.runtime.views[0].gpu_present_packet_mode);
+    try std.testing.expect(!harness.runtime.views[0].canvas_packet_baseline_pixels);
+
+    // The packet-adopted baseline behaves exactly as before: the next
+    // one-command change rides a patch.
+    rects[15].fill_rect.fill = .{ .color = canvas.Color.rgb8(22, 163, 74) };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &rects });
+    _ = try presentFrame(harness, &buffers, 73);
+    try std.testing.expectEqual(canvas.binary_packet_load_action_patch, harness.null_platform.gpu_surface_packet_present_binary_load_action);
+    try std.testing.expectEqual(platform.GpuPresentPacketMode.patch, harness.runtime.views[0].gpu_present_packet_mode);
+}

@@ -16,6 +16,7 @@ pub const MobileTextInputState = types.MobileTextInputState;
 pub const MobileViewportState = types.MobileViewportState;
 pub const MobileGpuFrameState = types.MobileGpuFrameState;
 pub const MobileCanvasPixels = types.MobileCanvasPixels;
+pub const MobileCanvasPixelsDamage = types.MobileCanvasPixelsDamage;
 pub const MobileAudioService = types.MobileAudioService;
 pub const MobileImageService = types.MobileImageService;
 pub const MobileChromeItem = chrome.MobileChromeItem;
@@ -70,6 +71,7 @@ pub const native_sdk_app_widget_text_geometry = c_api.native_sdk_app_widget_text
 pub const native_sdk_app_widget_action = c_api.native_sdk_app_widget_action;
 pub const native_sdk_app_render_pixel_size = c_api.native_sdk_app_render_pixel_size;
 pub const native_sdk_app_render_pixels = c_api.native_sdk_app_render_pixels;
+pub const native_sdk_app_render_pixels_damage = c_api.native_sdk_app_render_pixels_damage;
 
 test {
     std.testing.refAllDecls(@This());

@@ -2535,7 +2535,7 @@ test "widget tree layout widths follow the injected text measure provider" {
 // ------------------------------------------------------ definite sizes
 
 test "definite width caps intrinsic content so siblings keep their share" {
-    // Ovation repro shape: a non-growing 360px pane whose single-line text
+    // A sidebar repro shape: a non-growing 360px pane whose single-line text
     // is far wider than the pane. With width as a min-only floor the pane
     // ballooned to its intrinsic text width and starved the growing
     // sibling; a definite width (min AND max) keeps the pane at 360.
@@ -2628,7 +2628,7 @@ test "definite size caps stack children instead of stretching them" {
 // ------------------------------------------------- separator orientation
 
 test "separator in a row is a thin vertical divider" {
-    // Ovation repro shape: a divider between two growing panes. The
+    // A two-pane repro shape: a divider between two growing panes. The
     // separator's h-rule default length no longer applies in the row
     // axis, so it takes its stroke width (hairline) and the panes split
     // the rest.

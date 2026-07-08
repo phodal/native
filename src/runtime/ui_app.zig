@@ -2469,7 +2469,8 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// so `automate widget-hold` fires the same timer a real gesture
         /// arms.
         pub const press_hold_timer_id: u64 = platform.press_hold_timer_id;
-        /// dev-2's Menu+primaryAction feel: ~350 ms press-and-hold.
+        /// A desktop list-row register (press to open, hold for the
+        /// menu): ~350 ms press-and-hold.
         pub const press_hold_duration_ns: u64 = 350 * std.time.ns_per_ms;
 
         /// Install the menu-bar extra once, on the installing frame.

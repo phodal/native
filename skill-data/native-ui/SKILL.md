@@ -960,7 +960,7 @@ Three composites for pipeline/run UIs — pure compositions of existing widgets 
      charts downsample deterministically past 256 points per series. -->
 <chart grow="1" height="220" y-min="0" grid-lines="3" label="Star history">
   <series kind="area" values="{sdkStars}" color="accent" label="native-sdk" />
-  <series kind="line" values="{ovationStars}" color="info" label="ovation" />
+  <series kind="line" values="{examplesStars}" color="info" label="examples" />
 </chart>
 <!-- Sparkline tile: zero-baseline bars pinned to an absolute 0..1 domain. -->
 <chart width="239" height="32" y-min="0" y-max="1" label="CPU history">

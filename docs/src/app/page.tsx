@@ -160,7 +160,7 @@ function InlineCode({ children }: { children: React.ReactNode }) {
 // - Launch: process spawn to the window shown with its first frame present,
 //   warm median of 6 launches per app on an idle box, measured 71-131 ms
 //   across the showcase apps (the ~131 ms outlier carries a known host-side
-//   present-to-shown gap, tracked as an open item). Reproduce per app with
+//   present-to-shown gap). Reproduce per app with
 //   `NATIVE_SDK_WINDOW_TIMING=1 ./zig-out/bin/<app>` and wall-clock the
 //   spawn externally, differencing the printed launch-phase laps.
 const stats = [

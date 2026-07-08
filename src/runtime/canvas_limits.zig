@@ -303,7 +303,7 @@ pub const max_canvas_widget_provenance_key_bytes: usize = 48;
 
 // Model-declared secondary windows per `UiApp` (`Options.windows_fn`
 // descriptors — settings, about, inspectors), on top of the scene's main
-// window. Sized for the dev-2-class desktop shape: one settings window,
+// window. Sized for the classic desktop-client shape: one settings window,
 // maybe an auxiliary panel or two, never a window per document (that is
 // a different architecture — one Runtime hosts `platform.max_windows`
 // = 16 windows total, and the startup window plus tool windows must all

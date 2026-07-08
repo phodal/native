@@ -2288,7 +2288,7 @@ pub const AvatarModel = struct {
     /// initials fallback) — the id only lands here on successful
     /// `fx.registerImageBytes`.
     user_image: canvas.ImageId = 0,
-    user_name: []const u8 = "Chris Tate",
+    user_name: []const u8 = "Casey Torres",
 
     /// A pub fn producing an ImageId binds like a field.
     pub fn teammateImage(model: *const AvatarModel) canvas.ImageId {
@@ -2342,7 +2342,7 @@ test "the avatar image binding resolves model fields and fns to the widget image
     const field_avatar = findByText(markup_tree.root, .avatar, "CT").?;
     try testing.expectEqual(@as(canvas.ImageId, 7), field_avatar.image_id);
     try testing.expectEqual(canvas.ImageFit.cover, field_avatar.image_fit);
-    try testing.expectEqualStrings("Chris Tate", field_avatar.semantics.label);
+    try testing.expectEqualStrings("Casey Torres", field_avatar.semantics.label);
     const fn_avatar = findByText(markup_tree.root, .avatar, "NS").?;
     try testing.expectEqual(@as(canvas.ImageId, 8), fn_avatar.image_id);
 
@@ -3340,9 +3340,9 @@ const SpanMarkup = markup_view.MarkupView(SpanModel, SpanMsg);
 /// The span-paragraph fixture both engines build (the compiled parity
 /// suite reuses it): mixed weight/mono/italic/color runs, bindings inside
 /// spans, a bound weight, single-space collapsing between runs, an
-/// abutting punctuation run (no whitespace, no separator), and — round
-/// two — a literal-scaled run carrying a binding, an underlined run, and
-/// a bound scale.
+/// abutting punctuation run (no whitespace, no separator), and the later
+/// span additions — a literal-scaled run carrying a binding, an
+/// underlined run, and a bound scale.
 pub const span_markup_source =
     \\<column gap="8" width="360">
     \\  <text>
@@ -3438,10 +3438,10 @@ test "markup span paragraphs build the hand-written paragraph exactly" {
     try testing.expect(canvas.text_spans.textSpansEqual(hand_total.spans, markup_total.spans));
     try testing.expectEqual(canvas.TextSpanWeight.bold, markup_total.spans[0].weight);
 
-    // Round two: scale and underline lower to the engine's channels —
-    // the literal 1.5 multiplier rides a run whose text is a binding,
-    // underline is the decoration flag, and the bound scale resolves
-    // like any number attribute.
+    // The later span additions, scale and underline, lower to the
+    // engine's channels — the literal 1.5 multiplier rides a run whose
+    // text is a binding, underline is the decoration flag, and the
+    // bound scale resolves like any number attribute.
     const markup_title = markup_tree.root.children[2];
     const hand_title = hand_tree.root.children[2];
     try testing.expectEqualStrings("182 GB free on 512 GB at native doctor", markup_title.text);

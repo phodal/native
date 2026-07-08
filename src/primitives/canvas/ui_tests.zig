@@ -626,7 +626,7 @@ test "no-wrap text paints one clipped line in a width-constrained row" {
 }
 
 test "wrapped text reserves its wrapped height in a definite-width pane" {
-    // Ovation repro shape end-to-end: a 360px pane with a long wrapped
+    // A chat-pane repro shape end-to-end: a 360px pane with a long wrapped
     // text. The pane stays 360 wide, and the text lays out over multiple
     // lines whose height the column layout reserves.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);

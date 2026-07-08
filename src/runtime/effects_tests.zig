@@ -411,7 +411,7 @@ test "a raised per-spawn line bound delivers long lines intact and truncates at 
 
     // A 6000-byte NDJSON-style event: 1.5x the default cap, intact under
     // the raised bound (this exact shape was destroyed by the old 4 KiB
-    // line cap in ovation's agent streaming).
+    // line cap when a chat client streamed agent NDJSON events).
     const long_line = try std.testing.allocator.alloc(u8, 6000);
     defer std.testing.allocator.free(long_line);
     @memset(long_line, 'x');

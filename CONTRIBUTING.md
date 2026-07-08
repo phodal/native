@@ -116,10 +116,13 @@ Automation writes artifacts under `.zig-cache/native-sdk-automation`.
 
 
 ## Making a Pull Request
-Thank you for your contribution! Please follow these steps to ensure a smooth review process:
-1. Fork the repository and create a new branch for your feature or bug fix.
-2. Make your changes and commit them with clear, descriptive messages.
-3. Push your branch to your forked repository.
-4. Open a pull request against the main repository's `main` branch.
 
-Please cryptographically sign your commits so they show as **Verified** on GitHub. This requires a GPG or SSH signing key added to your GitHub account — see [GitHub's guide](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification). Note: the `Signed-off-by` trailer (`git commit -s`) is a DCO attestation and does **not** produce the Verified badge; you need `git commit -S` (uppercase) or `commit.gpgsign = true` in your git config.
+Branch from `main` (fork first if you don't have push access), keep the change focused, and run the tiered local gate before opening the PR:
+
+```bash
+scripts/gate.sh fast    # root suites + the example suites your diff touches
+```
+
+If the change is user-visible, add a changelog fragment in `changelog.d/` (see [changelog.d/README.md](./changelog.d/README.md)) instead of editing `CHANGELOG.md`. Open the PR against `main` describing what changed and why; for larger changes, open an issue first so the design can be discussed.
+
+Commits must be cryptographically signed (`git commit -S`, or set `commit.gpgsign = true`) so they show as **Verified** — the `Signed-off-by` trailer from `git commit -s` is a DCO attestation, not a signature.

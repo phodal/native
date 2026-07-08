@@ -44,7 +44,7 @@ pub const window_height = view_mod.window_height;
 pub const window_min_width: f32 = view_mod.window_width;
 pub const window_min_height: f32 = view_mod.window_height;
 
-// The model-declared settings WINDOW (dev-2's SettingsView shape):
+// The model-declared settings WINDOW (the classic desktop settings shape):
 // `.open_settings` sets the flag, `windows_fn` declares the window while
 // it is set, and its canvas renders `view_mod.settingsView` from the
 // same model as the main window. It opens the standard way only — the

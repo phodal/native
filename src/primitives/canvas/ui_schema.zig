@@ -389,12 +389,14 @@ pub const attrs = [_]AttrInfo{
     .{ .code = 64, .name = "color", .class = .token_color, .group = .composite },
     // Scroll-region edge behavior (scroll only; the validator scopes it).
     .{ .code = 65, .name = "overscroll", .class = .option, .group = .option, .field = "overscroll" },
-    // 66: two same-day waves both minted 65; icon-placement re-minted at
-    // birth here, before either landed anywhere serialized.
+    // 66: icon-placement briefly collided with 65 during development and
+    // was re-minted here at birth, before either landed anywhere
+    // serialized.
     .{ .code = 66, .name = "icon-placement", .class = .option, .group = .option, .field = "icon_placement" },
     // Single-line text overflow policy (text leaves only; the validator
     // scopes it): ellipsis (the default) or clip. 67: re-minted at birth
-    // from a same-day 66 collision, before landing anywhere serialized.
+    // from a development-time collision on 66, before landing anywhere
+    // serialized.
     .{ .code = 67, .name = "overflow", .class = .option, .group = .option, .field = "overflow" },
     // Inline span attributes (the <span> composite; its rule hook owns
     // the closed set). weight names a text-span weight rung (regular,
@@ -415,17 +417,17 @@ pub const attrs = [_]AttrInfo{
     // appearances snap inside the runtime; documents declare nothing.
     .{ .code = 71, .name = "resize-duration", .class = .whole, .group = .option, .field = "resize_duration" },
     .{ .code = 72, .name = "resize-easing", .class = .option, .group = .option, .field = "resize_easing" },
-    // Chart axis/hover attributes (fresh codes, assigned at birth;
-    // reserved alongside 71/72 by parallel same-day waves, per the
-    // collision notes on 65..67 above). x-labels binds a model iterable
+    // Chart axis/hover attributes (fresh codes, assigned at birth).
+    // x-labels binds a model iterable
     // of strings (one category label per sample, the same resolution
     // set series values use), y-labels flags numeric ticks on,
     // hover-details flags the pointer-hover detail card on.
     .{ .code = 73, .name = "x-labels", .class = .binding_only, .group = .composite },
     .{ .code = 74, .name = "y-labels", .class = .flag, .group = .composite },
     .{ .code = 75, .name = "hover-details", .class = .flag, .group = .composite },
-    // Inline span attributes, round two (the <span> composite; its rule
-    // hook owns the closed set). scale multiplies the paragraph's base
+    // The later span additions (the <span> composite; its rule hook
+    // owns the closed set): scale and underline. scale multiplies the
+    // paragraph's base
     // size — the text element's size rung included — so a 1.5 run inside
     // a heading paragraph draws at heading x 1.5; the engine treats only
     // positive finite multipliers as scaling, so markup requires exactly

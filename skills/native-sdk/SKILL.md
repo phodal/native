@@ -1,13 +1,13 @@
 ---
 name: native-sdk
-description: Discovery skill for the Native SDK, a cross-platform native app toolkit inspired by the web - native-rendered apps from Native markup (.native) views plus Zig logic by default, with WebView-shell apps as a coexisting architecture. Use when the user asks what the Native SDK is, how to build a Native SDK app, author native UI, scaffold an app, configure app.zon, choose a WebView engine, add bridge commands, package an app, test a running app, or automate a Native SDK app.
+description: Discovery skill for the Native SDK, the complete toolkit for building native desktop applications - views are declarative Native markup (.native), logic is plain Zig, and the toolkit's own engine renders every pixel, with WebView surfaces as the optional web-content path. Use when the user asks what the Native SDK is, how to build a Native SDK app, author native UI, scaffold an app, configure app.zon, add bridge commands, embed web content, package an app, test a running app, or automate a Native SDK app.
 allowed-tools: Bash(native:*), Bash(npx @native-sdk/cli:*)
 hidden: true
 ---
 
 # Native SDK
 
-The Native SDK is a Zig desktop app shell for building native desktop apps with web UIs. It uses the platform WebView for small native-footprint apps and can bundle Chromium through CEF where supported.
+The Native SDK is the complete toolkit for building native desktop applications. Views are declarative markup in `.native` files, logic is plain Zig, and the toolkit's own engine draws every pixel into real OS windows — no browser, no WebView, no interpreter in the binary. Every app embeds a deterministic automation server, so agents can snapshot, drive, and screenshot the running window. Desktop is the mature surface (macOS deepest, Linux and Windows exercised in CI); mobile embedding is experimental. WebView surfaces coexist as the optional path for embedding web content or hosting an existing web frontend.
 
 ## Start here
 
@@ -25,9 +25,9 @@ Use `native skills get core` for initial orientation. Use `native skills get cor
 
 ```bash
 npm install -g @native-sdk/cli
-native init my_app --frontend next
+native init my_app
 cd my_app
-zig build run
+native dev
 ```
 
-Generated apps center on `app.zon`, `src/main.zig`, `src/runner.zig`, `build.zig`, and `frontend/`. Inspect those files before editing an existing app.
+Generated apps center on `app.zon`, `src/app.native` (the markup view), and `src/main.zig` (Model, Msg, update). Inspect those files before editing an existing app; web-frontend shells additionally carry `frontend/` and a `build.zig`.

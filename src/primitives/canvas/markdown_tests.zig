@@ -7,7 +7,7 @@ const support = @import("test_support.zig");
 
 const testing = std.testing;
 
-const dev2_readme = @embedFile("testdata/dev2_readme.md");
+const markdown_document_fixture = @embedFile("testdata/markdown_document.md");
 
 const Msg = union(enum) {
     open_url: []const u8,
@@ -327,18 +327,18 @@ test "malformed pipe blocks degrade to plain paragraphs" {
     try testing.expectEqual(@as(usize, 0), countKind(tree3.root, .table));
 }
 
-test "dev-2 README renders through the mapper and the reference renderer" {
+test "the README-shaped fixture renders through the mapper and the reference renderer" {
     var doc = TestDoc.init();
     defer doc.deinit();
-    const tree = try doc.build(dev2_readme, .{ .on_link = Ui.linkMsg(.open_url) });
+    const tree = try doc.build(markdown_document_fixture, .{ .on_link = Ui.linkMsg(.open_url) });
 
-    // Structure spot checks against the real document.
-    const title = findParagraphContaining(tree.root, "GHProjects").?;
+    // Structure spot checks against the fixture document.
+    const title = findParagraphContaining(tree.root, "Fieldnote").?;
     try testing.expectEqual(markdown.heading_scales[0], title.spans[0].scale);
     try testing.expect(findParagraphContaining(tree.root, "Left pane") != null);
-    const gh_link = findRoleLabel(tree.root, .link, "`gh`").?;
-    const open_msg = tree.msgForPointer(gh_link.id, .up).?;
-    try testing.expectEqualStrings("https://cli.github.com", open_msg.open_url);
+    const cli_link = findRoleLabel(tree.root, .link, "`flg`").?;
+    const open_msg = tree.msgForPointer(cli_link.id, .up).?;
+    try testing.expectEqualStrings("https://example.com/flg", open_msg.open_url);
     try testing.expect(countKind(tree.root, .panel) >= 2); // fenced code blocks
 
     // Layout + emit + reference-render the document; the pixel signature is
@@ -392,53 +392,20 @@ test "dev-2 README renders through the mapper and the reference renderer" {
     try surface.renderPass(frame.renderPass(), canvas.Color.rgb8(255, 255, 255));
 
     // Golden: byte-identical reference rendering of the README fixture.
-    try testing.expectEqual(dev2_readme_reference_signature, support.referenceSurfaceSignature(pixels));
+    try testing.expectEqual(markdown_document_reference_signature, support.referenceSurfaceSignature(pixels));
     try support.expectVisiblePixel(surface.pixelRgba8(24, 32));
 }
 
-// Reference-renderer pixel signature of the fixture at 760x2400 with
-// default tokens and the deterministic estimator. Regenerated when GFM
-// pipe tables landed: the README's command table now renders as a real
-// table instead of paragraphs.
-// Regenerated 2026-07-03: the reference renderer paints real Geist
-// outlines instead of block glyphs (vector core + bundled TTF parser).
-// Regenerated for the text-bounds ink allowance (2026-07-04): 27 pixels
-// changed, all additive — previously bounds-clipped tail-glyph edges (the
-// final stroke of trailing 'N's, a heading marker's leading edge) now ink.
-// Regenerated when the estimator became the bundled face's real advance
-// table (2026-07-04): 3.78% of pixels moved, all sub-pixel text shifts
-// and re-flowed line breaks (em dashes now measure 0.913 em instead of
-// the flat 0.65 em, so "—no" renders with its real gap); spot-reviewed
-// the three biggest-moving bands for overlap or clipping — none.
-// Regenerated for the house default palette (2026-07-04): color-only —
-// foreground/border/panel neutrals moved to the neutral scale and links/
-// accents to the blue-violet primary; no metric feeding markdown layout
-// changed, so glyph and rule geometry are byte-identical.
-// Regenerated for mono cell centering (2026-07-04): 3.06% of pixels
-// moved, all inside mono runs — each sans outline now centers in its
-// fixed 0.6 em cell instead of hugging the left edge, so inline code and
-// mono table cells read as monospace ("gh  aut h  l ogi n" ->
-// "gh auth login"); spot-reviewed the requirements bullet and the
-// command-table band before/after — no overlap, no clipping.
-// Regenerated for the bundled mono face (2026-07-04): 2.66% of pixels
-// moved, all inside mono runs — mono ids now ink real Geist Mono
-// outlines instead of centered sans outlines, so fixed-pitch text stops
-// colliding on wide caps and gapping on narrow ones ("Mbdels" ->
-// "Models", "st ream-j son" -> "stream-json"); layout metrics are
-// unchanged (the mono face's advance is exactly the 0.6 em the
-// estimator always charged) and sans-only bands are byte-identical;
-// spot-reviewed the sandbox steps and file-table bands before/after —
-// no overlap, no clipping.
-// Regenerated for the monochrome primary (2026-07-06): color-only —
-// links and accent runs now ink the register's near-black primary
-// (still underlined, so links stay distinguishable from body text);
-// no metric feeding markdown layout changed, so glyph and rule
-// geometry are byte-identical.
-// Re-pinned 2026-07-06 (table register): the README's GFM table renders
-// borderless cells on hairline row separators with the comfortable row
-// band and tight cell padding — no per-cell boxes. Reviewed via the
-// regenerated docs markdown/table previews (same emitters).
-const dev2_readme_reference_signature: u64 = 7783065737068287902;
+// Reference-renderer pixel signature of the README-shaped fixture at
+// 760x2400 with default tokens and the deterministic bundled-face
+// metrics. It pins the whole document register in one number: heading
+// scales, wrapped bullets and em-dash spacing at the face's real
+// advances, real sans and mono outlines (fixed-pitch runs sit in their
+// 0.6 em cells), GFM tables as borderless cells on hairline row
+// separators, fenced-code panels, and near-black underlined links.
+// Update deliberately when markdown rendering changes, reviewing the
+// rendered pixels first (see reference_tests.zig conventions).
+const markdown_document_reference_signature: u64 = 1138378532370101207;
 
 
 test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {
@@ -479,7 +446,7 @@ test "bare URLs autolink at word boundaries with trailing punctuation trimmed" {
     try testing.expectEqualStrings("https://example.com/path(1)", msg.open_url);
 }
 
-test "issue refs linkify only with an issue link base, at dev-2 boundaries" {
+test "issue refs linkify only with an issue link base, at word boundaries" {
     var doc = TestDoc.init();
     defer doc.deinit();
 

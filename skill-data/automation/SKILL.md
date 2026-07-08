@@ -1,13 +1,13 @@
 ---
 name: automation
-description: Automation and verification guide for running Native SDK WebView shell apps. Use when the user asks to test an app, inspect runtime state, list windows, wait for readiness, reload a WebView, send bridge commands, debug why automation is not connected, create smoke tests, or verify a Native SDK example in a GUI-capable session.
+description: Automation and verification guide for running Native SDK apps. Use when the user asks to test a running app, inspect runtime state, list windows, wait for readiness, drive widgets, take deterministic screenshots, send bridge commands, debug why automation is not connected, create smoke tests, or verify a Native SDK example in a GUI-capable session.
 ---
 
 # Automate Native SDK apps
 
-The Native SDK has a built-in automation system for inspecting running WebView shell apps. It works through file-based IPC in `.zig-cache/native-sdk-automation/` and is intended for smoke tests, CI checks with a GUI session, and quick runtime inspection.
+Every Native SDK app embeds an automation server — native-rendered apps and WebView-shell apps alike. It works through file-based IPC in `.zig-cache/native-sdk-automation/` and is intended for smoke tests, CI checks with a GUI session, and quick runtime inspection: accessibility snapshots, widget driving through the real input paths, deterministic reference-renderer screenshots, readiness/state assertions, and bridge round-trips.
 
-Automation is not browser DOM automation. It reports runtime/window/source state and can ask the runtime to reload or dispatch bridge requests. For frontend DOM testing, use the frontend framework's tests or a browser automation tool against the dev server.
+Automation is not browser DOM automation. It reports runtime/window/widget state, drives retained-canvas widgets, and can ask the runtime to reload or dispatch bridge requests. For DOM testing of the optional WebView path, use the frontend framework's tests or a browser automation tool against the dev server.
 
 ## What automation can verify
 
@@ -136,9 +136,10 @@ Determinism semantics:
   example `2`) for high-DPI pixel dimensions.
 - Screenshots use the live retained scene, including live design tokens and
   platform text measurement (CoreText on macOS): the layout matches what is
-  on screen. Glyphs are rasterized by the reference renderer's deterministic
-  block rendering, not the platform's font rasterizer, so screenshots are a
-  layout/structure/color signal rather than a font-rendering signal.
+  on screen. Glyphs are rasterized by the reference renderer from the
+  bundled faces, not by the platform's font rasterizer, so screenshots are a
+  deterministic layout/structure/color signal rather than a platform
+  font-rendering signal.
 - Cross-machine byte-identity is only guaranteed where text metrics are
   deterministic (the null platform's estimator). On platforms with a native
   text measurement provider, text widths can differ between OS versions, so

@@ -1599,8 +1599,8 @@ test "compiled span paragraphs build the interpreter's and the hand-written para
 
     // The three engines agree node for node: mixed weight/mono/italic/
     // color runs, bindings inside spans, a bound weight, single-space
-    // collapsing, the abutting punctuation run, and — round two —
-    // scaled (literal and bound) and underlined runs.
+    // collapsing, the abutting punctuation run, and the later span
+    // additions — scaled (literal and bound) and underlined runs.
     try expectSameTree(fixture.SpanMsg, hand, interpreted);
     try expectSameTree(fixture.SpanMsg, hand, compiled);
     try expectSameTexts(interpreted.root, compiled.root);
@@ -1615,11 +1615,11 @@ test "compiled span paragraphs build the interpreter's and the hand-written para
     try testing.expectEqual(canvas.TextSpanWeight.bold, compiled_disk.spans[2].weight);
     try testing.expect(compiled_disk.spans[10].monospace);
 
-    // Round two: the compiled engine lowers the comptime-literal scale,
-    // the runtime-bound scale, and the underline decoration to the same
-    // channels the interpreter and the hand-written paragraph carry
-    // (textSpansEqual above already held the full lists equal — these
-    // pins state the interesting values).
+    // The later span additions: the compiled engine lowers the
+    // comptime-literal scale, the runtime-bound scale, and the underline
+    // decoration to the same channels the interpreter and the
+    // hand-written paragraph carry (textSpansEqual above already held
+    // the full lists equal — these pins state the interesting values).
     const compiled_title = compiled.root.children[2];
     try testing.expectEqualStrings("182 GB free on 512 GB at native doctor", compiled_title.text);
     try testing.expectEqual(@as(f32, 1.5), compiled_title.spans[0].scale);

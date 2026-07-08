@@ -712,22 +712,16 @@ test "chart golden: line + bar + band render byte-identically in light and dark"
     try testing.expectEqual(@as(u64, golden_dark_signature), dark_signature);
 }
 
-// Pinned after pixel review of the CHART_GOLDEN_DUMP artifacts (line +
-// area fill + gridlines in accent, zero-baseline bars in success, band
-// envelope in info; both themes clear with their background token).
-// Regenerated for the monochrome primary (2026-07-06): color-only — the
-// accent series now inks near-black in light and porcelain in dark (the
-// register's mono primary); success bars, info band, and all geometry
-// are byte-identical.
-// Regenerated for axis tick labels (2026-07-06): a fourth tile pins the
-// labeled register — muted y ticks (1, 0.5, 0) on the gridline lattice
-// and deterministically thinned x category labels (q1, q3) under the
-// bars; the first three tiles' geometry is unchanged.
-// Regenerated for the stroke_path cap channel (2026-07-07): line-series
-// strokes now end with butt caps (the wire default — a stroke that
-// declares no linecap) instead of the renderer's former always-round
-// ends; only the line tile's endpoint pixels moved — bars, band, and
-// labels are byte-identical.
+// Pinned after pixel review of the CHART_GOLDEN_DUMP artifacts. Four
+// tiles: a line series (accent — the monochrome primary: near-black in
+// light, porcelain in dark) whose stroke ends with butt caps (the wire
+// default for a stroke that declares no linecap), an area fill with
+// gridlines in the same accent, zero-baseline bars in success with a
+// band envelope in info, and the labeled register — muted y ticks (1,
+// 0.5, 0) on the gridline lattice and deterministically thinned x
+// category labels (q1, q3) under the bars. Both themes clear with their
+// background token. Update deliberately when chart rendering changes,
+// reviewing the dumped pixels first.
 const golden_light_signature: u64 = 11760269401975515075;
 const golden_dark_signature: u64 = 1706071444071293822;
 

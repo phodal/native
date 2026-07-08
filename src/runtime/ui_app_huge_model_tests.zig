@@ -1,9 +1,9 @@
 //! Stack-safety guard: a Model bigger than the 8 MiB test-thread
 //! stack must construct, install, and dispatch without EVER riding the
-//! stack. `UiApp.init` takes the Model by value — at ovation's 5.9 MB
-//! Model one test's 2 MB scratch beside it overflowed the stack and
-//! segfaulted inside init (the third sighting of the multi-MB-by-value
-//! stack-overflow trap). The
+//! stack. `UiApp.init` takes the Model by value — at a production-scale
+//! 5.9 MB Model one test's 2 MB scratch beside it overflowed the stack
+//! and segfaulted inside init (the third sighting of the
+//! multi-MB-by-value stack-overflow trap). The
 //! `create`/`initInPlace` seam heap-allocates the app and constructs
 //! every field, the Model included, in place; with a 12 MiB Model any
 //! regression back to a stack temporary crashes this test outright.

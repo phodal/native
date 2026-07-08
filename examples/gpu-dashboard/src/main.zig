@@ -40,87 +40,36 @@ const max_dashboard_commands: usize = native_sdk.runtime.max_canvas_commands_per
 const max_dashboard_glyphs: usize = native_sdk.runtime.max_canvas_glyphs_per_view;
 const max_dashboard_widgets: usize = 64;
 const dashboard_chrome_prefix_commands: usize = 5;
-// 69 after the component control sweep: the switch track dropped its
-// default border stroke and the inactive tab segments dropped theirs
-// (selection reads by elevation now), while the search field's magnifier
-// became a vector icon (5 hand-drawn lines -> transform + 2 stroked
-// paths + inverse transform).
-// Regenerated 2026-07-04 for the house tab-strip treatment treatment: an
-// UNSELECTED segmented control is transparent (its muted wash moved to
-// the tabs-list container), so the toolbar's mode trigger paints one
-// fewer fill.
-// 70 after the table register: the single-row data grid's cell dropped
-// its default box stroke (tabular chrome is hairline ROW separators now,
-// and a lone last row draws none).
-// 70 after the flat button register: buttons cast no shadow at all now
-// (the measured base family is flat), so the two filled buttons (the
-// toolbar's secondary Refresh, the side column's Live render) each
-// dropped the shadow command that briefly led their fill.
+// The dashboard's full display list under the current house registers:
+// the 5-command chrome prefix (no drawn app-name title — a window never
+// labels itself) plus the widget-emitted commands. The count reflects
+// register invariants worth guarding: flat buttons emit no shadow
+// command, an unselected tab segment and the switch track paint no fill
+// or stroke of their own (selection reads by elevation, the muted wash
+// lives on the tabs-list container), the single-row data grid draws
+// hairline ROW separators instead of per-cell boxes (a lone last row
+// draws none), and the search field's magnifier is the vector icon
+// (transform + 2 stroked paths + inverse transform). A register change
+// that adds or removes a command per control moves this by the number
+// of affected controls — re-count deliberately.
 const expected_dashboard_command_count: usize = 70;
 const expected_dashboard_interaction_command_count: usize = 70;
-// Regenerated 2026-07-04: layout measures with the bundled face's real
-// advance table (estimator wave); spot-reviewed before/after — sub-pixel
-// text shifts only, no layout change.
-// Regenerated 2026-07-03: reference text paints real Geist outlines
-// (vector core + bundled TTF parser) instead of block glyphs.
-// Regenerated 2026-07-04 for the house default palette + control sweep:
-// primary accents moved to the blue-violet preset, the switch/tab chrome
-// lost default track borders, the slider grew to a 6px track with a
-// primary-ringed thumb, and the search magnifier is the vector icon.
-// Reviewed via the gpu-components before/after captures (same emitters,
-// same reference renderer).
-// Regenerated 2026-07-04 with the same sweep (transparent unselected
-// tab trigger); reviewed via the docs tabs before/after captures.
-// Regenerated 2026-07-04 for the search field's built-in trailing clear
-// affordance: the segment-search field holds text, so it now draws the
-// vector x over its trailing inset (reviewed via the soundboard/monitor
-// search-state captures — same emitter, same reference renderer).
-// Regenerated 2026-07-05 for the shortened activity-rail titles: list
-// rows paint one line and never elide, so the titles now budget for the
-// rail width with long-content headroom (enforced by the layout audit
-// sweep); reviewed via before/after reference captures.
-// Regenerated 2026-07-06 for the header register: the toolbar no longer
-// draws an app-name title in its chrome prefix (a window never labels
-// itself), so the prefix is one command shorter and the mode control
-// leads the band right after the window controls.
-// Regenerated 2026-07-06 for the monochrome primary register: color-only
-// — checked/filled-primary states and accent-inked chrome move from the
-// blue-violet to the register's near-black/porcelain pair; geometry is
-// unchanged. Reviewed via the automation screenshot pass.
-// Regenerated 2026-07-06 (component fidelity round): the conversion bar
-// renders as the intrinsic 4px progress rail on the muted track (and the
-// auto-refresh control is spelled `switch_control`, the sliding-control
-// kind). Spot pixels below still guard visibility; reviewed via the
-// regenerated docs progress previews (same emitter, same reference
-// renderer).
-// Re-pinned same day for the badge + table register (borderless data
-// cells); reviewed via the regenerated docs table previews.
-// Regenerated 2026-07-06 (button fidelity round): buttons take the
-// register metrics (32/36/40 heights, 12/16/24 side insets, one radius
-// and one 14px label size across the ladder, medium-companion label
-// face at its wider advances), filled buttons cast the whisper shadow,
-// and pressed/disabled states read on the wash ladder. Reviewed via
-// the regenerated docs button previews in light and dark.
-// Re-pinned same day on the merged tree adding the select rework: menu
-// rows draw with their own emitter — full-row wash for keyboard/hover,
-// a trailing checkmark on the committed row instead of a selected wash,
-// no focus outline — and sit on the comfortable 32px band, so the
-// filter popover grew to hold its three rows. Reviewed via a live
-// automation capture (idle popover and a committed row with its
-// checkmark) before blessing.
-// Regenerated 2026-07-06 (button fidelity round two — the measured base
-// register): the control ladder compacts to 28/32/36 heights with one
-// 10px side inset, corners sit at 10 (8 at sm), the sm label steps to
-// 12.8, buttons are FLAT (the round-one whisper shadow is gone), and
-// destructive is the quiet red-wash chip with red ink instead of the
-// filled alarm block. Reviewed via the regenerated docs button previews
-// in light and dark.
-// Regenerated 2026-07-07 (slider fidelity round): the confidence slider
-// takes the measured house register — a 4px muted rail (down from 6)
-// under a fixed 12px paper-white thumb whose resting hairline is the
-// focus-ring neutral instead of the primary. Only the slider pixels
-// move. Reviewed via the regenerated docs slider previews and the live
-// docs tile in both schemes.
+// Reference-renderer pixel signature of the dashboard scene. It pins the
+// current house registers in one number: real sans/mono outline text at
+// the bundled face's metrics; the flat 28/32/36 button ladder (one 10px
+// side inset, radius 10 stepping to 8 at sm, quiet red-wash
+// destructive); the near-black/porcelain monochrome primary on
+// checked/filled states and accent chrome; the transparent unselected
+// tab trigger on its muted tabs-list container; the 4px muted-rail
+// progress bar and the slider's fixed 12px paper-white thumb with a
+// focus-ring-neutral resting hairline; borderless data cells on
+// hairline row separators; menu rows with full-row wash and a trailing
+// checkmark on the comfortable 32px band in the filter popover; the
+// titleless toolbar; the search field's vector magnifier and trailing
+// clear x; and activity-rail titles budgeted to never elide. Update
+// deliberately when rendering changes, reviewing the rendered pixels
+// (reference captures or the docs previews — same emitters) first; the
+// spot pixels below still guard basic visibility.
 const expected_dashboard_reference_signature: u64 = 2871108290690187392;
 const expected_dashboard_widget_node_count: usize = 48;
 const expected_dashboard_snapshot_widget_count: usize = 48;

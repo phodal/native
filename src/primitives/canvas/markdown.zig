@@ -105,7 +105,7 @@ pub fn Markdown(comptime Msg: type) type {
             /// blocks beyond the slice render collapsed.
             details_expanded: []const bool = &.{},
             /// Non-null turns `#123` issue references at word boundaries
-            /// (dev-2 MarkdownView semantics: not preceded by a word
+            /// (issue-tracker-client semantics: not preceded by a word
             /// byte, `/`, or `&`; digits end at a word boundary) into
             /// link spans whose target is this prefix followed by the
             /// number — an app scheme (`"ghissue://"`) or a web base
@@ -948,8 +948,8 @@ fn parseAutolinkAt(source: []const u8, index: usize, cache: *ScanCache) ?InlineL
     return .{ .text = target, .target = target, .consumed = close + 1 };
 }
 
-/// Word-boundary test for bare-URL and `#N` autolinking (dev-2
-/// MarkdownView's `(^|[^\w/&])`): don't link when continuing a word, a
+/// Word-boundary test for bare-URL and `#N` autolinking (the classic
+/// `(^|[^\w/&])` register): don't link when continuing a word, a
 /// path (`/`), or an HTML entity (`&`).
 fn atAutolinkBoundary(text: []const u8, index: usize) bool {
     if (index == 0) return true;
@@ -1007,7 +1007,7 @@ const IssueRef = struct {
 };
 
 /// Parse `#123` at the start of `rest`: one or more digits ending at a
-/// word boundary (dev-2 MarkdownView's `#(\d+)\b`). The caller checks
+/// word boundary (the classic `#(\d+)\b` register). The caller checks
 /// the leading boundary and supplies the link base.
 fn parseIssueRefAt(rest: []const u8) ?IssueRef {
     if (rest.len < 2 or rest[0] != '#') return null;

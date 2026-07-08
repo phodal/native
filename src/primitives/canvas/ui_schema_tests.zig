@@ -24,21 +24,19 @@ test "registry codes are stable: assigned at birth, never renumbered or renamed"
     try testing.expectEqual(@as(usize, 65), schema.elements.len);
     try testing.expectEqual(@as(usize, 78), schema.attrs.len);
     try testing.expectEqual(@as(usize, 10), schema.events.len);
-    // Re-pinned for the span composite addition (element 64).
-    // Re-pinned for the bubble reactions composite addition (element
-    // 65); the pill's dock rides the existing text-alignment attribute,
-    // so the attr table is untouched.
+    // The element table runs through the span composite (64) and the
+    // bubble-reactions composite (65); the reaction pill's dock rides
+    // the existing text-alignment attribute, so element additions can
+    // leave the attr table untouched.
     try testing.expectEqual(
         @as(u64, 0x961be186c9929e4c),
         tableFingerprint(schema.ElementInfo, &schema.elements),
     );
-    // Re-pinned on the merged tree carrying both same-day reservations:
-    // the split layout-tween attributes resize-duration (71) and
-    // resize-easing (72), and the chart axis/hover attributes x-labels
-    // (73), y-labels (74), and hover-details (75).
-    // Re-pinned again on the merged tree adding the span round-two
-    // attributes scale (76) and underline (77).
-    // Re-pinned for the split enter-from attribute resize-origin (78).
+    // The attr table runs through the split layout-tween attributes
+    // resize-duration (71) and resize-easing (72), the chart axis/hover
+    // attributes x-labels (73), y-labels (74), and hover-details (75),
+    // the later span additions scale (76) and underline (77), and the
+    // split enter-from attribute resize-origin (78).
     try testing.expectEqual(
         @as(u64, 0x13fddf21980756c0),
         tableFingerprint(schema.AttrInfo, &schema.attrs),

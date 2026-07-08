@@ -599,90 +599,23 @@ test "gpu components display list renders stable reference snapshot" {
     const surface = (try canvas.ReferenceRenderSurface.initWithScratch(@intFromFloat(canvas_width), @intFromFloat(canvas_height), pixels, scratch)).withImages(&preview_images);
     try surface.renderPass(frame.renderPass(), color(247, 249, 252));
 
-    // Regenerated 2026-07-03: reference text paints real Geist outlines
-    // (vector core + bundled TTF parser) instead of block glyphs.
-    // Regenerated 2026-07-04: layout measures with the bundled face's real
-    // advance table (estimator wave); sub-pixel text shifts only,
-    // spot-reviewed against the previous render — no layout change.
-    // Regenerated 2026-07-04 (the component fidelity sweep): default palette is
-    // the house neutral + blue-violet preset; switch is a borderless
-    // 44x24 pill with a 20px thumb; checkbox/radio are 16px; slider has a
-    // 6px track and primary-ringed thumb; the progress track is
-    // primary/20; tabs select by elevation instead of accent fill; the
-    // search magnifier is the vector icon. Reviewed against before/after
-    // captures at 1x and 2x in light, dark, and high-contrast.
-    // Regenerated 2026-07-04 (docs-preview review round 2): the tabs list
-    // is one muted container with transparent inactive triggers, the
-    // accordion is borderless with the registry chevron, the alert wears
-    // the registry info mark aligned to its first text line, and the
-    // catalog cards pin their compact 16px inset explicitly (the card
-    // component default is now the component default of 24). Spot-reviewed via a full
-    // reference render dump before blessing.
-    // Regenerated 2026-07-06, re-pinned on the merged tree carrying BOTH
-    // same-day changes: segmented triggers take the concentric radius
-    // (TabsList container radius minus the 3px hug) with the density tabs
-    // spelling out the house hug, and the monochrome-primary register
-    // inks checked/filled-primary states near-black in light instead of
-    // the blue-violet (the catalog's inline dialog/drawer/sheet specimens
-    // opt out of the modal scrim, so no scrim commands land here). Both
-    // sides spot-reviewed via reference captures before blessing.
-    // Regenerated 2026-07-06 (component fidelity round): progress drops
-    // to the 4px muted-track rail; the pagination preview takes the
-    // reference shape (ghost chevron prev/next, ghost pages with the
-    // outline current page, an ellipsis cell) on the 2px pagination gap;
-    // selected outline/ghost NAV buttons stop wearing the muted wash
-    // (currency shows through the variant; toggles keep the wash); the
-    // `toggle` kind renders as the pressed-state button family (the
-    // sliding control is `switch` alone); the environment picker floats
-    // ANCHORED below its trigger; and the header band drops the drawn
-    // app title and carries a real three-trigger theme strip. Reviewed
-    // via regenerated docs previews AND live light/dark captures of the
-    // running app before blessing.
-    // Re-pinned same day for the badge + table register: badges compact
-    // to the 20px chip (small text, quiet borderless secondary and
-    // destructive-wash variants), and tables/data grids drop per-cell
-    // boxes for engine-drawn hairline row separators with row-level
-    // hover washes and right-alignable cells. Reviewed via regenerated
-    // docs badge/table previews and the live system-monitor capture.
-    // Re-pinned on the merged tree carrying the single-line overflow
-    // default: bounded text lays out with trailing-ellipsis elision, so
-    // any label near its box edge re-rasterizes at the elision boundary
-    // even when no glyph is dropped. Reviewed via regenerated docs
-    // previews (only the separator hero pair changed) before blessing.
-    // Regenerated 2026-07-06 (button fidelity round two — the measured
-    // base register): the whole control ladder compacts to 28/32/36
-    // heights (buttons, inputs, and selects move together, so the
-    // one-toolbar-row invariant holds), side insets settle at one 10px
-    // register, corners sit at 10 with one step down to 8 at sm, the sm
-    // label steps to 12.8, buttons are FLAT (round one's whisper shadow
-    // retired), destructive renders as the quiet red-wash chip with red
-    // ink and no border, and dark outline turns glass (white 4.5% body,
-    // white 15% border). Reviewed via regenerated docs button previews
-    // in light and dark before blessing.
-    // Re-pinned same day on the merged tree adding the select rework:
-    // the select trigger's open-below affordance is the registry
-    // chevron at the shared row-icon extent instead of two hand-drawn
-    // lines, menu rows moved to their own emitter (full-row wash for
-    // keyboard/hover, trailing checkmark for the committed row, no
-    // focus outline) on the comfortable 32px band — the visible menu
-    // specimen and its surface grew to hold three such rows. Reviewed
-    // via regenerated docs select/dropdown/menu previews and live
-    // light/dark captures before blessing.
-    // Re-pinned 2026-07-06 on the tree carrying the select rework
-    // (combobox chevron register): the combobox trigger's open-below
-    // affordance is now the same registry chevron-down at the shared
-    // row-icon extent the select trigger draws, instead of a
-    // hand-drawn two-line glyph. Only the catalog's combobox pixels
-    // move past the select-rework pin. Reviewed via the regenerated
-    // docs combobox previews (the sole preview churn) before blessing.
-    // Re-pinned 2026-07-07 (slider fidelity round): the house slider
-    // takes its measured register — a 4px muted rail (down from 6)
-    // under a fixed 12px paper-white thumb (down from the row-coupled
-    // 16-20) whose resting hairline is the focus-ring neutral instead
-    // of the primary; disabled now mutes rail, range, and thumb to the
-    // half-strength wash as one piece. Only the slider tile moves.
-    // Reviewed via regenerated docs slider previews and the live docs
-    // tile in both schemes before blessing.
+    // Reference-renderer pixel signature of the component catalog under
+    // default tokens. It pins the house component registers in one
+    // number: real sans/mono outline text at the bundled face's metrics
+    // with trailing-ellipsis elision; the flat 28/32/36 control ladder
+    // (one 10px side inset, radius 10 stepping to 8 at sm, the quiet
+    // red-wash destructive chip, glass dark outline); the borderless
+    // 44x24 switch and 16px checkbox/radio; the 4px muted-rail progress
+    // and slider with the fixed 12px paper-white thumb; elevation-selected
+    // tabs as transparent triggers on one muted container with concentric
+    // segment radii; borderless accordion, registry chevrons on
+    // select/combobox triggers, and menu rows with full-row wash plus a
+    // trailing checkmark on the comfortable 32px band; 20px chip badges
+    // and hairline-row-separator tables; ghost-chevron pagination; the
+    // anchored environment picker; and the near-black monochrome primary
+    // on checked/filled states. Update deliberately when component
+    // rendering changes, reviewing the rendered pixels (reference render
+    // dump or docs previews — same emitters) first.
     try std.testing.expectEqual(@as(u64, 4863232662243686658), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
@@ -737,40 +670,23 @@ fn renderComponentsReferenceSurface(tokens: canvas.DesignTokens, pixels: []u8, s
 
 test "gpu components display list renders stable geist reference snapshot" {
     // The SAME catalog widget tree as the house snapshot above, rendered
-    // under the built-in Geist pack — the second design system the SDK
-    // machine-verifies in CI. This pin proves the pack's entire register
-    // (palette, control tables, metrics, type) stays pixel-stable, and
-    // that theme selection composes through the ordinary token path with
-    // no emitter branches. Pinned 2026-07-06 alongside the pack's first
-    // authoring; light and dark captures of the catalog under the pack
-    // were reviewed by eye before blessing.
-    // Re-pinned 2026-07-07 (slider fidelity round): the pack's slider
-    // now states its own register — an 8px gray-200 rail, the blue-700
-    // range, and a 6x14 paper-white rectangular handle on a 1px corner
-    // with a black hairline — through the new slider metric tokens and
-    // the slider control table. Only the slider tile moves. Reviewed
-    // via the live docs tile under the pack in both schemes before
-    // blessing.
-    // Re-pinned 2026-07-07 (tabs fidelity round): the pack's tabs move
-    // to the underline register through the new `tabs_indicator` token
-    // channel — bare text triggers on a transparent strip, a 1px solid
-    // gray-400 hairline closing the strip's bottom edge, and a 2px bar
-    // in the primary ink hugging the active label, overlapping the
-    // hairline where they meet. Inactive labels keep the secondary ink.
-    // Only the tabs tile moves; the house pin above is untouched (the
-    // pill register renders byte-identically). Reviewed via the live
-    // docs tabs tile under the pack toggle in both site schemes before
-    // blessing.
-    // Re-pinned 2026-07-08 (pure-black primary): the pack's light-mode
-    // primary FILL steps from gray-1000 #171717 to the register's true
-    // black #000000 — the pack's identity for filled controls in light —
-    // while gray-1000 stays the primary INK for text. Every accent-fed
-    // fill moves together (primary button, checked checkbox, toggle-on
-    // track, tooltip chip); ink, slider blue, and every dark/high-
-    // contrast register are untouched. The house pin above does not
-    // move (the default pack keeps its faithful #171717 primary).
-    // Reviewed via before/after catalog captures under the pack's light
-    // scheme before blessing.
+    // under the built-in Geist pack — the second design system the
+    // toolkit machine-verifies in CI. This pin proves the pack's entire
+    // register (palette, control tables, metrics, type) stays
+    // pixel-stable, and that theme selection composes through the
+    // ordinary token path with no emitter branches. The pack's
+    // distinguishing registers inside the number: the slider's 8px
+    // gray-200 rail, blue-700 range, and 6x14 paper-white rectangular
+    // handle on a 1px corner with a black hairline; underline tabs (bare
+    // text triggers on a transparent strip, a 1px gray-400 hairline
+    // closing the strip's bottom edge, a 2px active bar in the primary
+    // ink overlapping it, secondary ink on inactive labels); and the
+    // pure-black #000000 light-mode primary FILL on every accent-fed
+    // fill (primary button, checked checkbox, toggle-on track, tooltip
+    // chip) while gray-1000 #171717 stays the primary INK for text.
+    // Update deliberately when the pack or component rendering changes,
+    // reviewing light and dark captures of the catalog under the pack
+    // first.
     const pixel_count = @as(usize, @intFromFloat(canvas_width)) * @as(usize, @intFromFloat(canvas_height)) * 4;
     const pixels = try std.testing.allocator.alloc(u8, pixel_count);
     defer std.testing.allocator.free(pixels);
@@ -857,9 +773,8 @@ test "geist button group renders the detached secondary-tab register in both sch
     // ink-inverted fill (gray-1000 under page-color knockout — NOT the
     // pack's pure-black light primary), the unselected chip on the
     // translucent gray wash under the primary ink, no borders, no
-    // container chrome. Pinned 2026-07-08 with the register's first
-    // authoring; light and dark captures of this exact specimen were
-    // reviewed by eye before blessing.
+    // container chrome. Update deliberately when the register changes,
+    // reviewing light and dark captures of this exact specimen first.
     const pixels = try std.testing.allocator.alloc(u8, button_group_surface_pixels);
     defer std.testing.allocator.free(pixels);
     const scratch = try std.testing.allocator.alloc(u8, button_group_surface_pixels);
@@ -964,9 +879,9 @@ test "geist tabs separate underline triggers by the measured 24px gap in both sc
     // The pack's tab register laid out with the pack's own tokens: bare
     // text triggers 24px apart (the `tabs_gap` metric, measured as the
     // reference strip's flex gap), the strip's closing hairline, and the
-    // 2px active bar under the selected label. Pinned 2026-07-08 with the
-    // gap's first authoring; light and dark captures of this exact
-    // specimen were reviewed by eye before blessing.
+    // 2px active bar under the selected label. Update deliberately when
+    // the register changes, reviewing light and dark captures of this
+    // exact specimen first.
     const pixels = try std.testing.allocator.alloc(u8, tabs_surface_pixels);
     defer std.testing.allocator.free(pixels);
     const scratch = try std.testing.allocator.alloc(u8, tabs_surface_pixels);

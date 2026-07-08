@@ -27,7 +27,8 @@ const PickerModel = struct {
     holds: u32 = 0,
     crumb_presses: u32 = 0,
     // The crumb-switcher leg: a NON-focusable text trigger whose click
-    // opens an anchored menu (dev-2's breadcrumb switcher).
+    // opens an anchored menu (a breadcrumb switcher, as desktop
+    // issue/file browsers draw one).
     switcher_open: bool = false,
     switcher_dismissals: u32 = 0,
 };

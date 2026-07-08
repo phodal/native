@@ -861,7 +861,7 @@ test "chat-transcript-shaped interactions ride small patches" {
     const edit_patch_bytes = view.gpu_present_patch_bytes;
     try std.testing.expect(edit_patch_bytes * 10 < full_bytes);
 
-    // (c) One message appended — the dominant ovation-chat frame.
+    // (c) One message appended — the dominant chat-transcript frame shape.
     _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{
         .commands = Scene.build(&text_storage, &glyph_storage, &command_storage, 200, 0, 3, 7),
     });

@@ -1,6 +1,6 @@
 # Changelog fragments
 
-Agents and feature branches do not edit `CHANGELOG.md` directly — concurrent work would conflict on every merge. Instead, each change lands with a small fragment in this directory, and `scripts/changelog-merge.sh` folds all fragments into the `## Unreleased` section of `CHANGELOG.md` (typically during release prep, see AGENTS.md).
+Agents and feature branches do not edit `CHANGELOG.md` directly — concurrent work would conflict on every merge. Instead, each change lands with a small fragment in this directory, and `scripts/changelog-merge.sh` folds all fragments into the `## Unreleased` section of `CHANGELOG.md` (typically during release prep, see RELEASING.md).
 
 ## Writing a fragment
 

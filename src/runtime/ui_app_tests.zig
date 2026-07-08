@@ -2536,8 +2536,9 @@ fn trayStateCommand(name: []const u8) ?TrayStateMsg {
     return null;
 }
 
-/// dev-2's menu-bar extra shape: an open-count badge in the title and the
-/// latest issues in the dropdown, each row selecting its issue.
+/// A desktop issues-client menu-bar extra shape: an open-count badge in
+/// the title and the latest issues in the dropdown, each row selecting
+/// its issue.
 fn trayStateStatusItem(model: *const TrayStateModel, scratch: *TrayStateApp.StatusItemScratch) TrayStateApp.StatusItemState {
     const title = std.fmt.bufPrint(&scratch.title_buffer, "ZN {d}", .{model.open_count}) catch "ZN";
     scratch.items[0] = .{ .id = 1, .label = "Refresh", .command = "app.refresh" };

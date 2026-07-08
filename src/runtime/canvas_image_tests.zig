@@ -230,7 +230,7 @@ const AvatarApp = ui_app_model.UiApp(AvatarModel, AvatarMsg);
 fn avatarUpdate(model: *AvatarModel, msg: AvatarMsg, fx: *effects_mod.Effects(AvatarMsg)) void {
     switch (msg) {
         .load => {
-            // The ovation avatar path: fetched bytes -> decode+register ->
+            // The remote-avatar path: fetched bytes -> decode+register ->
             // ImageId in the model only on success, so the view keeps the
             // initials fallback while loading or after a failure.
             _ = fx.registerImageBytes(avatar_image_id, avatar_fetched_bytes) catch {

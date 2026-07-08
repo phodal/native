@@ -1,4 +1,4 @@
-//! Compile-cost guard: a deliberately huge Model — ovation-shaped,
+//! Compile-cost guard: a deliberately huge Model — production-app-shaped,
 //! ~240 public decls plus dozens of distinct slice item types — must build
 //! through BOTH markup engines without the test (or any app) raising
 //! `@setEvalBranchQuota`. Before the fix, `collectItemTypes`'s comptime
@@ -494,7 +494,7 @@ test "huge Model builds through the compiled engine without raising the eval-bra
 test "huge Model reflects into a model contract without raising the eval-branch quota" {
     // The describe step is a Model/Msg-scaled comptime walk like the
     // engines' own: it must derive its quota from the scanned types, so
-    // the ovation-shaped fixture is its compile-cost tripwire too.
+    // the production-scale fixture is its compile-cost tripwire too.
     const huge_contract = comptime canvas.ui_markup.contract.describe(HugeModel, HugeMsg, .{
         .TextInputEvent = canvas.TextInputEvent,
         .ScrollState = canvas.ScrollState,

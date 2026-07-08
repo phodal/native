@@ -2270,7 +2270,8 @@ pub fn Ui(comptime Msg: type) type {
             if (node.on_toggle != null) widget.semantics.actions.toggle = true;
             // A hold handler makes the element pressable (hit target +
             // press claimer), like on_press: the hold gesture starts as a
-            // press, and dev-2's Menu+primaryAction shape pairs the two.
+            // press, and the classic list-row shape (press to open, hold
+            // for the menu) pairs the two on one element.
             if (node.on_hold != null) widget.semantics.actions.press = true;
             if (node.on_input != null) widget.semantics.actions.set_text = true;
             if (widget.kind == .slider and (node.on_value != null or node.on_change != null)) {

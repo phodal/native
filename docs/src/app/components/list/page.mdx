@@ -29,6 +29,23 @@ ui.list(.{ .width = 340, .gap = 2 }, .{
 })
 ```
 
+## Selection and activation
+
+When selection is model state — the accent row your app owns — rows use the desktop gesture split: a single click selects (`on-press`), and the primary action (open the record, play the track) rides the double click and Enter. Bind the primary action twice — `on_double_press` for the pointer (Zig builder only; markup has no double-click event) and `on-submit` for the keyboard:
+
+```zig
+ui.listItem(.{
+    .selected = model.selected == track.id,
+    .on_press = Msg{ .select_track = track.id },      // click, and Space on a ring-focused row
+    .on_double_press = Msg{ .play_track = track.id }, // double click: the primary action
+    .on_submit = Msg{ .play_track = track.id },       // plain Enter: the same primary action
+}, track.title)
+```
+
+The double click is additive, never a delay: the first click dispatches the select on its own release, the second release dispatches the play — select-then-act, with no press timer. On the keyboard, a bound `on-submit` makes plain Enter the row's primary action while Space keeps select; rows without one resolve Enter as select, unchanged.
+
+The arrows stay app-owned after clicking around: pointer focus on a plain list row is quiet (no ring), and a quietly focused row routes no keys — arrows and Enter fall through to the app-level key fallback, where a selection-owning app moves its own selection. Tab onto a row draws the ring and restores the row's full keymap (arrows walk the rows, Space selects, Enter submits), and rows carrying `role="treeitem"` keep the [tree](/components/tree)'s roving keymap under either register. The full routing order is in [Native UI § Keyboard routing](/native-ui#keyboard-routing-focus-registers-quiet-list-rows-and-the-app-level-fallback); `examples/soundboard`'s track lists are the live reference for the whole pattern.
+
 ## Virtualization
 
 For long row sets, turn on `virtualized` and give each row a fixed `virtual-item-extent` — the engine lays out only the rows in view. Loop the model data with a keyed `for` and dispatch a payload per row. The rows still all BUILD (this bounds layout and paint, not the tree), so it suits row sets the model already holds — hundreds, not hundreds of thousands. For dataset-scale rows where the view should only ever build the visible window, use the builder's [virtual list](/components/virtual-list).
@@ -49,4 +66,4 @@ List:
 
 List-item:
 
-<AttrTable attrs={["text", "icon", "selected", "disabled", "on-press"]} />
+<AttrTable attrs={["text", "icon", "selected", "disabled", "on-press", "on-submit"]} />

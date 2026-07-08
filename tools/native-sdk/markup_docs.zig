@@ -263,7 +263,7 @@ pub const event_docs = [_]Doc{
     .{ .name = "on-press", .doc = "Dispatch a Msg on press: tag or tag:{payload}. Legal on any element — a bound press handler makes it pressable, and presses on plain text/icons inside it fall through to it (dragging still selects text)." },
     .{ .name = "on-toggle", .doc = "Dispatch a Msg on toggle: tag or tag:{payload}. Hit-target elements only (checkbox, toggle, toggle-button, switch, accordion, ...)." },
     .{ .name = "on-change", .doc = "Dispatch a Msg on change: tag or tag:{payload}. Hit-target elements only (slider, ...)." },
-    .{ .name = "on-submit", .doc = "Dispatch a Msg on enter in a text field (primary+enter in a textarea): tag or tag:{payload}." },
+    .{ .name = "on-submit", .doc = "Dispatch a Msg on submit: tag or tag:{payload}. Enter in a text field, primary+enter in a textarea; on a list-item, plain Enter dispatches it as the row's primary action while Space keeps the row's select (on-press)." },
     .{ .name = "on-input", .doc = "Names a Msg variant with canvas.TextInputEvent payload; delivers each text edit." },
     .{ .name = "on-scroll", .doc = "scroll element only: names a Msg variant with canvas.ScrollState payload; delivers the post-scroll offset/viewport/content extents after wheel, kinetic, keyboard, and accessibility scrolls." },
     .{ .name = "on-dismiss", .doc = "Dismissible surfaces only (dialog, drawer, sheet, dropdown-menu): Msg dispatched when Escape or a click outside dismisses the surface, so the MODEL owns the close (clear the open flag in update). The engine hides the surface immediately as an optimistic echo; the source tree wins on the next rebuild." },

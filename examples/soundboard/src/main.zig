@@ -4,13 +4,17 @@
 //! menus, a now-playing bar with REAL audio playback through the runtime
 //! audio effect family, search, and a custom light/dark theme.
 //!
-//! Authoring split (markup-first): the header and now-playing bars are
-//! `.native` views compiled at comptime; the album grid, album detail, and
-//! track rows are Zig views because they need what the closed markup
-//! grammar deliberately excludes — square cover images, grid column
-//! counts, scaled paragraph headings, and per-row native context menus.
-//! `src/view.zig` composes both kinds under one root, so widget identity,
-//! dispatch, and theming behave exactly as in a single-source view.
+//! Authoring split (markup-first, two shells): the header and
+//! now-playing bars are `.native` views compiled at comptime; the album
+//! grid, album detail, and track rows are Zig views because they need
+//! what the closed markup grammar deliberately excludes — square cover
+//! images, grid column counts, scaled paragraph headings, and per-row
+//! native context menus. `src/view.zig` composes both kinds under one
+//! root — the DESKTOP shell — and recomposes the same shared content
+//! pieces into a COMPACT shell for phone-class surfaces (the root view
+//! switches on the model's width-derived form factor). Widget identity,
+//! dispatch, and theming behave exactly as in a single-source view in
+//! both shells.
 
 const std = @import("std");
 const runner = @import("runner");
@@ -274,6 +278,43 @@ fn findByLabel(widget: canvas.Widget, label: []const u8) ?canvas.Widget {
         if (findByLabel(child, label)) |found| return found;
     }
     return null;
+}
+
+// ----------------------------------------------------------------- mobile
+
+/// Mobile embed seam: the same Model/Msg/update/view compiled into the
+/// embed static library (`zig build lib`, which `native dev --target
+/// ios` drives) with the canonical single-surface mobile scene. The
+/// desktop window constants above — size, min size, the tall titlebar —
+/// belong to the DESKTOP scene only: the mobile scene is the full-screen
+/// surface the host owns, so nothing here constrains the phone. The
+/// model seeds its pre-first-frame canvas width at a phone-portrait
+/// value so the installing frame already composes the compact shell; the
+/// first presented frame corrects it, exactly like the desktop seed.
+pub fn initModel() Model {
+    // The mobile host has no main(): the icon table installs here, once,
+    // before any view builds (registration is idempotent — one static
+    // table — so the test harness's own install never conflicts).
+    registerIcons();
+    return .{ .canvas_width = model_mod.compact_seed_canvas_width };
+}
+
+pub fn mobileOptions() SoundboardApp.Options {
+    return .{
+        .name = "soundboard",
+        .scene = native_sdk.embed.mobile_shell_scene,
+        .canvas_label = native_sdk.embed.mobile_gpu_surface_label,
+        .update_fx = update,
+        .view = rootView,
+        .init_fx = boot,
+        .tokens_fn = tokensFromModel,
+        .on_appearance = onAppearance,
+        .on_chrome = onChrome,
+        .on_key = onKey,
+        .on_frame = onFrame,
+        .animations = animations,
+        .sync = sync,
+    };
 }
 
 // ------------------------------------------------------------------- main

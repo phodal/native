@@ -79,13 +79,20 @@ const surface_size = geometry.SizeF.init(main.window_width, main.window_height);
 const LiveApp = struct {
     harness: *native_sdk.TestHarness(),
     app_state: *App,
+    size: geometry.SizeF,
 
     fn start(image_decode: bool) !LiveApp {
+        return startSized(image_decode, surface_size);
+    }
+
+    /// Start against an explicit surface size — the compact-shell tests
+    /// run the same app on a phone-sized surface.
+    fn startSized(image_decode: bool, size: geometry.SizeF) !LiveApp {
         // The same boot-time act main performs: install the app icon
         // table before any view builds, so app: markup references
         // resolve here exactly like in the shipped app.
         main.registerIcons();
-        const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = surface_size });
+        const harness = try native_sdk.TestHarness().create(testing.allocator, .{ .size = size });
         errdefer harness.destroy(testing.allocator);
         harness.null_platform.gpu_surfaces = true;
         harness.null_platform.image_decode = image_decode;
@@ -97,13 +104,13 @@ const LiveApp = struct {
         try harness.start(app_state.app());
         try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .gpu_surface_frame = .{
             .label = main.canvas_label,
-            .size = surface_size,
+            .size = size,
             .scale_factor = 1,
             .frame_index = 1,
             .timestamp_ns = 1_000_000,
             .nonblank = true,
         } });
-        return .{ .harness = harness, .app_state = app_state };
+        return .{ .harness = harness, .app_state = app_state, .size = size };
     }
 
     fn stop(self: LiveApp) void {
@@ -1304,7 +1311,7 @@ test "the scrubber interpolates between position ticks and never rewinds" {
 fn presentFrameAt(live: LiveApp, frame_index: u64, timestamp_ns: u64) !void {
     try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .gpu_surface_frame = .{
         .label = main.canvas_label,
-        .size = surface_size,
+        .size = live.size,
         .scale_factor = 1,
         .frame_index = frame_index,
         .timestamp_ns = timestamp_ns,
@@ -1572,7 +1579,7 @@ test "render icon-batch screenshots (env-gated)" {
 fn presentShotFrame(live: LiveApp, frame_index: u64) !void {
     try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .gpu_surface_frame = .{
         .label = main.canvas_label,
-        .size = surface_size,
+        .size = live.size,
         .scale_factor = 1,
         .frame_index = frame_index,
         .timestamp_ns = frame_index * 1_000_000,
@@ -1815,4 +1822,423 @@ test "chrome geometry pads the header and matches its height to the tall band" {
     // The scene declares the matching titlebar so the platform actually
     // hides the OS bar this header replaces.
     try testing.expectEqual(.hidden_inset_tall, main.shell_scene.windows[0].titlebar);
+
+    // The channel's top and bottom bands also land raw in the model —
+    // the compact shell's safe-area pads (Dynamic Island / home
+    // indicator on phones) — without the desktop header floor applied.
+    const phone = main.onChrome(.{ .insets = .{ .top = 59, .bottom = 34 } }) orelse return error.TestUnexpectedResult;
+    model_mod.update(&model, phone, &fx);
+    try testing.expectEqual(@as(f32, 59), model.chrome_top);
+    try testing.expectEqual(@as(f32, 34), model.chrome_bottom);
+}
+
+// ---------------------------------------------------------- compact shell
+
+/// A mainstream phone-portrait surface (points), the compact suite's
+/// stand-in for the full-screen mobile host.
+const phone_size = geometry.SizeF.init(393, 852);
+
+/// Whether any widget in the live layout carries this semantics label.
+fn layoutHasLabel(layout: canvas.WidgetLayoutTree, label: []const u8) bool {
+    for (layout.nodes) |node| {
+        if (std.mem.eql(u8, node.widget.semantics.label, label)) return true;
+    }
+    return false;
+}
+
+test "the form-factor rule: compact strictly below the desktop floor" {
+    // One strict comparison, no hysteresis: the boundary is the desktop
+    // shell's proven min content width. AT the floor the desktop shell
+    // holds (the layout audit proves that width); strictly below it —
+    // widths no desktop window can reach, only phone-class surfaces —
+    // the compact shell takes over.
+    var model = Model{};
+    try testing.expectEqual(model_mod.FormFactor.regular, model.formFactor());
+    model.canvas_width = model_mod.min_canvas_width;
+    try testing.expectEqual(model_mod.FormFactor.regular, model.formFactor());
+    model.canvas_width = model_mod.min_canvas_width - 1;
+    try testing.expectEqual(model_mod.FormFactor.compact, model.formFactor());
+    model.canvas_width = phone_size.width;
+    try testing.expectEqual(model_mod.FormFactor.compact, model.formFactor());
+}
+
+test "the mobile entry is independent of the desktop window constants" {
+    // The mobile scene is the canonical full-screen surface: no desktop
+    // width, min-size floor, or titlebar constrains the phone.
+    const options = main.mobileOptions();
+    try testing.expectEqualStrings(native_sdk.embed.mobile_gpu_surface_label, options.canvas_label);
+    const window = options.scene.windows[0];
+    try testing.expectEqual(@as(f32, 0), window.min_width);
+    try testing.expectEqual(@as(f32, 0), window.min_height);
+    try testing.expectEqual(.standard, window.titlebar);
+
+    // The mobile boot model seeds a phone-portrait canvas width, so the
+    // installing frame already composes the compact shell — never one
+    // desktop-shaped frame flashed onto a 390pt surface.
+    const model = main.initModel();
+    try testing.expectEqual(model_mod.FormFactor.compact, model.formFactor());
+}
+
+test "the shell switches at the boundary width through the live resize path" {
+    const live = try LiveApp.start(true);
+    defer live.stop();
+
+    // The launch surface is desktop-shaped: the markup header (window
+    // drag band, chrome spacers) is on screen and no compact chrome is.
+    var layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Soundboard header"));
+    try testing.expect(!layoutHasLabel(layout, "Compact header"));
+    try testing.expect(layoutHasLabel(layout, "Now playing bar"));
+
+    // Resize below the boundary: the same app recomposes as the compact
+    // shell — stacked touch header, no desktop bars, and no window-drag
+    // region anywhere (phones own their chrome).
+    try resizeTo(live, phone_size.width, phone_size.height, 2);
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Compact header"));
+    try testing.expect(!layoutHasLabel(layout, "Soundboard header"));
+    try testing.expect(!layoutHasLabel(layout, "Now playing bar"));
+    for (layout.nodes) |node| {
+        try testing.expect(!node.widget.window_drag);
+    }
+    // Search stays reachable in the compact shell (full-width row).
+    try testing.expect(layoutHasLabel(layout, "Search library"));
+
+    // And back above the boundary: the desktop shell returns — the
+    // switch is live in both directions, driven only by the width Msg.
+    try resizeTo(live, main.window_width, main.window_height, 3);
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Soundboard header"));
+    try testing.expect(!layoutHasLabel(layout, "Compact header"));
+}
+
+test "the mini bar stays visible through playback, pause, and the honest notice" {
+    const live = try LiveApp.startSized(true, phone_size);
+    defer live.stop();
+    const app_state = live.app_state;
+    try resizeTo(live, phone_size.width, phone_size.height, 2);
+
+    // Idle: no mini bar — nothing is loaded and no notice needs a home.
+    var layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(!layoutHasLabel(layout, "Now playing mini bar"));
+
+    // Play: the bar appears with the cover thumb, the track's title, and
+    // the pause glyph (the icon names the state).
+    const track = model_mod.trackById(1);
+    try live.dispatch(.{ .play_track = track.id });
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Now playing mini bar"));
+    try testing.expect(layoutHasLabel(layout, "Now playing cover"));
+    var saw_title = false;
+    var play_pause_icon: []const u8 = "";
+    for (layout.nodes) |node| {
+        if (std.mem.eql(u8, node.widget.text, track.title)) saw_title = true;
+        if (std.mem.eql(u8, node.widget.semantics.label, "Play or pause")) play_pause_icon = node.widget.icon;
+    }
+    try testing.expect(saw_title);
+    try testing.expectEqualStrings("pause", play_pause_icon);
+
+    // Pause IN the bar (the real widget path): the bar must not vanish —
+    // a paused track is still loaded — and the glyph flips to play.
+    const toggle_id = try live.widgetIdByLabel(.button, "Play or pause");
+    var command_buffer: [96]u8 = undefined;
+    const click = try std.fmt.bufPrint(&command_buffer, "widget-click {s} {d}", .{ main.canvas_label, toggle_id });
+    try live.harness.runtime.dispatchAutomationCommand(app_state.app(), click);
+    try testing.expect(!app_state.model.playing);
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Now playing mini bar"));
+    for (layout.nodes) |node| {
+        if (std.mem.eql(u8, node.widget.semantics.label, "Play or pause")) {
+            try testing.expectEqualStrings("play", node.widget.icon);
+        }
+    }
+
+    // A failed load clears playback but raises the notice — the bar
+    // stays up to carry it (with no transport rail, it is the compact
+    // shell's only status surface).
+    try live.dispatch(.toggle_play);
+    try app_state.effects.feedAudioEvent(.failed, 0, 0, false);
+    try live.wake();
+    try testing.expect(app_state.model.assets_missing);
+    try testing.expectEqual(@as(?u8, null), app_state.model.now);
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Now playing mini bar"));
+    var saw_notice = false;
+    for (layout.nodes) |node| {
+        if (std.mem.eql(u8, node.widget.text, model_mod.assets_missing_title)) saw_notice = true;
+    }
+    try testing.expect(saw_notice);
+}
+
+test "compact navigation: tap opens the record, back returns, one tap plays" {
+    const live = try LiveApp.startSized(true, phone_size);
+    defer live.stop();
+    const app_state = live.app_state;
+    try resizeTo(live, phone_size.width, phone_size.height, 2);
+
+    // Tap the first album tile (a real stamped touch press): the record
+    // opens as a full-surface page — model-driven navigation.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const album = &model_mod.albums[0];
+    const tile_label = try std.fmt.allocPrint(arena_state.allocator(), "{s} by {s}", .{ album.title, album.artist });
+    const tile = try live.widgetFrameByLabel(.list_item, tile_label);
+    try live.click(tile.x + tile.width / 2, tile.y + tile.height / 2, 100 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(?u8, album.id), app_state.model.open_album);
+    var layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Album detail"));
+
+    // ONE tap on a track row PLAYS it — the touch convention (no
+    // double-tap gesture, no hover, no selection-first step)...
+    const first_track = &model_mod.albumTracks(album.id)[0];
+    const row = try live.widgetFrameByLabel(.list_item, first_track.title);
+    try live.click(row.x + row.width / 2, row.y + row.height / 2, 2_000 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(?u8, first_track.id), app_state.model.now);
+    try testing.expect(app_state.model.playing);
+
+    // ... and the compact rows mount NO context menus: right-click is
+    // pointer vocabulary and the phone hosts model no long-press.
+    const row_id = try live.widgetIdByLabel(.list_item, first_track.title);
+    try testing.expect(app_state.tree.?.msgForContextMenu(row_id, 0) == null);
+
+    // Back is the same model state the desktop back drives: the grid
+    // returns (with the mini bar still up — playback survives paging).
+    const back = try live.widgetFrameByLabel(.button, "Back to albums");
+    try live.click(back.x + back.width / 2, back.y + back.height / 2, 4_000 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(?u8, null), app_state.model.open_album);
+    layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    try testing.expect(layoutHasLabel(layout, "Album grid"));
+    try testing.expect(layoutHasLabel(layout, "Now playing mini bar"));
+}
+
+test "safe-area insets pad the compact shell top and bottom" {
+    const live = try LiveApp.startSized(true, phone_size);
+    defer live.stop();
+    try resizeTo(live, phone_size.width, phone_size.height, 2);
+
+    // The phone bands arrive through the same window-chrome channel the
+    // desktop titlebar uses (the iOS host republishes safe areas there).
+    const chrome = main.onChrome(.{ .insets = .{ .top = 59, .bottom = 34 } }) orelse return error.TestUnexpectedResult;
+    try live.dispatch(chrome);
+    try live.dispatch(.{ .play_track = 1 });
+
+    // The header clears the Dynamic Island band; the mini bar sits
+    // above the home-indicator band — content under neither.
+    const header = try live.widgetFrameByLabel(.column, "Compact header");
+    try testing.expect(header.y >= 59);
+    const bar = try live.widgetFrameByLabel(.column, "Now playing mini bar");
+    try testing.expect(bar.y + bar.height <= phone_size.height - 34);
+}
+
+test "compact touch targets clear the 44pt floor" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    model.canvas_width = phone_size.width;
+    apply(&model, .{ .play_track = 1 });
+
+    // Every page the compact shell can show, with the mini bar mounted:
+    // every pressable control — buttons, the search field, list rows —
+    // lays out at least 44pt tall (whole album tiles tower past it).
+    const cases = [_]struct { tab: model_mod.Tab, open: ?u8 }{
+        .{ .tab = .albums, .open = null },
+        .{ .tab = .albums, .open = 2 },
+        .{ .tab = .songs, .open = null },
+    };
+    for (cases) |case| {
+        model.tab = case.tab;
+        model.open_album = case.open;
+        const tree = try buildTree(arena_state.allocator(), &model);
+        var nodes: [1024]canvas.WidgetLayoutNode = undefined;
+        // Layout with the app's REAL tokens: the touch floor is a claim
+        // about the shipped control metrics, not the default pack's.
+        const layout = try canvas.layoutWidgetTreeWithTokens(tree.root, geometry.RectF.init(0, 0, phone_size.width, phone_size.height), main.tokensFromModel(&model), &nodes);
+        var interactive: usize = 0;
+        for (layout.nodes) |node| {
+            switch (node.widget.kind) {
+                .button, .search_field, .list_item => {
+                    interactive += 1;
+                    try testing.expect(node.frame.normalized().height >= 44);
+                },
+                else => {},
+            }
+        }
+        try testing.expect(interactive > 0);
+        _ = arena_state.reset(.retain_capacity);
+    }
+}
+
+test "one Msg journal drives both shells deterministically" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // One journal, crossing the form-factor boundary in both directions
+    // mid-stream. Every entry is an ordinary Msg — the shell is a pure
+    // derivation of the model, so identical journals into identical
+    // initial models must land identical shells and identical trees at
+    // every step, with no clock, host, or ordering dependence anywhere.
+    const album = &model_mod.albums[1];
+    const journal = [_]Msg{
+        .{ .canvas_resized = phone_size.width },
+        .{ .chrome_changed = .{ .insets = .{ .top = 59, .bottom = 34 } } },
+        .{ .open_album = album.id },
+        .{ .play_track = model_mod.albumTracks(album.id)[0].id },
+        .{ .canvas_resized = 1520 },
+        .close_album,
+        .show_songs,
+        .{ .canvas_resized = model_mod.compact_seed_canvas_width },
+    };
+    const expected_form = [journal.len]model_mod.FormFactor{
+        .compact, .compact, .compact, .compact,
+        .regular, .regular, .regular, .compact,
+    };
+
+    var first = Model{};
+    var second = Model{};
+    for (journal, expected_form) |msg, form| {
+        apply(&first, msg);
+        apply(&second, msg);
+        try testing.expectEqual(form, first.formFactor());
+        try testing.expectEqual(form, second.formFactor());
+
+        const first_tree = try buildTree(arena, &first);
+        const second_tree = try buildTree(arena, &second);
+        var first_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+        defer first_ids.deinit(testing.allocator);
+        var second_ids: std.ArrayListUnmanaged(canvas.ObjectId) = .empty;
+        defer second_ids.deinit(testing.allocator);
+        try collectIds(first_tree.root, &first_ids, testing.allocator);
+        try collectIds(second_tree.root, &second_ids, testing.allocator);
+        try testing.expectEqualSlices(canvas.ObjectId, first_ids.items, second_ids.items);
+        _ = arena_state.reset(.retain_capacity);
+    }
+}
+
+test "every compact view lays out within the phone canvas and the widget budget" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    model.canvas_width = phone_size.width;
+    apply(&model, .{ .play_track = 1 });
+
+    const cases = [_]struct { tab: model_mod.Tab, open: ?u8 }{
+        .{ .tab = .albums, .open = null },
+        .{ .tab = .albums, .open = 2 },
+        .{ .tab = .songs, .open = null },
+    };
+    for (cases) |case| {
+        model.tab = case.tab;
+        model.open_album = case.open;
+        const tree = try buildTree(arena_state.allocator(), &model);
+        var nodes: [1024]canvas.WidgetLayoutNode = undefined;
+        const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, phone_size.width, phone_size.height), &nodes);
+        try testing.expect(layout.nodes.len > 0);
+        try testing.expect(layout.nodes.len < 768);
+        _ = arena_state.reset(.retain_capacity);
+    }
+}
+
+/// The compact sweep floor: the narrowest mainstream phone (320pt
+/// portrait). The compact grid tree derives its columns from THIS width
+/// so a swept-wider surface can only underfill, mirroring how the
+/// desktop suite seeds its trees at the desktop floor.
+const compact_min_size = geometry.SizeF.init(320, 568);
+
+test "compact layout audit sweep: nothing clips, overlaps, or escapes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    model.canvas_width = compact_min_size.width;
+    apply(&model, .{ .play_track = 1 });
+    // Sweep with the phone bands applied: the safe-area spacers are part
+    // of the composition the audit must prove clean.
+    apply(&model, .{ .chrome_changed = .{ .insets = .{ .top = 59, .bottom = 34 } } });
+
+    const cases = [_]struct { tab: model_mod.Tab, open: ?u8 }{
+        .{ .tab = .albums, .open = null },
+        .{ .tab = .albums, .open = 2 },
+        .{ .tab = .songs, .open = null },
+    };
+    for (cases) |case| {
+        model.tab = case.tab;
+        model.open_album = case.open;
+        const tree = try buildTree(arena_state.allocator(), &model);
+        try canvas.expectLayoutAuditSweepClean(testing.allocator, tree.root, .{
+            .tokens = main.tokensFromModel(&model),
+            .min_size = compact_min_size,
+            .default_size = phone_size,
+        });
+        _ = arena_state.reset(.retain_capacity);
+    }
+}
+
+test "compact a11y audit sweep: every interactive widget is named, reachable, and unambiguous" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var model = Model{};
+    model.canvas_width = compact_min_size.width;
+    apply(&model, .{ .play_track = 1 });
+    apply(&model, .{ .chrome_changed = .{ .insets = .{ .top = 59, .bottom = 34 } } });
+
+    const cases = [_]struct { tab: model_mod.Tab, open: ?u8 }{
+        .{ .tab = .albums, .open = null },
+        .{ .tab = .albums, .open = 2 },
+        .{ .tab = .songs, .open = null },
+    };
+    for (cases) |case| {
+        model.tab = case.tab;
+        model.open_album = case.open;
+        const tree = try buildTree(arena_state.allocator(), &model);
+        try canvas.expectA11yAuditSweepClean(testing.allocator, tree.root, .{
+            .tokens = main.tokensFromModel(&model),
+            .min_size = compact_min_size,
+            .default_size = phone_size,
+        });
+        _ = arena_state.reset(.retain_capacity);
+    }
+}
+
+// Env-gated compact-shell screenshot renderer (skipped by default, never
+// in CI): renders the COMPACT shell OFFSCREEN on a phone-sized surface
+// through the deterministic reference renderer — the album grid with the
+// mini bar up, and the album detail page, once per color scheme. PNGs
+// land in /tmp/compact-shots/soundboard-compact-*-artifacts/. To use:
+//
+//   COMPACT_SHOTS=1 zig build test
+test "render compact-shell screenshots (env-gated)" {
+    if (!envGateSet("COMPACT_SHOTS")) return error.SkipZigTest;
+    const io = testing.io;
+
+    const live = try LiveApp.startSized(true, phone_size);
+    defer live.stop();
+    try resizeTo(live, phone_size.width, phone_size.height, 2);
+    try live.dispatch(main.onChrome(.{ .insets = .{ .top = 59, .bottom = 34 } }).?);
+
+    // Grid with the mini player up, a minute into a track.
+    try live.dispatch(.{ .play_track = model_mod.albumTracks(2)[0].id });
+    live.app_state.model.elapsed_ms = 67_500;
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .light } });
+    try presentShotFrame(live, 3);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/compact-shots/soundboard-compact-grid-light-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
+
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .dark } });
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/compact-shots/soundboard-compact-grid-dark-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
+
+    // The full-surface album detail page, both schemes.
+    try live.dispatch(.{ .open_album = 2 });
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .light } });
+    try presentShotFrame(live, 4);
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/compact-shots/soundboard-compact-detail-light-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
+
+    try live.harness.runtime.dispatchPlatformEvent(live.app_state.app(), .{ .appearance_changed = .{ .color_scheme = .dark } });
+    live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/compact-shots/soundboard-compact-detail-dark-artifacts", "Soundboard");
+    try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot soundboard-canvas 2");
 }

@@ -197,6 +197,23 @@ pub const header_natural_height: f32 = 52;
 /// underfill a wider surface for one frame, never overflow a narrow one.
 pub const min_canvas_width: f32 = 1056;
 
+/// The pre-first-frame `canvas_width` the MOBILE entry seeds instead
+/// (main.zig's `initModel`): a mainstream phone-portrait width, so the
+/// installing frame on a phone already composes the compact shell — the
+/// full-screen mobile host has no window min-width to seed from, and
+/// seeding the desktop floor would flash a desktop tree onto a 390pt
+/// surface for one frame. The first presented frame corrects the value
+/// exactly like the desktop seed; only the boot frame reads it.
+pub const compact_seed_canvas_width: f32 = 390;
+
+/// Which shell the root view composes. The two shells share every
+/// content piece (tiles, rows, headings, the now-playing bindings) and
+/// differ only in composition: `regular` is the desktop shape (wide
+/// header bar, adaptive multi-column grid, full transport rail),
+/// `compact` the phone shape (stacked touch header, mini player,
+/// safe-area padding).
+pub const FormFactor = enum { compact, regular };
+
 /// Effect keys, model-owned identity (effect-key style). Audio playback
 /// keys are the track ids themselves — one key namespace per channel.
 pub const copy_key: u64 = 2;
@@ -350,6 +367,15 @@ pub const Model = struct {
     /// macOS reports zero). The header closes with a spacer this wide
     /// so the search field clears the caption buttons.
     chrome_trailing: f32 = 0,
+    /// The chrome band heights at the surface's TOP and BOTTOM edges,
+    /// stored raw (no header floor applied). On phones the window-chrome
+    /// channel carries the SAFE AREAS — status bar / Dynamic Island
+    /// above, home indicator below — and the compact shell pads exactly
+    /// these so content never sits under either. The desktop shell reads
+    /// the floored `header_height` derivation below instead and has no
+    /// bottom band to clear, so these stay untouched there.
+    chrome_top: f32 = 0,
+    chrome_bottom: f32 = 0,
     header_height: f32 = header_natural_height,
     /// The live canvas width, from `canvas_resized`. Seeds at the window
     /// min-width floor (see `min_canvas_width`) so pre-first-frame trees
@@ -439,9 +465,11 @@ pub const Model = struct {
         "seek_fraction",   "copies_done",    "copy_failed",
         "appearance",      "search_buffer",  "url_base_buffer",
         "cache_dir_buffer", "queue",         "covers",
-        "urlBase",         "cacheDir",       "streamingConfigured",
-        "searching",       "colorScheme",    "hasNowPlaying",
-        "playingAlbum",    "visibleAlbums",  "visibleTracks",
+        "chrome_top",      "chrome_bottom",  "urlBase",
+        "cacheDir",        "streamingConfigured", "searching",
+        "colorScheme",     "hasNowPlaying",  "playingAlbum",
+        "visibleAlbums",   "visibleTracks",  "miniBarVisible",
+        "formFactor",
     };
 
     // ------------------------------------------------------------- queries
@@ -522,6 +550,29 @@ pub const Model = struct {
 
     pub fn hasNowPlaying(model: *const Model) bool {
         return model.now != null;
+    }
+
+    /// The width→shell rule, one strict comparison with no hysteresis:
+    /// COMPACT strictly below the desktop shell's proven min content
+    /// width (`min_canvas_width` — the floor the desktop layout audit
+    /// sweeps from), the desktop shell at the floor and above. The
+    /// boundary is honest by construction: every narrower surface is one
+    /// the desktop composition has never been proven clean on (desktop
+    /// windows enforce the floor, so only phone-class surfaces ever
+    /// report less), and exactly AT the floor the audit proves the
+    /// desktop shell clean. Derived from the per-frame surface width, so
+    /// the same Msg sequence always lands the same shell.
+    pub fn formFactor(model: *const Model) FormFactor {
+        return if (model.canvas_width < min_canvas_width) .compact else .regular;
+    }
+
+    /// Whether the compact shell's mini player is on screen: a track is
+    /// loaded (playing OR paused — the bar must not vanish on pause), or
+    /// a degraded playback notice needs a surface to read on (a failed
+    /// load clears `now`, and the notice would otherwise be invisible on
+    /// a phone with no persistent transport rail).
+    pub fn miniBarVisible(model: *const Model) bool {
+        return model.now != null or model.assets_missing or model.stream_failed;
     }
 
     pub fn idle(model: *const Model) bool {
@@ -748,6 +799,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             // trailing) — the unused edge arrives as an honest zero.
             model.chrome_leading = chrome.insets.left;
             model.chrome_trailing = chrome.insets.right;
+            // The raw top/bottom bands, for the compact shell's
+            // safe-area padding: on phones the same channel carries the
+            // status bar / Dynamic Island above and the home indicator
+            // below, and the compact shell pads exactly these.
+            model.chrome_top = chrome.insets.top;
+            model.chrome_bottom = chrome.insets.bottom;
             // Match the header to the titlebar band so its centered
             // controls share the traffic lights' centerline; the natural
             // height is the floor when no band overlays the content.

@@ -283,7 +283,6 @@ test "layout audit sweep: nothing clips, overlaps, or escapes" {
 
     var model = Model{};
     apply(&model, .{ .play_track = first_track.id });
-    apply(&model, .{ .queue_track = model_mod.albumTracks(2)[0].id });
 
     // The chassis is machined hardware at a fixed size and a pinned
     // compact density, so the sweep runs exactly the geometry the app
@@ -340,7 +339,6 @@ test "a11y audit sweep: every interactive widget is named, reachable, and unambi
 
     var model = Model{};
     apply(&model, .{ .play_track = first_track.id });
-    apply(&model, .{ .queue_track = model_mod.albumTracks(2)[0].id });
 
     // Both windows at their fixed hardware geometry: the chassis and
     // the playlist rack.
@@ -506,41 +504,45 @@ test "a divergent platform duration never moves the deck's total off the manifes
     try testing.expectEqual(model_mod.trackById(first_track.id + 1).duration_ms, app_state.model.now_duration_ms);
 }
 
-test "track end auto-advances; the play-next queue wins over album order" {
+test "track end auto-advances in ledger order; next/prev wrap the flat catalog" {
     const live = try LiveApp.start(true);
     defer live.stop();
     const app_state = live.app_state;
 
-    // Queue the LAST album's first track while the first album plays —
-    // the ids and counts derive from the manifest.
-    const last_album = model_mod.albums[model_mod.albums.len - 1];
-    const cued = model_mod.albumTracks(last_album.id)[0];
+    // Natural end: the platform's one completion event; the NEXT LEDGER
+    // ROW plays on a fresh playback (the channel key moves with it) —
+    // the playlist's flat catalog order is the play order.
     try live.dispatch(.{ .play_track = first_track.id });
-    try live.dispatch(.{ .queue_track = cued.id });
-    try testing.expectEqual(@as(usize, 1), app_state.model.queue_len);
-
-    // Natural end: the platform's one completion event; the queued track
-    // starts on a fresh playback (the channel key moves with it).
     try live.feedAudio(.completed, first_track.duration_ms, first_track.duration_ms, false);
-    try testing.expectEqual(@as(?u8, cued.id), app_state.model.now);
-    try testing.expectEqual(@as(usize, 0), app_state.model.queue_len);
+    const second = model_mod.trackById(first_track.id + 1);
+    try testing.expectEqual(@as(?u8, second.id), app_state.model.now);
     try testing.expect(app_state.model.playing);
     try testing.expectEqual(@as(u32, 0), app_state.model.elapsed_ms);
-    try testing.expectEqual(@as(u64, cued.id), app_state.effects.pendingAudio().?.key);
+    try testing.expectEqual(@as(u64, second.id), app_state.effects.pendingAudio().?.key);
 
-    // With an empty queue the album order advances.
-    const album_tracks = model_mod.albumTracks(cued.album);
-    try live.feedAudio(.completed, cued.duration_ms, cued.duration_ms, false);
-    try testing.expectEqual(@as(?u8, album_tracks[1].id), app_state.model.now);
+    // The album seam: completing the first album's LAST track flows
+    // into the next album's first row — the ledger has no album walls
+    // (the flat table tiles the albums in order, so the neighbor ids
+    // derive from the album's own slice).
+    const first_album_tracks = model_mod.albumTracks(1);
+    const last_of_first = first_album_tracks[first_album_tracks.len - 1];
+    try live.dispatch(.{ .play_track = last_of_first.id });
+    try live.feedAudio(.completed, last_of_first.duration_ms, last_of_first.duration_ms, false);
+    try testing.expectEqual(@as(?u8, last_of_first.id + 1), app_state.model.now);
+    try testing.expectEqual(@as(u8, 2), model_mod.trackById(last_of_first.id + 1).album);
 
-    // next/prev wrap within the album — variable per-album length, so
-    // the expectations come from the album's own slice.
+    // The wrap: the catalog's last row advances back to the first.
+    const last_track = &model_mod.tracks[model_mod.tracks.len - 1];
+    try live.dispatch(.{ .play_track = last_track.id });
+    try live.feedAudio(.completed, last_track.duration_ms, last_track.duration_ms, false);
+    try testing.expectEqual(@as(?u8, model_mod.tracks[0].id), app_state.model.now);
+
+    // next/prev walk the same flat order and wrap both ways (prev from
+    // a fresh start — under the restart threshold — steps back).
     try live.dispatch(.prev_track);
-    try testing.expectEqual(@as(?u8, album_tracks[0].id), app_state.model.now);
-    try live.dispatch(.prev_track);
-    try testing.expectEqual(@as(?u8, album_tracks[album_tracks.len - 1].id), app_state.model.now);
+    try testing.expectEqual(@as(?u8, last_track.id), app_state.model.now);
     try live.dispatch(.next_track);
-    try testing.expectEqual(@as(?u8, album_tracks[0].id), app_state.model.now);
+    try testing.expectEqual(@as(?u8, model_mod.tracks[0].id), app_state.model.now);
 }
 
 test "streaming resolution order drives the display honestly: stream, buffer, cache" {
@@ -672,12 +674,10 @@ test "a failed load clears the deck and stamps the NO MEDIA remedy on the displa
     try testing.expectEqualStrings(model_mod.no_media_remedy, channel.text);
     try testing.expect(std.mem.indexOf(u8, channel.text, "TOOLS/PREPARE-EXAMPLE-MUSIC.SH") != null);
 
-    // Browsing and queueing never need the audio files: the committed
-    // catalog still fills the ledger and the queue still takes cues.
+    // Browsing and searching never need the audio files: the committed
+    // catalog still fills the ledger.
     const playlist = try buildPlaylistTree(arena, &app_state.model);
     try testing.expectEqual(@as(usize, model_mod.tracks.len), countListItems(playlist.root));
-    try live.dispatch(.{ .queue_track = first_track.id });
-    try testing.expectEqual(@as(usize, 1), app_state.model.queue_len);
 
     // Pressing play again is the retry: the failed state clears and a
     // fresh playback request goes out.
@@ -753,7 +753,7 @@ test "the rack is one flat song list; search narrows it through typed dispatch" 
     try testing.expect(findByLabel(tree.root, "Track ledger") == null);
 }
 
-test "a full session: load from the playlist ledger, queue via the context menu" {
+test "a full session: load from the playlist ledger, copy via the context menu" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -782,38 +782,29 @@ test "a full session: load from the playlist ledger, queue via the context menu"
     try testing.expectEqualStrings("app:stop", findByLabel(player.root, "Stop").?.icon);
     try testing.expectEqualStrings("skip-forward", findByLabel(player.root, "Next track").?.icon);
 
+    // The deck strip stamps the loaded record beside the sleeve — the
+    // uppercased title in the silkscreen ink (the ledger above is the
+    // play order, so the strip states only what the deck holds now).
+    playlist = try buildPlaylistTree(arena, &model);
+    var stamp_upper: [192]u8 = undefined;
+    try testing.expect(findByText(playlist.root, .text, upperBuf(&stamp_upper, load.title)) != null);
+
     // Pressing the loaded row again toggles pause; the power lamp drops
     // back to standby.
-    playlist = try buildPlaylistTree(arena, &model);
     const same_row = findByLabel(playlist.root, load.title).?;
     apply(&model, playlist.msgForPointer(same_row.id, .up).?);
     try testing.expect(!model.playing);
     player = try buildTree(arena, &model);
     try testing.expect(findByText(player.root, .text, "STBY") != null);
 
-    // Context-menu items dispatch typed messages: Play Next queues (the
-    // amber Q plate appears in the ledger, the cue strip names the
-    // track, the player's queue badge counts it), indexes past the
-    // declared items are inert.
-    const cued = &model_mod.albumTracks(2)[1];
+    // The per-row context menu carries ONE item — Copy Title dispatches
+    // the typed copy Msg — and indexes past the declared items are
+    // inert.
+    const copied = &model_mod.albumTracks(2)[1];
     playlist = try buildPlaylistTree(arena, &model);
-    const cue_row = findByLabel(playlist.root, cued.title).?;
-    apply(&model, playlist.msgForContextMenu(cue_row.id, 0).?);
-    try testing.expectEqual(@as(usize, 1), model.queue_len);
-    try testing.expectEqual(cued.id, model.queue[0]);
-    try testing.expect(playlist.msgForContextMenu(cue_row.id, 2) == null);
-    playlist = try buildPlaylistTree(arena, &model);
-    try testing.expect(findByText(playlist.root, .badge, "Q") != null);
-    try testing.expect(findByText(playlist.root, .badge, "QUEUE 1") != null);
-    // The cue plate stamps the number and the uppercased title (cut at
-    // the plate's fixed budget, like hardware would).
-    var plate_upper: [192]u8 = undefined;
-    var plate_buffer: [64]u8 = undefined;
-    const plate_title = upperBuf(&plate_upper, cued.title[0..@min(cued.title.len, view_mod.cue_title_max)]);
-    const plate = try std.fmt.bufPrint(&plate_buffer, "{d:0>2} {s}", .{ cued.id, plate_title });
-    try testing.expect(findByText(playlist.root, .badge, plate) != null);
-    player = try buildTree(arena, &model);
-    try testing.expect(findByText(player.root, .badge, "QUEUE 1") != null);
+    const copy_row = findByLabel(playlist.root, copied.title).?;
+    try testing.expectEqual(Msg{ .copy_title = copied.id }, playlist.msgForContextMenu(copy_row.id, 0).?);
+    try testing.expect(playlist.msgForContextMenu(copy_row.id, 1) == null);
 }
 
 test "shortcut commands map to transport and playlist messages" {
@@ -1012,17 +1003,16 @@ test "the spectrum is a deterministic function of the playback clock" {
     other.elapsed_ms = 4_200;
     try testing.expect(!std.mem.eql(f32, first, other.spectrumLevels(arena)));
 
-    // The tree carries the levels as ONE chart widget: phosphor bar bands
-    // plus the paper-white peak trace, over an honest 0..1 domain.
+    // The tree carries the levels as ONE chart widget with ONE series:
+    // phosphor bars alone (no line riding their caps), over an honest
+    // 0..1 domain.
     const tree = try buildTree(arena, &app_state.model);
     const chart = findByLabel(tree.root, "Spectrum analyzer").?;
     try testing.expectEqual(canvas.WidgetKind.chart, chart.kind);
-    try testing.expectEqual(@as(usize, 2), chart.chart.series.len);
+    try testing.expectEqual(@as(usize, 1), chart.chart.series.len);
     try testing.expectEqual(canvas.ChartSeriesKind.bar, chart.chart.series[0].kind);
     try testing.expectEqual(canvas.ChartSeriesColor.accent, chart.chart.series[0].color);
     try testing.expectEqual(@as(usize, model_mod.spectrum_bands), chart.chart.series[0].values.len);
-    try testing.expectEqual(canvas.ChartSeriesKind.line, chart.chart.series[1].kind);
-    try testing.expectEqual(@as(usize, model_mod.spectrum_bands), chart.chart.series[1].values.len);
     try testing.expectEqual(@as(?f32, 0), chart.chart.y_min);
     try testing.expectEqual(@as(?f32, 1), chart.chart.y_max);
 }
@@ -1102,7 +1092,6 @@ test "markup engine parity: the status strip builds identical trees" {
 
     var model = Model{};
     apply(&model, .{ .play_track = model_mod.tracks[2].id });
-    apply(&model, .{ .queue_track = model_mod.tracks[3].id });
     model.search_buffer = canvas.TextBuffer(model_mod.max_search).init("light");
 
     var interpreter = try canvas.MarkupView(Model, Msg).init(arena, view_mod.statusbar_markup);
@@ -1247,7 +1236,6 @@ test "both windows lay out within their fixed canvases and the widget budget" {
 
     var model = Model{};
     apply(&model, .{ .play_track = first_track.id });
-    apply(&model, .{ .queue_track = model_mod.albumTracks(2)[0].id });
     model.playlist_open = true;
 
     // The player: a dense fixed 460x180 chassis.
@@ -1474,6 +1462,23 @@ test "the ledger rules between rows: dividers, not boxes" {
         if (child.kind == .column and child.children.len == 2 and child.children[0].kind == .panel) dividers += 1;
     }
     try testing.expectEqual(rows.len - 1, dividers);
+
+    // The ledger insets from the bay's x edges: rows (and the rules,
+    // children of the same padded column) start `ledger_inset_x` from
+    // the glass edge and stop the same distance short of the right —
+    // the bay panel spans the full window width, so the frame math
+    // reads straight off the layout table.
+    var nodes: [1024]canvas.WidgetLayoutNode = undefined;
+    const laid = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, view_mod.playlist_width, view_mod.playlist_height), &nodes);
+    var found_row = false;
+    for (laid.nodes) |node| {
+        if (node.widget.kind != .panel) continue;
+        if (!std.mem.eql(u8, node.widget.semantics.label, model_mod.tracks[0].title)) continue;
+        found_row = true;
+        try testing.expectEqual(view_mod.layout.ledger_inset_x, node.frame.x);
+        try testing.expectEqual(view_mod.playlist_width - view_mod.layout.ledger_inset_x, node.frame.x + node.frame.width);
+    }
+    try testing.expect(found_row);
 }
 
 // Env-gated screenshot renderer (skipped by default, never in CI): renders
@@ -1498,7 +1503,7 @@ test "render deck screenshots (env-gated)" {
     live.harness.runtime.options.automation = native_sdk.automation.Server.init(io, "/tmp/deck-shots/deck-idle-artifacts", "Deck");
     try live.harness.runtime.dispatchAutomationCommand(live.app_state.app(), "screenshot deck-canvas 2");
 
-    // Playing mid-song, one queued cue. The mid-song position comes from
+    // Playing mid-song. The mid-song position comes from
     // REAL seek steps on the fader (the widget keyboard path), so the
     // fader and the display's timecode agree. The transport then PAUSES
     // for the two scheme captures: while playing every presented frame
@@ -1510,7 +1515,6 @@ test "render deck screenshots (env-gated)" {
     // one finish, so the two captures must be byte-identical — diff the
     // artifacts for the honest proof.
     try live.dispatch(.{ .play_track = model_mod.albumTracks(2)[0].id });
-    try live.dispatch(.{ .queue_track = model_mod.albumTracks(2)[3].id });
     const seek_id = try live.widgetIdByLabel(main.canvas_label, 1, .slider, "Seek");
     for (0..8) |_| try live.widgetAction(main.canvas_label, seek_id, "increment");
     try live.dispatch(.transport_pause);
@@ -1536,7 +1540,7 @@ test "render deck screenshots (env-gated)" {
 // Env-gated homepage screenshot renderer (skipped by default, never in
 // CI): renders the docs-homepage showcase state OFFSCREEN through the
 // deterministic reference renderer — the chassis with a track playing
-// mid-song and one queued cue, then the playlist rack racked in through
+// mid-song, then the playlist rack racked in through
 // the real PL toggle. Deck has ONE finish by design (the OS scheme
 // changes nothing), so unlike the other homepage shots there is exactly
 // one capture per window. PNGs land in
@@ -1551,12 +1555,11 @@ test "render homepage screenshots (env-gated)" {
     const live = try LiveApp.start(true);
     defer live.stop();
 
-    // The hero state: a track playing mid-song, one queued cue, the full
-    // ledger selected. The mid-song position comes from REAL seek steps
-    // on the fader (the widget keyboard path), so the fader and the
-    // display's timecode agree.
+    // The hero state: a track playing mid-song, the full ledger
+    // selected. The mid-song position comes from REAL seek steps on the
+    // fader (the widget keyboard path), so the fader and the display's
+    // timecode agree.
     try live.dispatch(.{ .play_track = model_mod.albumTracks(2)[0].id });
-    try live.dispatch(.{ .queue_track = model_mod.albumTracks(2)[3].id });
     const seek_id = try live.widgetIdByLabel(main.canvas_label, 1, .slider, "Seek");
     for (0..8) |_| try live.widgetAction(main.canvas_label, seek_id, "increment");
     try presentShotFrame(live, 2);

@@ -1,5 +1,5 @@
 //! deck: the radically skinned sibling of `examples/soundboard` — the same
-//! local music player (albums, tracks, transport, seek, queue, search)
+//! local music player (albums, tracks, transport, seek, search)
 //! wearing vintage rack-unit hardware identity, in the true two-window
 //! shape: a SMALL, FIXED player window (the window IS the device —
 //! CHROMELESS, so the enamel cap band is the drag region and carries

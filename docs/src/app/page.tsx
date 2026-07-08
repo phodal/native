@@ -308,7 +308,7 @@ export default function HomePage() {
             rendering.
           </SectionLede>
           {/* The proof: soundboard and deck are the same player — same
-              library, transport, queue, and search — separated only by
+              library, transport, and search — separated only by
               design tokens and a chrome pass. Both windows own their own
               chrome (soundboard's header IS its titlebar; deck is a fixed
               512x264 chassis), so neither gets an invented window frame —

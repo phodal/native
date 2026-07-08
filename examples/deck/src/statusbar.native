@@ -1,6 +1,6 @@
-<!-- The playlist rack's bottom status strip: search, match counter, and
-     the queue badge, riding directly on the rack's enamel panel (rows
-     paint no fill of their own). Compiled at comptime
+<!-- The playlist rack's bottom status strip: search and the match
+     counter, riding directly on the rack's enamel panel (rows paint no
+     fill of their own). Compiled at comptime
      (canvas.CompiledMarkupView) and composed under the Zig playlist
      view; the test suite also runs it through the runtime interpreter
      and asserts engine parity. Styling comes entirely from the deck
@@ -13,11 +13,6 @@
       <button size="sm" variant="ghost" icon="x" on-press="clear_search" label="Clear search"></button>
     </if>
     <spacer grow="1" />
-    <if test="{hasQueue}">
-      <!-- Badges are accent-driven: the amber rides the accent refs (a
-           background ref is ignored by the badge's default variant). -->
-      <badge accent="warning" accent-foreground="warning_text">{queueLabel}</badge>
-    </if>
     <text size="sm" foreground="text_muted">{statusLabel}</text>
   </row>
 </column>

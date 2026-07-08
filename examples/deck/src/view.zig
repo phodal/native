@@ -52,9 +52,9 @@ pub const statusbar_markup = @embedFile("statusbar.native");
 pub const CompiledStatusBarView = canvas.CompiledMarkupView(Model, Msg, statusbar_markup);
 
 /// The spectrum analyzer chart: a compiled `.native` fragment (one
-/// `<chart>` with bar + peak-line series binding model fns), built into
-/// the display bay's glass beside the segment clock — the deck's ONE
-/// animated band.
+/// `<chart>` with a single bar series binding a model fn — bars only,
+/// no line riding their caps), built into the display bay's glass
+/// beside the segment clock — the deck's ONE animated band.
 pub const CompiledSpectrumView = canvas.CompiledMarkupView(Model, Msg, @embedFile("spectrum.native"));
 
 /// The chassis layout table (see layout.zig): re-exported so app wiring
@@ -94,12 +94,12 @@ pub fn rootView(ui: *Ui, model: *const Model) Ui.Node {
 }
 
 /// The enamel cap band: the window's drag region, the skin's OWN window
-/// keys, and the brand plate in one — the window IS the device and it
+/// keys, and the DECK stamp in one — the window IS the device and it
 /// is chromeless, so the close and minimize keys here are the real
 /// controls (wired to the window-action effects), not decoration. The
-/// chrome draws the band, the key bevels, and the raised brand plate;
-/// this row is transparent. All x-positions are layout-table constants
-/// (no OS chrome inset exists to track).
+/// chrome draws the band and the key bevels; this row is transparent
+/// and the stamp prints directly on the band's enamel. All x-positions
+/// are layout-table constants (no OS chrome inset exists to track).
 fn capBand(ui: *Ui, model: *const Model) Ui.Node {
     return ui.row(.{
         .height = layout.cap_height,
@@ -149,9 +149,9 @@ fn windowKey(ui: *Ui, icon: []const u8, msg: Msg, label: []const u8) Ui.Node {
     }, "");
 }
 
-/// The embossed DECK stamp, centered on the chrome's raised brand plate
-/// (`layout.brand_*`; the chrome pass draws the plate's fill and bevel
-/// behind this text).
+/// The DECK stamp: silkscreened lettering directly on the cap band's
+/// enamel — no plate, no box behind it (the letter-spaced tracking and
+/// the bold ink are the whole brand). `layout.brand_width` cases it.
 fn brandStamp(ui: *Ui) Ui.Node {
     var node = ui.paragraph(.{ .width = layout.brand_width, .semantics = .{ .label = "Brand" } }, &.{
         .{ .text = "D E C K", .weight = .bold, .monospace = true, .color = .text, .scale = caption_scale },
@@ -279,7 +279,7 @@ fn seekRow(ui: *Ui, model: *const Model) Ui.Node {
 /// labeled PL utility key. Widths and gaps come from the layout table;
 /// the chrome pass accumulates the same numbers into its bevel and well
 /// positions, and the table's comptime assert holds that the row fits
-/// its container (the queue region grows, so the PL key is
+/// its container (a growing spacer — blank faceplate — pins the PL key
 /// right-aligned at `layout.pl_x` by construction).
 fn transportRow(ui: *Ui, model: *const Model) Ui.Node {
     return ui.row(.{ .gap = layout.gap, .height = layout.transport_height, .cross = .center, .semantics = .{ .label = "Transport" } }, .{
@@ -330,8 +330,8 @@ fn transportRow(ui: *Ui, model: *const Model) Ui.Node {
             .on_press = .next_track,
             .semantics = .{ .label = "Next track" },
         }, ""),
-        // Fixed spacer between the wells (the recessed pockets need an
-        // enamel strip between their bevels).
+        // Fixed spacer past the transport well's bevel: clear enamel
+        // before the open-air volume block (no pocket of its own).
         ui.el(.stack, .{ .width = layout.cluster_spacer }, .{}),
         monoCaption(ui, "VOL", layout.vol_caption_width, .start, .text_muted),
         // The rotary volume knob: the CONTROL is this real slider (drag,
@@ -346,18 +346,9 @@ fn transportRow(ui: *Ui, model: *const Model) Ui.Node {
             .on_change = .volume_changed,
             .semantics = .{ .label = "Volume" },
         }, .{}),
-        // The queue region grows, keeping the PL key pinned at the
-        // right margin; the amber badge hugs the key when present.
-        ui.row(.{ .grow = 1, .cross = .center, .main = .end }, .{
-            if (model.hasQueue())
-                ui.el(.badge, .{
-                    .text = model.queueLabel(ui.arena),
-                    .style_tokens = .{ .accent = .warning, .accent_foreground = .warning_text },
-                    .semantics = .{ .label = "Queue badge" },
-                }, .{})
-            else
-                ui.el(.stack, .{}, .{}),
-        }),
+        // Blank faceplate grows between the volume block and the PL
+        // key, pinning PL at the right margin.
+        ui.spacer(1),
         ui.el(.toggle_button, .{
             .width = layout.btn_pl_width,
             .height = layout.key_height,
@@ -382,10 +373,11 @@ fn monoCaption(ui: *Ui, text: []const u8, width: f32, alignment: canvas.TextAlig
 /// The playlist unit: a second model-declared window — enamel chassis
 /// around one big smoked-glass playlist bay. ONE flat list of every
 /// song — no album rail, no sub-collections; search narrows it and the
-/// deck strip carries the loaded record's sleeve and the queue. No
-/// chrome pass reaches secondary windows, so the enamel here is widgets
-/// and tokens only: the root fills with the `surface` token and the
-/// machining is panel plates and hairline separators.
+/// deck strip carries the loaded record's sleeve and the ON DECK stamp.
+/// The ledger's flat order IS the play order (track end advances down
+/// it). No chrome pass reaches secondary windows, so the enamel here is
+/// widgets and tokens only: the root fills with the `surface` token and
+/// the machining is panel plates and hairline separators.
 pub fn playlistView(ui: *Ui, model: *const Model) Ui.Node {
     // The enamel chassis is a PANEL fill: plain layout containers carry
     // no chrome of their own (the renderer paints nothing for rows and
@@ -399,7 +391,7 @@ pub fn playlistView(ui: *Ui, model: *const Model) Ui.Node {
         playlistHeader(ui),
         ui.el(.separator, .{ .height = 1 }, .{}),
         ledgerView(ui, model),
-        cueStrip(ui, model),
+        deckStrip(ui, model),
         CompiledStatusBarView.build(ui, model),
     }));
 }
@@ -442,11 +434,13 @@ fn ledgerView(ui: *Ui, model: *const Model) Ui.Node {
     // so a panel (containers paint nothing) fills the bay with the
     // smoked-glass token.
     const rows = model.visibleTracks(ui.arena);
-    return ui.panel(.{
-        .grow = 1,
-        .style_tokens = .{ .background = .background },
-        .semantics = .{ .label = "Playlist bay" },
-    }, ui.column(.{ .grow = 1, .padding = layout.rack_pad, .gap = layout.gap }, .{
+    // The bay's content column: the vertical rhythm keeps `rack_pad`
+    // (the viewport fold assert in layout.zig depends on it) while the
+    // x axis insets deeper (`ledger_inset_x`) so the rows — and the
+    // hairline rules between them, children of this same column — keep
+    // clear glass to the bay edges. Per-side padding is a direct layout
+    // write; the element options carry only the uniform shorthand.
+    var content = ui.column(.{ .grow = 1, .gap = layout.gap }, .{
         ui.row(.{ .height = layout.ledger_caption_height, .cross = .center, .gap = 8 }, .{
             glassCaption(ui, "TRACKS // LIBRARY"),
             ui.spacer(1),
@@ -458,7 +452,18 @@ fn ledgerView(ui: *Ui, model: *const Model) Ui.Node {
         }, ui.el(.list, .{
             .semantics = .{ .role = .list, .label = "Tracks" },
         }, ui.each(rows, trackKey, ledgerRow))),
-    }));
+    });
+    content.widget.layout.padding = .{
+        .top = layout.rack_pad,
+        .bottom = layout.rack_pad,
+        .left = layout.ledger_inset_x,
+        .right = layout.ledger_inset_x,
+    };
+    return ui.panel(.{
+        .grow = 1,
+        .style_tokens = .{ .background = .background },
+        .semantics = .{ .label = "Playlist bay" },
+    }, content);
 }
 
 fn trackKey(row: *const model_mod.TrackRow) canvas.UiKey {
@@ -487,11 +492,10 @@ fn ledgerRowPlate(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
         .height = layout.ledger_row_height,
         .padding = 5,
         .on_press = Msg{ .play_track = row.id },
-        // Two items per row on purpose: the full ledger mounts every
-        // catalog track, and two items per row keeps the mounted total
+        // One item per row on purpose: the full ledger mounts every
+        // catalog track, and one item per row keeps the mounted total
         // well inside the per-view context-menu budget.
         .context_menu = &.{
-            .{ .label = "Play Next", .msg = Msg{ .queue_track = row.id } },
             .{ .label = "Copy Title", .msg = Msg{ .copy_title = row.id } },
         },
         // Rows are bare glass (the theme's default panel paints
@@ -518,17 +522,6 @@ fn ledgerRowPlate(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
         // below. Titles print pale phosphor; the loaded row goes live.
         ui.text(.{ .grow = 1, .size = .sm, .wrap = false, .style_tokens = .{ .foreground = if (row.now) .accent else .success } }, row.title),
         ui.text(.{ .width = layout.ledger_artist_width, .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .info } }, row.artist),
-        // A fixed cue slot keeps the artist and duration columns aligned
-        // whether or not the amber Q plate is present.
-        ui.row(.{ .width = layout.ledger_cue_width, .cross = .center, .main = .end }, .{
-            if (row.queued)
-                ui.el(.badge, .{
-                    .text = "Q",
-                    .style_tokens = .{ .accent = .warning, .accent_foreground = .warning_text },
-                }, .{})
-            else
-                ui.el(.stack, .{}, .{}),
-        }),
         monoCaption(ui, row.duration, layout.ledger_duration_width, .end, .info),
         // The overlay scrollbar's lane: keeps the duration digits clear
         // of the thumb (the row itself stays full width).
@@ -549,24 +542,26 @@ fn emptyLedger(ui: *Ui, model: *const Model) Ui.Node {
     }));
 }
 
-/// The bottom deck strip: the loaded record's sleeve window at the left,
-/// then the up-next queue as amber plates, in play order.
-fn cueStrip(ui: *Ui, model: *const Model) Ui.Node {
-    const queued = model.queueRows(ui.arena);
-    return ui.row(.{ .gap = 8, .height = layout.cue_strip_height, .cross = .center, .padding = layout.cue_strip_pad, .semantics = .{ .label = "Deck strip" } }, .{
-        ui.el(.stack, .{ .width = layout.rack_pad - layout.cue_strip_pad }, .{}),
+/// The bottom deck strip: the loaded record's sleeve window at the
+/// left, then the ON DECK stamp naming what is loaded — enamel
+/// silkscreen, one line. The strip states only what the deck holds now:
+/// the ledger above is the play order, so nothing else needs stating.
+fn deckStrip(ui: *Ui, model: *const Model) Ui.Node {
+    const track = model.nowTrack();
+    return ui.row(.{ .gap = 8, .height = layout.deck_strip_height, .cross = .center, .padding = layout.deck_strip_pad, .semantics = .{ .label = "Deck strip" } }, .{
+        // Leading margin: the sleeve aligns with the ledger content's
+        // deeper x inset above (the strip's own padding is the rest).
+        ui.el(.stack, .{ .width = layout.ledger_inset_x - layout.deck_strip_pad }, .{}),
         sleevePane(ui, model),
-        ui.row(.{ .gap = 6, .grow = 1, .cross = .center, .semantics = .{ .role = .list, .label = "Up next" } }, .{
-            enamelCaption(ui, "UP NEXT //"),
-            if (queued.len == 0)
-                ui.paragraph(.{}, &.{
-                    .{ .text = "QUEUE EMPTY", .monospace = true, .color = .text_muted, .scale = caption_scale },
-                })
-            else
-                ui.el(.stack, .{}, .{}),
-            ui.row(.{ .gap = 4, .cross = .center }, ui.each(queued, trackKey, cuePlate)),
-            ui.spacer(1),
-        }),
+        enamelCaption(ui, "ON DECK //"),
+        // The loaded title, stamped uppercase in the silkscreen ink
+        // (hardware voice); idle wears the powered-on dashes. Elides at
+        // the strip's edge, never wraps.
+        if (track) |loaded|
+            ui.text(.{ .grow = 1, .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text } }, upper(ui, loaded.title))
+        else
+            ui.text(.{ .grow = 1, .size = .sm, .wrap = false, .style_tokens = .{ .foreground = .text_muted } }, "--"),
+        ui.el(.stack, .{ .width = layout.ledger_inset_x - layout.deck_strip_pad }, .{}),
     });
 }
 
@@ -597,21 +592,6 @@ fn sleevePane(ui: *Ui, model: *const Model) Ui.Node {
     }, ui.column(.{ .grow = 1, .main = .center, .cross = .center }, .{
         glassCaption(ui, "--"),
     }));
-}
-
-/// Cue plates carry the track number and a truncated uppercase title:
-/// the catalog holds titles longer than the strip, so the stamp cuts at
-/// a fixed budget (hardware voice — no ellipsis) while the semantics
-/// label keeps the full title for assistive tech.
-pub const cue_title_max = 16;
-
-fn cuePlate(ui: *Ui, row: *const model_mod.TrackRow) Ui.Node {
-    const title = upper(ui, row.title[0..@min(row.title.len, cue_title_max)]);
-    return ui.el(.badge, .{
-        .text = ui.fmt("{s} {s}", .{ row.number, title }),
-        .style_tokens = .{ .accent = .warning, .accent_foreground = .warning_text },
-        .semantics = .{ .role = .listitem, .label = row.title },
-    }, .{});
 }
 
 // ---------------------------------------------------------------- shared

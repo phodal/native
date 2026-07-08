@@ -22,8 +22,9 @@
 //!     `info` the dim phosphor of engraved-on-glass captions (this app
 //!     has no informational-violet surface, so the slot is spent on the
 //!     third phosphor register; a teaching trade, stated here).
-//! Signal amber (`warning`) is reserved for the queue and the failure
-//! stamps — the one non-green hue on the glass.
+//! Signal amber (`warning`) is reserved for the failure stamps (NO
+//! MEDIA, STREAM LOST, and their remedy lines) — the one non-green hue
+//! on the glass.
 //!
 //! Accessibility still beats brand: a high-contrast request abandons the
 //! skin for the framework's high-contrast light palette and stock
@@ -150,9 +151,6 @@ pub fn tokens(high_contrast: bool, reduce_motion: bool) canvas.DesignTokens {
         .background = Color.rgba8(0, 0, 0, 0),
         .foreground = Color.rgba8(94, 125, 104, 110),
     };
-    out.controls.badge = .{
-        .radius = 1,
-    };
     // Default panels paint NOTHING — no fill, no stroke: every visible
     // surface in this app states its material explicitly
     // (`style_tokens`), the glass bays are framed by the chrome pass's
@@ -210,8 +208,10 @@ pub const chassis_colors = canvas.ColorTokens{
     // Pale phosphor: what a readout prints in at rest.
     .success = phosphor_pale,
     .success_text = Color.rgb8(7, 21, 13),
-    // Signal amber: the queue's "pending" state and the failure stamps,
-    // the one non-green hue on the glass.
+    // Signal amber: the failure stamps (the NO MEDIA / STREAM LOST
+    // marquee and their remedy lines), the one non-green hue on the
+    // glass. The token survives the queue's removal because a warning
+    // register the failure states already wear is not optional.
     .warning = Color.rgb8(236, 178, 74),
     .warning_text = Color.rgb8(43, 30, 7),
     // Dim phosphor: engraved-on-glass captions (see the module doc for

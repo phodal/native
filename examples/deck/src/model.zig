@@ -1,7 +1,7 @@
 //! deck model: the same committed music catalog as `examples/soundboard`
 //! (one manifest, two skins — the "same app, different identity" contrast
-//! is the point) plus the playback, queue, search, and playlist-window
-//! state the deck binds to.
+//! is the point) plus the playback, search, and playlist-window state
+//! the deck binds to.
 //!
 //! Playback is REAL: pressing play issues `fx.playAudio` against the
 //! shared on-disk library and every report — the load acknowledgment,
@@ -26,8 +26,8 @@
 //! display marquee stamps `NO MEDIA` and the channel line names the
 //! remedy (`tools/prepare-example-music.sh`). With a base configured a
 //! failure stamps `STREAM LOST` instead — a network problem, a network
-//! remedy. Browsing, search, and queueing never need the audio files —
-//! the catalog is committed.
+//! remedy. Browsing and search never need the audio files — the catalog
+//! is committed.
 //!
 //! Everything the views show that is computable — the filtered ledger,
 //! timecode labels, the 32-band spectrum — is derived per rebuild into
@@ -39,8 +39,6 @@
 //! Fixed capacities (loud by design, documented in the README):
 //!   - the committed manifest's albums and tracks (comptime-derived
 //!     tables; per-album track counts VARY, nothing assumes a stride)
-//!   - 16-entry play-next queue (a full queue drops the request, counted
-//!     in `queue_dropped`)
 //!   - 48-byte search buffer
 //!   - 32 spectrum bands
 
@@ -179,7 +177,6 @@ pub fn albumTracks(album_id: u8) []const Track {
 
 // -------------------------------------------------------------- capacities
 
-pub const max_queue = 16;
 pub const max_search = 48;
 pub const spectrum_bands = 32;
 /// Marquee geometry: visible window in characters, and how much
@@ -299,8 +296,6 @@ pub const Msg = union(enum) {
     /// Every playback report from the audio effect channel: loaded,
     /// position ticks, the one completion, failures.
     audio_event: native_sdk.EffectAudio,
-    /// Context menu: queue a track to play after the current one.
-    queue_track: u8,
     /// Context menu: copy the track title to the clipboard via `pbcopy`
     /// (soundboard's effect, unchanged: the effects channel has no
     /// clipboard call today).
@@ -367,9 +362,6 @@ pub const Model = struct {
     url_base_len: usize = manifest_url_base.len,
     cache_dir_buffer: [max_cache_dir]u8 = @splat(0),
     cache_dir_len: usize = 0,
-    queue: [max_queue]u8 = @splat(0),
-    queue_len: usize = 0,
-    queue_dropped: u32 = 0,
     search_buffer: canvas.TextBuffer(max_search) = .{},
     /// Seek slider value, mirrored from the runtime through `sync`.
     seek_fraction: f32 = 0,
@@ -458,14 +450,6 @@ pub const Model = struct {
     pub fn nowCover(model: *const Model) canvas.ImageId {
         const track = model.nowTrack() orelse return 0;
         return model.coverFor(track.album);
-    }
-
-    pub fn hasQueue(model: *const Model) bool {
-        return model.queue_len > 0;
-    }
-
-    pub fn queueLabel(model: *const Model, arena: std.mem.Allocator) []const u8 {
-        return std.fmt.allocPrint(arena, "QUEUE {d}", .{model.queue_len}) catch "";
     }
 
     /// Status-strip counter: visible tracks over the library total.
@@ -573,20 +557,10 @@ pub const Model = struct {
     }
 
     /// The 32 spectrum band levels, derived into the build arena per
-    /// rebuild (the chart widget binds this).
+    /// rebuild (the chart widget's one bar series binds this).
     pub fn spectrumLevels(model: *const Model, arena: std.mem.Allocator) []const f32 {
         const out = arena.alloc(f32, spectrum_bands) catch return &.{};
         for (out, 0..) |*level, band| level.* = model.bandLevel(band);
-        return out;
-    }
-
-    /// The peak-hold trace the spectrum chart's line series binds: each
-    /// band's cap, a hair above the bar. Derived from the bands, so it
-    /// freezes with them when the progress clock stops.
-    pub fn spectrumPeaks(model: *const Model, arena: std.mem.Allocator) []const f32 {
-        const levels = model.spectrumLevels(arena);
-        const out = arena.alloc(f32, levels.len) catch return levels;
-        for (levels, out) |level, *peak| peak.* = @min(1, level + 0.04);
         return out;
     }
 
@@ -604,15 +578,6 @@ pub const Model = struct {
             count += 1;
         }
         return out[0..count];
-    }
-
-    /// Up-next rows for the playlist window's cue strip, in queue order.
-    pub fn queueRows(model: *const Model, arena: std.mem.Allocator) []const TrackRow {
-        const out = arena.alloc(TrackRow, model.queue_len) catch return &.{};
-        for (model.queue[0..model.queue_len], 0..) |id, slot| {
-            out[slot] = model.trackRow(arena, trackById(id));
-        }
-        return out;
     }
 
     fn trackMatches(model: *const Model, track: *const Track) bool {
@@ -634,37 +599,7 @@ pub const Model = struct {
             .duration = formatMs(arena, track.duration_ms),
             .now = model.now == track.id,
             .playing = model.now == track.id and model.playing,
-            .queued = model.isQueued(track.id),
         };
-    }
-
-    fn isQueued(model: *const Model, track_id: u8) bool {
-        for (model.queue[0..model.queue_len]) |queued| {
-            if (queued == track_id) return true;
-        }
-        return false;
-    }
-
-    // ------------------------------------------------------------ mutation
-
-    fn pushQueue(model: *Model, track_id: u8) void {
-        if (model.isQueued(track_id)) return;
-        if (model.queue_len >= max_queue) {
-            model.queue_dropped += 1;
-            return;
-        }
-        model.queue[model.queue_len] = track_id;
-        model.queue_len += 1;
-    }
-
-    fn popQueue(model: *Model) ?u8 {
-        if (model.queue_len == 0) return null;
-        const next = model.queue[0];
-        for (model.queue[1..model.queue_len], 0..) |moved, slot| {
-            model.queue[slot] = moved;
-        }
-        model.queue_len -= 1;
-        return next;
     }
 };
 
@@ -677,9 +612,8 @@ pub const TrackRow = struct {
     /// This track is loaded in the deck (playing or paused).
     now: bool,
     playing: bool,
-    queued: bool,
     /// The ledger's first VISIBLE row: no hairline divider above it
-    /// (rules run between rows only). Cue plates never read it.
+    /// (rules run between rows only).
     first: bool = false,
 };
 
@@ -788,7 +722,6 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             fx.setAudioVolume(model.volume_fraction);
         },
         .audio_event => |event| handleAudio(model, fx, event),
-        .queue_track => |id| model.pushQueue(id),
         .copy_title => |id| fx.spawn(.{
             .key = copy_key,
             .argv = &.{"/usr/bin/pbcopy"},
@@ -855,7 +788,7 @@ fn handleAudio(model: *Model, fx: *Effects, event: native_sdk.EffectAudio) void 
                 model.elapsed_ms = position;
             }
         },
-        // Natural end: the play-next queue wins, else album order.
+        // Natural end: the next ledger row plays (see `advance`).
         .completed => advance(model, fx),
         // Playback could not run (`failed`), or the effects layer
         // refused the request (`rejected` — impossible for these
@@ -972,22 +905,21 @@ fn setPlaying(model: *Model, fx: *Effects, playing: bool) void {
     }
 }
 
-/// The play-next queue wins; otherwise the next track in the same album,
-/// wrapping at the end of the record. Per-album lengths vary, so the
-/// wrap arithmetic runs on the album's own slice.
+/// Natural end and the NEXT key both step the LEDGER: the catalog is
+/// ONE flat song list on this deck (the playlist window shows exactly
+/// that order), so advance plays the next row in the flat track table —
+/// crossing album boundaries without a seam — and wraps from the last
+/// row back to the first. Track ids ARE the flat 1-based positions, so
+/// the wrap is id arithmetic on the full table.
 fn advance(model: *Model, fx: *Effects) void {
-    if (model.popQueue()) |queued| {
-        startTrack(model, fx, queued);
-        return;
-    }
     const track = model.nowTrack() orelse return;
-    const album_tracks = albumTracks(track.album);
-    const next_index = @as(usize, track.number) % album_tracks.len;
-    startTrack(model, fx, album_tracks[next_index].id);
+    const next_index = @as(usize, track.id) % tracks.len;
+    startTrack(model, fx, tracks[next_index].id);
 }
 
 /// Restart the current track when it is a few seconds in; otherwise the
-/// previous track in the album, wrapping backwards.
+/// previous ledger row, wrapping backwards from the first to the last —
+/// the mirror of `advance`, on the same flat order.
 fn previous(model: *Model, fx: *Effects) void {
     const track = model.nowTrack() orelse return;
     if (model.elapsed_ms > 3000) {
@@ -995,7 +927,6 @@ fn previous(model: *Model, fx: *Effects) void {
         fx.seekAudio(0);
         return;
     }
-    const album_tracks = albumTracks(track.album);
-    const prev_index = (@as(usize, track.number) + album_tracks.len - 2) % album_tracks.len;
-    startTrack(model, fx, album_tracks[prev_index].id);
+    const prev_index = (@as(usize, track.id) + tracks.len - 2) % tracks.len;
+    startTrack(model, fx, tracks[prev_index].id);
 }

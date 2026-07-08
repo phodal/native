@@ -6,10 +6,11 @@
 //!   prefix (behind the widgets): the cream enamel chassis fill, the
 //!   warm faceplate gradient with a set of near-invisible grain
 //!   hairlines (honest texture: fills, lines, and gradients only — this
-//!   skin ships no bitmap assets), the enamel cap band with its raised
-//!   brand plate, outer bevels, a ridged grip band, four recessed
-//!   corner screws, and inset control wells behind the transport
-//!   cluster and the volume block;
+//!   skin ships no bitmap assets), the enamel cap band (the DECK stamp
+//!   prints directly on it — no raised plate), outer bevels, a ridged
+//!   grip band, four recessed corner screws, and ONE inset control well
+//!   behind the transport cluster (the volume knob sits directly on the
+//!   chassis enamel, unenclosed);
 //!
 //!   suffix (in front of the widgets): inset bevel frames around the
 //!   two glass bays (the display — the deck's ONE LED section — and the
@@ -17,7 +18,9 @@
 //!   over the glass, the seven-segment elapsed readout drawn as sheared
 //!   hexagon paths (ghost segments always visible — display ghosting —
 //!   lit segments doubled with a translucent glow stroke), the analog
-//!   volume knob face with its position dot over the volume slider, and
+//!   volume knob face with its position dot over the volume slider
+//!   (seated directly on the enamel — its slider cover re-plots the
+//!   faceplate gradient so the patch vanishes into the chassis), and
 //!   raised bevel edges on the transport keys and the cap band's window
 //!   keys (the chromeless window's own close/minimize controls).
 //!
@@ -61,17 +64,19 @@ const ridge_pairs = 3; // comptime_int: used in both command counts and f32 mach
 const grain_lines: usize = 14;
 const knob_ticks: usize = 5;
 
+// Re-derived for the unboxed round: the raised brand plate (5 — the
+// DECK stamp prints directly on the cap band now) and the volume well
+// (5 — the knob sits directly on the enamel) are GONE from the prefix;
+// every remaining term matches one section of buildPrefix in order.
 pub const prefix_commands: usize =
     1 + // chassis fill
     1 + // faceplate gradient
     grain_lines + // enamel grain hairlines
     3 + // cap band (fill + top catch-light + bottom shadow)
-    5 + // raised brand plate (fill + bevel)
     4 + // window outer bevel
     ridge_pairs * 2 + // ridged grip band above the bottom edge
     4 * screw_commands + // corner screws
-    5 + // transport well (fill + inset bevel)
-    5; // volume well (fill + inset bevel)
+    5; // transport well (fill + inset bevel) — the ONE recessed pocket
 
 pub const suffix_commands: usize =
     3 * 4 + // display + art + seek inset bevels
@@ -94,7 +99,6 @@ const faceplate_top = Color.rgb8(240, 234, 220);
 const faceplate_bottom = Color.rgb8(221, 214, 196);
 const cap_top = Color.rgb8(247, 242, 230);
 const cap_bottom = Color.rgb8(228, 221, 203);
-const brand_face = Color.rgb8(224, 217, 198);
 const bevel_light = Color.rgba8(255, 253, 244, 210);
 const bevel_shadow = Color.rgba8(74, 66, 48, 150);
 const ridge_light = Color.rgba8(255, 253, 244, 130);
@@ -170,7 +174,6 @@ const stop_key = rect(layout.stop_x, layout.key_y, layout.btn_stop_width, layout
 const next_key = rect(layout.next_x, layout.key_y, layout.btn_next_width, layout.key_height);
 const pl_key = rect(layout.pl_x, layout.key_y, layout.btn_pl_width, layout.key_height);
 const transport_well = rect(layout.transport_well_x, layout.well_y, layout.transport_well_width, layout.well_height);
-const volume_well = rect(layout.output_well_x, layout.well_y, layout.output_well_width, layout.well_height);
 
 // Chrome-only decoration bands, snapped to the chassis grid: the bottom
 // strip between the transport row and the window edge carries the four
@@ -235,13 +238,9 @@ fn buildPrefix(builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) 
     try hline(builder, 0, W, 0.5, if (hc) tokens.colors.border else bevel_light, 1);
     try hline(builder, 0, W, layout.cap_height + 0.5, if (hc) tokens.colors.border else bevel_shadow, 1);
 
-    // The raised brand plate under the D E C K stamp: a layout-table
-    // constant (`layout.brand_x`, after the cap band's window keys) —
-    // the window is chromeless, so no live OS inset exists to track and
-    // the view's flow puts the stamp at the same constant.
-    const brand = rect(layout.brand_x, layout.brand_y, layout.brand_width, layout.brand_height);
-    try builder.fillRect(.{ .rect = brand, .fill = .{ .color = if (hc) tokens.colors.surface else brand_face } });
-    try bevelOut(builder, brand, tokens, hc);
+    // No brand plate: the D E C K stamp (a widget paragraph in the cap
+    // band's flow) prints directly on the band's enamel — lettering on
+    // the finish, nothing raised, nothing boxed.
 
     // Window outer bevel: the whole device is one raised plate.
     try bevelOut(builder, rect(0, 0, W, H), tokens, hc);
@@ -263,10 +262,10 @@ fn buildPrefix(builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) 
     try screw(builder, screw_left_x, screw_bottom_y, hc);
     try screw(builder, screw_right_x, screw_bottom_y, hc);
 
-    // Inset wells: the transport cluster and the volume block sit in
-    // recessed pockets, like keys machined into the panel.
+    // The ONE inset well: the five-key transport cluster sits in a
+    // recessed pocket, like keys machined into the panel. The volume
+    // block gets no pocket — the knob rides the open enamel.
     try insetWell(builder, transport_well, tokens, hc);
-    try insetWell(builder, volume_well, tokens, hc);
 }
 
 fn buildSuffix(model: *const Model, builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
@@ -385,8 +384,8 @@ fn glareWash(builder: *canvas.Builder, r: geometry.RectF, hc: bool) anyerror!voi
 /// (down-right) like every amplifier dial ever cast.
 fn volumeKnob(model: *const Model, builder: *canvas.Builder, tokens: canvas.DesignTokens, hc: bool) anyerror!void {
     const r = knob_radius;
-    // Position ticks at 0/25/50/75/100 percent, engraved on the well
-    // around the knob.
+    // Position ticks at 0/25/50/75/100 percent, engraved on the chassis
+    // enamel around the knob (part of the dial, not an enclosure).
     for (0..knob_ticks) |index| {
         const fraction = @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(knob_ticks - 1));
         const theta = knobAngle(fraction);
@@ -396,11 +395,18 @@ fn volumeKnob(model: *const Model, builder: *canvas.Builder, tokens: canvas.Desi
             .stroke = .{ .fill = .{ .color = if (hc) transparent else bevel_shadow }, .width = 1 },
         });
     }
-    // A well-colored cover over the slider's own track and thumb: the
-    // slider stays the live control underneath (hits, focus, keys), but
-    // the knob is the only thing the eye gets. High contrast keeps the
-    // cover transparent so the stock slider shows honestly.
-    try builder.fillRect(.{ .rect = rect(layout.knob_x, layout.key_y, layout.knob_width, layout.key_height), .fill = .{ .color = if (hc) transparent else well } });
+    // A cover over the slider's own track and thumb: the slider stays
+    // the live control underneath (hits, focus, keys), but the knob is
+    // the only thing the eye gets. The fill re-plots the faceplate
+    // gradient over the faceplate's own y-range (the rect clips it), so
+    // the patch is byte-identical to the enamel behind it — the knob
+    // sits directly on the chassis, no well, no box. High contrast
+    // keeps the cover transparent so the stock slider shows honestly.
+    try builder.fillRect(.{ .rect = rect(layout.knob_x, layout.key_y, layout.knob_width, layout.key_height), .fill = if (hc) .{ .color = transparent } else .{ .linear_gradient = .{
+        .start = point(0, layout.cap_height),
+        .end = point(0, H),
+        .stops = &faceplate_stops,
+    } } });
     // The dark rim ring, then the enamel face lit from the top.
     try builder.fillRoundedRect(.{ .rect = rect(knob_cx - r, knob_cy - r, r * 2, r * 2), .radius = canvas.Radius.all(r), .fill = .{ .color = if (hc) tokens.colors.border else knob_rim } });
     const face = r - 2;

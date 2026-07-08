@@ -50,7 +50,7 @@ const apps: ShowcaseApp[] = [
     name: "Deck",
     tagline: "Soundboard’s twin, rebuilt as vintage hi-fi rack hardware.",
     detail:
-      "The same library, transport, queue, and search in two fixed chromeless windows: a 512×264 enamel player chassis and a playlist rack the PL key docks beneath it. The fascia — cream enamel, recessed screws, smoked-glass bays, seven-segment timecode, a rotary volume knob — is a custom chrome pass over the same widgets, one finish by design.",
+      "The same library, transport, and search in two fixed chromeless windows: a 512×264 enamel player chassis and a playlist rack the PL key docks beneath it. The fascia — cream enamel, recessed screws, smoked-glass bays, seven-segment timecode, a rotary volume knob — is a custom chrome pass over the same widgets, one finish by design.",
     facts: [{ label: "Binary", value: "4.2 MB" }],
     width: 1024,
     height: 528,
@@ -58,14 +58,14 @@ const apps: ShowcaseApp[] = [
     stack: [
       {
         src: "/home/deck-dark.webp",
-        alt: "The Deck example app rendered by the Native SDK engine: a fixed 512 by 264 chromeless hardware player in cream enamel with smoked-glass display bays, a phosphor seven-segment timecode, a spectrum analyzer, a five-band monitor, and a rotary volume knob",
+        alt: "The Deck example app rendered by the Native SDK engine: a fixed 512 by 264 chromeless hardware player in cream enamel with smoked-glass display bays, a phosphor seven-segment timecode, a spectrum analyzer, and a rotary volume knob",
         width: 1024,
         height: 528,
       },
       {
         src: "/home/deck-playlist-dark.webp",
         alt: "Deck's playlist window: a matching enamel rack unit around one smoked-glass playlist bay — numbered phosphor rows with the playing row highlighted, right-aligned durations, and a glass search inset",
-        width: 920,
+        width: 1024,
         height: 880,
       },
     ],

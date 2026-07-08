@@ -935,7 +935,25 @@ static gboolean native_sdk_gpu_surface_emit_scheduled(gpointer data) {
  * is queued fold into it. Always fires through the main loop — a
  * request lands mid engine dispatch and a synchronous emission would
  * re-enter the engine — and the pacing clock's grid stamping keeps the
- * loop hop out of the period. */
+ * loop hop out of the period.
+ *
+ * The emission runs at G_PRIORITY_DEFAULT_IDLE (200), BELOW GTK's
+ * layout (GTK_PRIORITY_RESIZE, 110) and paint (GDK_PRIORITY_REDRAW,
+ * 120) sources — never at plain g_timeout_add's G_PRIORITY_DEFAULT (0).
+ * The ordering is load-bearing: when an armed frame loop's cycle costs
+ * more than one frame interval (a large software-rendered canvas),
+ * every present re-arms at delay 0, and a default-priority timeout that
+ * is ready on every main-loop iteration starves everything below it.
+ * Presents keep landing in the retained pixel buffer and queue_draw
+ * keeps requesting a repaint, but the paint source never dispatches:
+ * the visible window freezes on stale glass for as long as the loop
+ * stays armed, while input and model updates (also default priority)
+ * keep flowing — layout and paint are the only casualties, so a resize
+ * during the stall does not even re-layout. At idle priority the
+ * pending paint and relayout win each cycle instead, so every presented
+ * frame reaches the glass before the next frame event spins the engine
+ * again. The idle law is untouched: nothing here ticks periodically,
+ * an emission still exists only when a producer armed one. */
 static void native_sdk_gpu_surface_schedule_frame_emission(native_sdk_gtk_native_view_t *view) {
     if (!view || !view->widget || !view->window || !view->window->host) return;
     if (view->gpu_emit_source) return;
@@ -944,7 +962,7 @@ static void native_sdk_gpu_surface_schedule_frame_emission(native_sdk_gtk_native
     if (view->gpu_last_emit_ns > 0 && now < view->gpu_last_emit_ns + NATIVE_SDK_GTK_GPU_FRAME_INTERVAL_NS) {
         delay_ns = view->gpu_last_emit_ns + NATIVE_SDK_GTK_GPU_FRAME_INTERVAL_NS - now;
     }
-    view->gpu_emit_source = g_timeout_add((guint)((delay_ns + 500000ull) / 1000000ull), native_sdk_gpu_surface_emit_scheduled, view);
+    view->gpu_emit_source = g_timeout_add_full(G_PRIORITY_DEFAULT_IDLE, (guint)((delay_ns + 500000ull) / 1000000ull), native_sdk_gpu_surface_emit_scheduled, view, NULL);
 }
 
 /* Placeholder pump: arms the scheduler every 16 ms until the first
@@ -4067,6 +4085,7 @@ int native_sdk_gtk_delete_credential(native_sdk_gtk_host_t *host, const char *se
 #define NATIVE_SDK_GST_STATE_PAUSED 3
 #define NATIVE_SDK_GST_STATE_PLAYING 4
 #define NATIVE_SDK_GST_STATE_CHANGE_FAILURE 0
+#define NATIVE_SDK_GST_STATE_CHANGE_ASYNC 2
 #define NATIVE_SDK_GST_FORMAT_TIME 3
 #define NATIVE_SDK_GST_SEEK_FLAG_FLUSH (1 << 0)
 #define NATIVE_SDK_GST_SEEK_FLAG_ACCURATE (1 << 1)
@@ -4451,8 +4470,27 @@ static void native_sdk_audio_on_buffering(void *bus, void *message, gpointer dat
     } else {
         audio->refilling = 0;
         if (audio->playing && audio->ready) {
-            /* The flag itself drops at the PLAYING transition. */
-            gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PLAYING);
+            /* The flag normally drops at the PLAYING state-changed
+             * message. But when the refill resolved before the earlier
+             * PAUSED request ever completed, the pipeline never left
+             * PLAYING, this set_state is a no-op, and no transition
+             * message will ever fire — the flag would ride every
+             * position tick for the rest of the track. GStreamer
+             * reports exactly that case through the set_state result:
+             * anything other than ASYNC means no transition is in
+             * flight (the pipeline is at the target state now, or the
+             * error path owns it), so no message is coming and the
+             * flag drops here. ASYNC means a real transition is
+             * rolling and the state-changed handler keeps ownership of
+             * the drop, emitted the moment PLAYING is actually
+             * reached. */
+            const int change = gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PLAYING);
+            if (change != NATIVE_SDK_GST_STATE_CHANGE_ASYNC &&
+                change != NATIVE_SDK_GST_STATE_CHANGE_FAILURE &&
+                audio->buffering) {
+                audio->buffering = 0;
+                native_sdk_audio_emit_event(host, NATIVE_SDK_AUDIO_EVENT_POSITION);
+            }
         } else if (audio->buffering && !audio->playing) {
             audio->buffering = 0;
             native_sdk_audio_emit_event(host, NATIVE_SDK_AUDIO_EVENT_POSITION);

@@ -453,6 +453,30 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "update:function(options,patch)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "update:function(options,patch)" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-linux-gpu-frame-emission-below-paint", "Verify the Linux GPU frame emission is scheduled below layout and paint priorities", &.{
+        // A saturated demand-driven frame loop (cycle cost > frame
+        // interval => every present re-arms at delay 0) scheduled at
+        // G_PRIORITY_DEFAULT would be ready on every main-loop
+        // iteration and starve GTK's layout/paint sources: presents
+        // land and queue_draw keeps inviting a repaint, but the glass
+        // freezes on stale pixels for as long as the loop stays armed.
+        // The emission must stay below GDK_PRIORITY_REDRAW so every
+        // presented frame paints before the next frame event.
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "view->gpu_emit_source = g_timeout_add_full(G_PRIORITY_DEFAULT_IDLE," },
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "paint (GDK_PRIORITY_REDRAW," },
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "static void native_sdk_gpu_surface_schedule_frame_emission" },
+    });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-linux-audio-buffering-clears-on-noop-resume", "Verify the Linux audio buffering flag drops when the 100% resume completes synchronously", &.{
+        // The buffering flag normally drops at the PLAYING
+        // state-changed message. When the refill's earlier PAUSED
+        // request never completed, the 100% resume is a no-op that
+        // posts no message; a non-ASYNC set_state result is the only
+        // signal, and the flag must drop on it or it rides every
+        // position tick for the rest of the track.
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "const int change = gst->element_set_state(audio->playbin, NATIVE_SDK_GST_STATE_PLAYING);" },
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "change != NATIVE_SDK_GST_STATE_CHANGE_ASYNC" },
+        .{ .path = "src/platform/linux/gtk_host.c", .pattern = "#define NATIVE_SDK_GST_STATE_CHANGE_ASYNC 2" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-packaged-assets-webview2", "Verify Windows packaged assets are served through WebView2 request interception", &.{
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "constexpr const char *kAssetVirtualOrigin = \"https://native-sdk-app.localhost\";" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "return virtualAssetEntryUrl(webview.asset_entry);" },

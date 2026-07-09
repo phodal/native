@@ -35,7 +35,7 @@
     "type": "git",
     "url": "git+https://github.com/vercel-labs/native.git"
   },
-  "homepage": "https://zero-native.dev",
+  "homepage": "https://native-sdk.dev",
   "scripts": {
     "version": "npm run version:sync && git add ../../tools/native-sdk/main.zig npm/*/package.json package.json",
     "version:sync": "node scripts/sync-version.js",

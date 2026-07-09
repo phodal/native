@@ -73,7 +73,7 @@ pub fn update(model: *Model, msg: Msg) void {
 
 Edit `src/app.native` while `native dev` runs and the window updates in place, keeping your state. `native check` validates every view in milliseconds without building, `native test` runs full-loop UI tests headlessly, and `native build` produces an optimized release binary.
 
-Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/quick-start).
+Read the full guide at [native-sdk.dev/quick-start](https://native-sdk.dev/quick-start).
 
 ## What you get
 
@@ -105,23 +105,23 @@ The full catalog in [examples/README.md](./examples/README.md) also covers guard
 
 ## Platforms
 
-macOS is the primary development platform and carries the deepest support: Metal presentation, OS scroll physics, native context menus, app menus, tray, and dialogs. Linux runs the full showcase through the deterministic software renderer in real windows, with pointer, keyboard, scroll, IME composition, and HiDPI; Windows runs on a Win32 host with IME composition and is exercised in CI, including real input injection. Mobile support is experimental: iOS is simulator-proven through the embed library and Android cross-compiles with the full embed ABI, but APIs and tooling on both are still evolving — desktop is the mature surface. WebView surfaces coexist on every desktop platform. The [platform support matrix](https://zero-native.dev/platform-support) documents exactly what each host supports today.
+macOS is the primary development platform and carries the deepest support: Metal presentation, OS scroll physics, native context menus, app menus, tray, and dialogs. Linux runs the full showcase through the deterministic software renderer in real windows, with pointer, keyboard, scroll, IME composition, and HiDPI; Windows runs on a Win32 host with IME composition and is exercised in CI, including real input injection. Mobile support is experimental: iOS is simulator-proven through the embed library and Android cross-compiles with the full embed ABI, but APIs and tooling on both are still evolving — desktop is the mature surface. WebView surfaces coexist on every desktop platform. The [platform support matrix](https://native-sdk.dev/platform-support) documents exactly what each host supports today.
 
 ## Documentation
 
-The full documentation is at [zero-native.dev](https://zero-native.dev).
+The full documentation is at [native-sdk.dev](https://native-sdk.dev).
 
-- [Quick Start](https://zero-native.dev/quick-start) — install to a running, tested app
-- [Philosophy](https://zero-native.dev/philosophy) — the six principles behind the toolkit
-- [App Model](https://zero-native.dev/app-model) — the model/message/update loop, wiring, and hot reload
-- [Native UI](https://zero-native.dev/native-ui) — every element, attribute, and pattern in the markup
-- [Components](https://zero-native.dev/components) — the component catalog
-- [State & Data Flow](https://zero-native.dev/state) — derive-don't-store, bindings, and text editing
-- [Testing](https://zero-native.dev/testing) — full-loop UI tests, headless on any machine
-- [Automation](https://zero-native.dev/automation) — snapshots, widget driving, record/replay, screenshots
-- [Capabilities](https://zero-native.dev/capabilities) — guarded OS services: notifications, clipboard, dialogs, credentials
-- [Packaging](https://zero-native.dev/packaging) — from binary to distributable app
-- [Platform Support](https://zero-native.dev/platform-support) — what each host supports today
+- [Quick Start](https://native-sdk.dev/quick-start) — install to a running, tested app
+- [Philosophy](https://native-sdk.dev/philosophy) — the six principles behind the toolkit
+- [App Model](https://native-sdk.dev/app-model) — the model/message/update loop, wiring, and hot reload
+- [Native UI](https://native-sdk.dev/native-ui) — every element, attribute, and pattern in the markup
+- [Components](https://native-sdk.dev/components) — the component catalog
+- [State & Data Flow](https://native-sdk.dev/state) — derive-don't-store, bindings, and text editing
+- [Testing](https://native-sdk.dev/testing) — full-loop UI tests, headless on any machine
+- [Automation](https://native-sdk.dev/automation) — snapshots, widget driving, record/replay, screenshots
+- [Capabilities](https://native-sdk.dev/capabilities) — guarded OS services: notifications, clipboard, dialogs, credentials
+- [Packaging](https://native-sdk.dev/packaging) — from binary to distributable app
+- [Platform Support](https://native-sdk.dev/platform-support) — what each host supports today
 
 ## Contributing
 

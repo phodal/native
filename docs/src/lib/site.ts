@@ -9,10 +9,10 @@ export const siteName = "Native SDK";
 export const npmCli = "@native-sdk/cli";
 
 /** The public repository. */
-export const githubUrl = "https://github.com/vercel-labs/zero-native";
+export const githubUrl = "https://github.com/vercel-labs/native";
 
 /** The canonical site origin (used for metadata + Open Graph). */
-export const siteUrl = "https://zero-native.dev";
+export const siteUrl = "https://native-sdk.dev";
 
 /** The one-line tagline used in titles and Open Graph text. */
 export const tagline = "The Complete Toolkit for Native Apps";

@@ -2,7 +2,7 @@
 
 Thanks for helping improve the Native SDK. This guide is for maintainers and contributors working on the toolkit repository itself.
 
-For app author documentation, start at [zero-native.dev](https://zero-native.dev).
+For app author documentation, start at [native-sdk.dev](https://native-sdk.dev).
 
 ## Prerequisites
 

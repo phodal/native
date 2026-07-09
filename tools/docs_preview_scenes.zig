@@ -932,7 +932,7 @@ fn buildSheet(ui: *Ui) Node {
                 surfaceTitleSpacer(ui),
                 ui.text(.{ .wrap = true, .style_tokens = .{ .foreground = .text_muted } }, "Anyone with the link can view this board."),
                 ui.row(.{ .gap = 8 }, .{
-                    ui.el(.input, .{ .text = "https://zero-native.dev/b/9f2", .grow = 1 }, .{}),
+                    ui.el(.input, .{ .text = "https://native-sdk.dev/b/9f2", .grow = 1 }, .{}),
                     ui.button(.{ .variant = .secondary, .icon = "copy" }, "Copy"),
                 }),
             }),
@@ -986,7 +986,7 @@ const markdown_sample =
     \\component.
     \\
     \\- Deterministic layout, selectable text
-    \\- [Links](https://zero-native.dev) dispatch a Msg
+    \\- [Links](https://native-sdk.dev) dispatch a Msg
     \\
     \\```zig
     \\const doc = try fx.readFile("notes.md");
@@ -1324,7 +1324,7 @@ const markdown_hero_sample =
     \\## Release notes
     \\
     \\The **markdown** widget renders rich text — *emphasis*,
-    \\`inline code`, and [links](https://zero-native.dev) — through
+    \\`inline code`, and [links](https://native-sdk.dev) — through
     \\native widgets.
 ;
 
@@ -1450,7 +1450,7 @@ fn buildSheetHero(ui: *Ui) Node {
                 surfaceTitleSpacer(ui),
                 ui.text(.{ .wrap = true, .style_tokens = .{ .foreground = .text_muted } }, "Anyone with the link can view this board."),
                 ui.row(.{ .gap = 8 }, .{
-                    ui.el(.input, .{ .text = "https://zero-native.dev/b/9f2", .grow = 1 }, .{}),
+                    ui.el(.input, .{ .text = "https://native-sdk.dev/b/9f2", .grow = 1 }, .{}),
                     ui.button(.{ .variant = .secondary, .icon = "copy" }, "Copy"),
                 }),
             }),

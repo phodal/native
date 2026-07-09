@@ -2,8 +2,11 @@
 
 // Verify every version stamped by sync-version.js matches
 // packages/native-sdk/package.json: the CLI source, the per-platform
-// binary packages, and the optionalDependencies pins. CI runs this before
-// publish so a half-bumped release cannot ship.
+// binary packages, and the optionalDependencies pins. Also verify each
+// platform package's repository.url and homepage match the main package,
+// because npm validates repository.url against publish provenance and a
+// repository rename that only updates the main package fails the publish.
+// CI runs this before publish so a half-bumped release cannot ship.
 
 import { readdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -48,6 +51,15 @@ for (const entry of readdirSync(npmDir, { withFileTypes: true })) {
   }
   if (!(expectedName in (packageJson.optionalDependencies ?? {}))) {
     console.error(`Missing optionalDependencies pin for ${expectedName} in package.json`);
+    errors++;
+  }
+  const expectedRepositoryUrl = packageJson.repository?.url;
+  if (platformJson.repository?.url !== expectedRepositoryUrl) {
+    console.error(`Repository mismatch: npm/${entry.name}/package.json repository.url is ${platformJson.repository?.url}, expected ${expectedRepositoryUrl} from package.json`);
+    errors++;
+  }
+  if (platformJson.homepage !== packageJson.homepage) {
+    console.error(`Homepage mismatch: npm/${entry.name}/package.json homepage is ${platformJson.homepage}, expected ${packageJson.homepage} from package.json`);
     errors++;
   }
 }

@@ -3,7 +3,7 @@ import { allDocsPages } from "@/lib/docs-navigation";
 import { statSync } from "node:fs";
 import path from "node:path";
 
-const baseUrl = "https://zero-native.dev";
+const baseUrl = "https://native-sdk.dev";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   // The homepage lives in the site header, not the docs nav, so list it explicitly.

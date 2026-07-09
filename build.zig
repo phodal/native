@@ -1582,7 +1582,7 @@ pub fn build(b: *std.Build) void {
         \\# Navigation from a Msg: the app command switches the model URL and
         \\# the runtime navigates the platform webview.
         \\"$cli" automate native-command app.docs >/dev/null 2>&1
-        \\"$cli" automate assert 'view @w1/preview kind=webview.*url="https://zero-native.dev/"' 'name="URL: https://zero-native.dev/"'
+        \\"$cli" automate assert 'view @w1/preview kind=webview.*url="https://native-sdk.dev/"' 'name="URL: https://native-sdk.dev/"'
         \\# Resize keeps the pane snapped to the anchor widget's new frame:
         \\# the panel right of the 224pt sidebar and below the 56pt toolbar.
         \\"$cli" automate resize 1200 800 >/dev/null 2>&1

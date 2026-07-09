@@ -2228,7 +2228,7 @@ test "rapid-fire automation commands all dispatch, one per frame turn" {
 const preview_canvas_label = "preview-canvas";
 const preview_pane_anchor = "preview-pane";
 const example_url = "https://example.com/";
-const docs_url = "https://zero-native.dev/";
+const docs_url = "https://native-sdk.dev/";
 
 const PreviewModel = struct {
     show_docs: bool = false,
@@ -2291,7 +2291,7 @@ const preview_windows = [_]app_manifest.ShellWindow{.{
     .views = &preview_views,
 }};
 const preview_scene: app_manifest.ShellConfig = .{ .windows = &preview_windows };
-const preview_origins = [_][]const u8{ "https://example.com", "https://zero-native.dev", "zero://app", "zero://inline" };
+const preview_origins = [_][]const u8{ "https://example.com", "https://native-sdk.dev", "zero://app", "zero://inline" };
 
 fn previewOptions() PreviewApp.Options {
     return .{

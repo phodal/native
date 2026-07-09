@@ -1,6 +1,6 @@
 # @native-sdk/cli
 
-The command line for [Native SDK](https://zero-native.dev): the complete toolkit for building native desktop applications.
+The command line for [Native SDK](https://native-sdk.dev): the complete toolkit for building native desktop applications.
 
 Views are declarative markup in `.native` files, logic is plain Zig, and Native SDK's own engine draws every pixel into real OS windows — no browser, no WebView, no interpreter in the binary.
 
@@ -24,7 +24,7 @@ A native window opens with a working counter. The scaffold is a native-rendered 
 
 When part of your product is the web, WebView surfaces coexist with the native canvas; web-frontend scaffolds (`--frontend next`, `--frontend vite`, and more) install their generated frontend dependencies automatically on first run.
 
-Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/quick-start).
+Read the full guide at [native-sdk.dev/quick-start](https://native-sdk.dev/quick-start).
 
 ## Commands
 
@@ -47,6 +47,6 @@ Read the full guide at [zero-native.dev/quick-start](https://zero-native.dev/qui
 
 ## More
 
-The full documentation is at [zero-native.dev](https://zero-native.dev) — the [app model](https://zero-native.dev/app-model), [native UI authoring](https://zero-native.dev/native-ui), [components](https://zero-native.dev/components), [testing](https://zero-native.dev/testing), [automation](https://zero-native.dev/automation), [capabilities](https://zero-native.dev/capabilities), [packaging](https://zero-native.dev/packaging), and [platform support](https://zero-native.dev/platform-support).
+The full documentation is at [native-sdk.dev](https://native-sdk.dev) — the [app model](https://native-sdk.dev/app-model), [native UI authoring](https://native-sdk.dev/native-ui), [components](https://native-sdk.dev/components), [testing](https://native-sdk.dev/testing), [automation](https://native-sdk.dev/automation), [capabilities](https://native-sdk.dev/capabilities), [packaging](https://native-sdk.dev/packaging), and [platform support](https://native-sdk.dev/platform-support).
 
-Native SDK is pre-1.0 and Apache-2.0 licensed; the source lives at [github.com/vercel-labs/zero-native](https://github.com/vercel-labs/zero-native).
+Native SDK is pre-1.0 and Apache-2.0 licensed; the source lives at [github.com/vercel-labs/native](https://github.com/vercel-labs/native).

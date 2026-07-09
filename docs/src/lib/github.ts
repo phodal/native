@@ -1,4 +1,4 @@
-const REPO = "vercel-labs/zero-native";
+const REPO = "vercel-labs/native";
 const REVALIDATE = 86400;
 
 export async function getStarCount(): Promise<string> {

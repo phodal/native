@@ -703,7 +703,7 @@ fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
         \\      - name: Fetch native-sdk
         \\        run: |
         \\          if [ ! -f "$NATIVE_SDK_PATH/build.zig" ]; then
-        \\            git clone --depth 1 https://github.com/vercel-labs/zero-native.git "$NATIVE_SDK_PATH"
+        \\            git clone --depth 1 https://github.com/vercel-labs/native.git "$NATIVE_SDK_PATH"
         \\          fi
         \\      - run: zig build test -Dplatform=null
         \\
@@ -720,7 +720,7 @@ fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
         \\      - name: Fetch native-sdk
         \\        run: |
         \\          if [ ! -f "$NATIVE_SDK_PATH/build.zig" ]; then
-        \\            git clone --depth 1 https://github.com/vercel-labs/zero-native.git "$NATIVE_SDK_PATH"
+        \\            git clone --depth 1 https://github.com/vercel-labs/native.git "$NATIVE_SDK_PATH"
         \\          fi
         \\      - name: Build the Native SDK CLI
         \\        run: cd "$NATIVE_SDK_PATH" && zig build
@@ -782,7 +782,7 @@ fn frontendCiYaml(allocator: std.mem.Allocator, names: TemplateNames) ![]const u
         \\      - name: Fetch native-sdk
         \\        run: |
         \\          if [ ! -f "$NATIVE_SDK_PATH/build.zig" ]; then
-        \\            git clone --depth 1 https://github.com/vercel-labs/zero-native.git "$NATIVE_SDK_PATH"
+        \\            git clone --depth 1 https://github.com/vercel-labs/native.git "$NATIVE_SDK_PATH"
         \\          fi
         \\      - run: zig build test -Dplatform=null -Dnative-sdk-path="$NATIVE_SDK_PATH"
         \\
@@ -3001,7 +3001,7 @@ test "writeDefaultApp emits a CI workflow for native apps" {
     try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "test -s .zig-cache/native-sdk-automation/screenshot-main-canvas.png") != null);
     // The framework fetch step reuses the build.zig.zon dependency path.
     try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "NATIVE_SDK_PATH:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "git clone --depth 1 https://github.com/vercel-labs/zero-native.git \"$NATIVE_SDK_PATH\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "git clone --depth 1 https://github.com/vercel-labs/native.git \"$NATIVE_SDK_PATH\"") != null);
 }
 
 /// Structural sanity for generated workflows (the repo scaffold CI job runs

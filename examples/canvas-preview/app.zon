@@ -23,7 +23,7 @@
     },
     .security = .{
         .navigation = .{
-            .allowed_origins = .{ "zero://app", "zero://inline", "https://example.com", "https://zero-native.dev" },
+            .allowed_origins = .{ "zero://app", "zero://inline", "https://example.com", "https://native-sdk.dev" },
             .external_links = .{ .action = "deny" },
         },
     },

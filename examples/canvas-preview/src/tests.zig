@@ -10,7 +10,7 @@ const Model = main.Model;
 const Msg = main.Msg;
 const PreviewApp = native_sdk.UiApp(Model, Msg);
 
-const preview_origins = [_][]const u8{ "zero://inline", "zero://app", "https://example.com", "https://zero-native.dev" };
+const preview_origins = [_][]const u8{ "zero://inline", "zero://app", "https://example.com", "https://native-sdk.dev" };
 
 fn createApp() !*PreviewApp {
     const app_state = try testing.allocator.create(PreviewApp);

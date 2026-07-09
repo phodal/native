@@ -26,7 +26,7 @@ pub const canvas_label = "preview-canvas";
 pub const webview_label = "preview";
 pub const pane_anchor = "preview-pane";
 pub const example_url = "https://example.com/";
-pub const docs_url = "https://zero-native.dev/";
+pub const docs_url = "https://native-sdk.dev/";
 pub const example_command = "app.example";
 pub const docs_command = "app.docs";
 pub const reload_command = "app.reload";
@@ -199,7 +199,7 @@ pub fn main(init: std.process.Init) !void {
         .restore_state = false,
         .js_window_api = false,
         .security = .{
-            .navigation = .{ .allowed_origins = &.{ "zero://inline", "zero://app", "https://example.com", "https://zero-native.dev" } },
+            .navigation = .{ .allowed_origins = &.{ "zero://inline", "zero://app", "https://example.com", "https://native-sdk.dev" } },
         },
     }, init);
 }

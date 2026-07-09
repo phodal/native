@@ -5,7 +5,10 @@
 // (tools/native-sdk/main.zig), every per-platform binary package under
 // npm/, and the main package's own optionalDependencies pins. The pins
 // are exact so a given @native-sdk/cli always installs the binary built
-// from the same commit.
+// from the same commit. The same pass propagates the repo identity
+// fields (repository and homepage) into each platform package, so a
+// repository rename or domain move applied to the main package cannot
+// leave the platform packages behind and fail publish provenance checks.
 
 import { readdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -49,10 +52,22 @@ for (const entry of readdirSync(npmDir, { withFileTypes: true })) {
   if (!entry.isDirectory()) continue;
   const platformJsonPath = join(npmDir, entry.name, 'package.json');
   const platformJson = JSON.parse(readFileSync(platformJsonPath, 'utf-8'));
+  let changed = false;
   if (platformJson.version !== version) {
     platformJson.version = version;
+    changed = true;
+  }
+  if (platformJson.repository?.url !== packageJson.repository?.url) {
+    platformJson.repository = { ...packageJson.repository };
+    changed = true;
+  }
+  if (platformJson.homepage !== packageJson.homepage) {
+    platformJson.homepage = packageJson.homepage;
+    changed = true;
+  }
+  if (changed) {
     writeFileSync(platformJsonPath, JSON.stringify(platformJson, null, 2) + '\n');
-    console.log(`  Updated npm/${entry.name}/package.json to ${version}`);
+    console.log(`  Updated npm/${entry.name}/package.json`);
   } else {
     console.log(`  npm/${entry.name}/package.json already up to date`);
   }

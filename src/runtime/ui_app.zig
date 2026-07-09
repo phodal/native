@@ -1131,15 +1131,21 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// `tokens_fn`, explicit static `tokens`, or — the default — the
         /// stock theme derived from the SYSTEM appearance the runtime
         /// tracks (scheme, contrast, reduced motion), so an unthemed app
-        /// honors the OS light/dark setting live. Derived tokens carry
-        /// the surface scale in `pixel_snap.scale`.
+        /// honors the OS light/dark setting live. Every path carries the
+        /// surface scale in `pixel_snap.scale` — the app owns the
+        /// appearance, the runtime owns the device scale — so static
+        /// tokens snap hairlines against the real surface density too.
         pub fn effectiveTokens(self: *const Self) canvas.DesignTokens {
             if (self.options.tokens_fn) |tokens_fn| {
                 var tokens = tokens_fn(&self.model);
                 tokens.pixel_snap.scale = self.pixel_snap_scale;
                 return tokens;
             }
-            if (self.options.tokens) |static_tokens| return static_tokens;
+            if (self.options.tokens) |static_tokens| {
+                var tokens = static_tokens;
+                tokens.pixel_snap.scale = self.pixel_snap_scale;
+                return tokens;
+            }
             var tokens = canvas.DesignTokens.theme(.{
                 .color_scheme = switch (self.system_appearance.color_scheme) {
                     .light => .light,
@@ -1155,8 +1161,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
 
         /// Whether the stock tokens derive from the system appearance:
         /// true only when the app claims neither token override, so an
-        /// appearance flip (or a surface-scale change) must re-derive
-        /// and re-render.
+        /// appearance flip must re-derive and re-render.
         fn followsSystemAppearance(self: *const Self) bool {
             return self.options.tokens_fn == null and self.options.tokens == null;
         }
@@ -1165,6 +1170,20 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// system-followed) rather than a fixed set.
         fn derivesTokens(self: *const Self) bool {
             return self.options.tokens_fn != null or self.followsSystemAppearance();
+        }
+
+        /// Whether a rebuild must push its tokens into the runtime's
+        /// stored copy. Derived tokens can change with any model or
+        /// appearance input, so they always re-emit. Static tokens are
+        /// fixed by the app, but the runtime stamps the surface scale
+        /// onto them (`effectiveTokens`), so a stored copy holding a
+        /// stale scale re-emits too — hairlines re-snap after a move
+        /// between monitors — while ordinary rebuilds keep skipping the
+        /// redundant emission.
+        fn rebuildEmitsTokens(self: *const Self, runtime: *Runtime, window_id: platform.WindowId, canvas_label: []const u8, tokens: canvas.DesignTokens) bool {
+            if (self.derivesTokens()) return true;
+            const stored = runtime.canvasWidgetDesignTokens(window_id, canvas_label) catch return true;
+            return stored.pixel_snap.scale != tokens.pixel_snap.scale;
         }
 
         /// Read runtime-owned widget state back into the model through the
@@ -1279,7 +1298,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 try self.installChromeDisplayList(runtime, window_id, chrome, layout, tokens);
             } else {
                 _ = try runtime.setCanvasWidgetLayout(window_id, self.options.canvas_label, layout);
-                if (self.installed and self.derivesTokens()) {
+                if (self.installed and self.rebuildEmitsTokens(runtime, window_id, self.options.canvas_label, tokens)) {
                     _ = try runtime.emitCanvasWidgetDisplayList(window_id, self.options.canvas_label, tokens);
                 }
             }
@@ -1827,7 +1846,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 return err;
             };
             _ = try runtime.setCanvasWidgetLayout(slot.window_id, slot.canvasLabel(), layout);
-            if (slot.installed and self.derivesTokens()) {
+            if (slot.installed and self.rebuildEmitsTokens(runtime, slot.window_id, slot.canvasLabel(), tokens)) {
                 _ = try runtime.emitCanvasWidgetDisplayList(slot.window_id, slot.canvasLabel(), tokens);
             }
             slot.tree = tree;
@@ -2749,7 +2768,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 self.installed = true;
                 self.startMarkupWatch(runtime);
                 self.installStatusItem(runtime);
-            } else if (self.derivesTokens() and @abs(self.pixel_snap_scale - scale) > 0.001) {
+            } else if (@abs(self.pixel_snap_scale - scale) > 0.001) {
+                // The surface moved to a different density (a drag between
+                // monitors): EVERY token path carries the scale in
+                // `pixel_snap.scale`, so static-token apps rebuild here
+                // too — the re-emit inside `rebuild` re-snaps hairlines
+                // against the new grid.
                 self.pixel_snap_scale = scale;
                 try self.rebuild(runtime, frame_event.window_id);
             } else if (self.options.web_panes != null) {

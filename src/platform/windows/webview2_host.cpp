@@ -4618,9 +4618,10 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
              * frame — it keeps the window the same LOGICAL size on the
              * new scale — then re-derive everything DPI-dependent: the
              * hidden-titlebar band (its caption metrics scale with the
-             * monitor), each native child's physical frame, and every
-             * gpu surface's logical-size/scale pairing so the runtime
-             * re-rasterizes at the new density. The SetWindowPos WM_SIZE
+             * monitor), each native child's physical frame, every gpu
+             * surface's logical-size/scale pairing so the runtime
+             * re-rasterizes at the new density, and each explicit child
+             * webview's physical frame. The SetWindowPos WM_SIZE
              * re-emits kResize, which now carries the new scale. Only
              * per-monitor-DPI-aware processes receive this message. */
             if (host) {
@@ -4643,6 +4644,21 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
                         (void)syncGpuSurfaceGeometry(host, view, width, height, surface_scale);
                     }
                 }
+#if NATIVE_SDK_HAS_WEBVIEW2
+                for (auto &webview_entry : host->webviews) {
+                    ChildWebView &webview = webview_entry.second;
+                    /* Explicit frames are LOGICAL points scaled to
+                     * physical pixels at apply time, so a monitor-scale
+                     * change strands them until re-applied here. The
+                     * auto-fill main webview stores PHYSICAL client-rect
+                     * pixels and already re-derived them in the WM_SIZE
+                     * that the SetWindowPos above dispatched, so it is
+                     * skipped. */
+                    if (!webview.frame_explicit) continue;
+                    if (!webview.hwnd || GetAncestor(webview.hwnd, GA_ROOT) != hwnd) continue;
+                    applyWebViewFrame(webview);
+                }
+#endif
                 return 0;
             }
             break;

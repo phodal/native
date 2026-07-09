@@ -1044,6 +1044,63 @@ test "unthemed apps follow the system appearance live; explicit tokens opt out" 
     try std.testing.expectEqualDeep(light.colors.background, fixed_state.effectiveTokens().colors.background);
 }
 
+test "static tokens carry the surface scale and re-snap on a scale change" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    // The app pins its look with static tokens (geometry snapping on,
+    // scale 1 inside — the app never knows the monitor).
+    var options = counterOptions();
+    var static_tokens = canvas.DesignTokens.theme(.{ .color_scheme = .light });
+    static_tokens.pixel_snap = .{ .geometry = true, .text = true };
+    options.tokens = static_tokens;
+    const app_state = try std.testing.allocator.create(CounterApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = CounterApp.init(std.heap.page_allocator, .{}, options);
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    // Install on a 2x surface: the effective tokens are a stamped COPY —
+    // the app owns the appearance, the runtime owns the device scale —
+    // and the stored tokens carry the real density, so hairlines snap
+    // against the physical grid instead of scale 1.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expectEqual(@as(f32, 2), app_state.effectiveTokens().pixel_snap.scale);
+    var stored = try harness.runtime.canvasWidgetDesignTokens(1, canvas_label);
+    try std.testing.expectEqual(@as(f32, 2), stored.pixel_snap.scale);
+    try std.testing.expectEqualDeep(static_tokens.colors.background, stored.colors.background);
+
+    // A frame at a new density (the window dragged to a 1x monitor)
+    // rebuilds and re-emits for a static-token app too: the stored
+    // tokens re-snap to the new grid without any app involvement. The
+    // model is poked directly (no dispatch) so the refreshed retained
+    // text proves the FRAME triggered the rebuild.
+    app_state.model.count = 5;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 2,
+        .timestamp_ns = 2_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Count 5"));
+    try std.testing.expectEqual(@as(f32, 1), app_state.effectiveTokens().pixel_snap.scale);
+    stored = try harness.runtime.canvasWidgetDesignTokens(1, canvas_label);
+    try std.testing.expectEqual(@as(f32, 1), stored.pixel_snap.scale);
+    try std.testing.expectEqualDeep(static_tokens.colors.background, stored.colors.background);
+}
+
 test "markup watch polls from the reserved runtime timer" {
     const io = std.testing.io;
     const watch_path = ".zig-cache/ui-app-markup-watch-test.native";

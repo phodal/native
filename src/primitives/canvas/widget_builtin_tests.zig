@@ -3186,13 +3186,31 @@ test "hairline borders snap to whole device columns with smooth arcs" {
     try std.testing.expectEqual(@as(f32, 4), snapHairlineStrokeRect(at_1x, wide).rect.x);
 
     // Fractional scale: snapping happens on the DEVICE grid. At 1.25x a
-    // 1px logical border rounds to one device pixel (0.8 logical), and
-    // a frame edge at logical 4 (device 5) pulls the centerline to
-    // device 5.5 = logical 4.4.
+    // 1px logical border snaps to one device pixel (0.8 logical) — the
+    // floor of its exact 1.25-device width — and a frame edge at
+    // logical 4 (device 5) pulls the centerline to device 5.5 =
+    // logical 4.4.
     const at_fractional = DesignTokens{ .pixel_snap = .{ .geometry = true, .scale = 1.25 } };
     const fractional = snapHairlineStrokeRect(at_fractional, unsnapped);
     try std.testing.expectEqual(@as(f32, 4.4), fractional.rect.x);
     try std.testing.expectEqual(@as(f32, 0.8), fractional.stroke.width);
+
+    // At 1.5x the exact device width of a 1px logical border is 1.5 —
+    // between grid widths — and the snap takes the FLOOR: one device
+    // column (2/3 logical), the crisp-and-light choice, never two. The
+    // frame edge at logical 4 (device 6) pulls the centerline to
+    // device 6.5.
+    const at_halfstep = DesignTokens{ .pixel_snap = .{ .geometry = true, .scale = 1.5 } };
+    const halfstep = snapHairlineStrokeRect(at_halfstep, unsnapped);
+    try std.testing.expectEqual(@as(f32, 6.5 / 1.5), halfstep.rect.x);
+    try std.testing.expectEqual(@as(f32, 1.0 / 1.5), halfstep.stroke.width);
+
+    // A stroke whose device width rounds to zero stays unsnapped — the
+    // floor's one-pixel minimum never darkens a sub-half-pixel stroke.
+    var whisper = unsnapped;
+    whisper.stroke.width = 0.25;
+    try std.testing.expectEqual(@as(f32, 0.25), snapHairlineStrokeRect(at_halfstep, whisper).stroke.width);
+    try std.testing.expectEqual(unsnapped.rect.x, snapHairlineStrokeRect(at_halfstep, whisper).rect.x);
 
     // Rendered at 1x, the straight runs land as exactly one full-alpha
     // column inside the frame — no half-covered neighbors — while the

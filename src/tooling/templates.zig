@@ -1,4 +1,5 @@
 const std = @import("std");
+const junction = @import("junction.zig");
 
 /// The SDK's default app icon, rendered from vector source by
 /// `zig build generate-icon` (tools/generate_app_icon.zig). Embedded so
@@ -3183,6 +3184,24 @@ fn nativeDependencyPath(allocator: std.mem.Allocator, io: std.Io, destination: [
     defer allocator.free(framework_real);
 
     const relative = try std.fs.path.relative(allocator, cwd, null, destination_real, framework_real);
+    errdefer allocator.free(relative);
+    // On Windows, two different volumes (drive letters or UNC shares) have
+    // no relative path between them, and std.fs.path.relative degrades to
+    // the absolute target — which build.zig.zon rejects. The full scaffold's
+    // build files are user-owned from day one, so the CLI cannot bridge with
+    // a junction it would never refresh; teach the constraint instead.
+    if (junction.crossesVolumes(relative)) {
+        std.debug.print(
+            \\cannot scaffold a full-shape app at {s}:
+            \\the Native SDK ({s})
+            \\sits on a different Windows volume, and the scaffolded
+            \\build.zig.zon needs a relative SDK path — no relative path
+            \\crosses volumes.
+            \\
+        , .{ destination_real, framework_real });
+        std.debug.print(junction.cross_volume_ways_out, .{});
+        return error.CrossVolumeFramework;
+    }
     if (relative.len == 0) {
         allocator.free(relative);
         return allocator.dupe(u8, ".");

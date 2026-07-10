@@ -61,7 +61,7 @@ pub fn main(init: std.process.Init) !void {
             }
             std.process.exit(1);
         }
-        try tooling.templates.writeDefaultApp(allocator, init.io, destination, .{ .app_name = app_name, .framework_path = framework_path, .frontend = frontend, .shape = shape });
+        tooling.templates.writeDefaultApp(allocator, init.io, destination, .{ .app_name = app_name, .framework_path = framework_path, .frontend = frontend, .shape = shape }) catch |err| return failVerb(err);
         std.debug.print("created Native SDK app at {s} ({s})\n", .{ destination, frontend_str });
         printInitNextSteps(destination, frontend, shape);
     } else if (std.mem.eql(u8, command, "build") or std.mem.eql(u8, command, "test")) {
@@ -421,6 +421,7 @@ fn failVerb(err: anyerror) anyerror!void {
     switch (err) {
         error.MissingManifest,
         error.MissingFramework,
+        error.CrossVolumeFramework,
         error.ZigUnavailable,
         error.DownloadDeclined,
         error.UnsupportedPlatform,

@@ -482,6 +482,26 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "change != NATIVE_SDK_GST_STATE_CHANGE_ASYNC" },
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "#define NATIVE_SDK_GST_STATE_CHANGE_ASYNC 2" },
     });
+    // The embedded-WebView layer must stay real: the vendored WebView2
+    // SDK header turns the guard on, every first-party build graph puts
+    // it on the include path, and a build that cannot see it fails at
+    // compile time instead of quietly shipping the stubbed host (whose
+    // WebView loads report WebViewNotFound at runtime).
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-webview2-vendor", "Verify the vendored WebView2 SDK stays wired into every Windows build graph", &.{
+        .{ .path = "third_party/webview2/include/WebView2.h", .pattern = "CreateCoreWebView2EnvironmentWithOptions" },
+        .{ .path = "third_party/webview2/include/EventToken.h", .pattern = "EventRegistrationToken" },
+        .{ .path = "third_party/webview2/LICENSE.txt", .pattern = "Redistribution and use in source and binary forms" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "#error \"WebView2.h not found" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "LoadLibraryW(L\"WebView2Loader.dll\")" },
+        .{ .path = "build/app.zig", .pattern = "app_mod.addIncludePath(dep.path(\"third_party/webview2/include\"));" },
+        .{ .path = "build/app.zig", .pattern = "third_party/webview2/x64/WebView2Loader.dll" },
+        .{ .path = "src/tooling/templates.zig", .pattern = "third_party/webview2/include" },
+        .{ .path = "src/tooling/templates.zig", .pattern = "third_party/webview2/x64/WebView2Loader.dll" },
+    });
+    addLayoutCheckStep(b, test_step, "test-windows-webview2-loader-layout", "Verify the vendored WebView2 loader binaries are present", &.{
+        "third_party/webview2/x64/WebView2Loader.dll",
+        "third_party/webview2/arm64/WebView2Loader.dll",
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-packaged-assets-webview2", "Verify Windows packaged assets are served through WebView2 request interception", &.{
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "constexpr const char *kAssetVirtualOrigin = \"https://native-sdk-app.localhost\";" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "return virtualAssetEntryUrl(webview.asset_entry);" },
@@ -687,6 +707,32 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "kGpuInputImeCancelComposition = 10" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "gpuImeCommitAction(pending, result)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "ISC_SHOWUICOMPOSITIONWINDOW" },
+    });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-view-frame-rounding", "Verify Windows native view frames accumulate logical coordinates before rounding and declare the full DPI awareness fallback chain", &.{
+        // The frame policy: every physical edge is the once-rounded
+        // product of an ACCUMULATED logical coordinate and the window
+        // scale, with width/height as edge differences. Per-level
+        // rounding drifts from the round of the sum (the static_asserts
+        // beside nativeViewCoord carry the numeric proof, compiled on
+        // every Windows host build).
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "static void nativeViewLogicalOrigin(Host *host, const NativeView &view, double *logical_x, double *logical_y)" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "frame.right = nativeViewCoord((logical_x + view.width) * scale);" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "static_assert(nativeViewCoord(10.4 * 1.5) + nativeViewCoord(10.4 * 1.5) == 32 && nativeViewCoord((10.4 + 10.4) * 1.5) == 31," },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "MoveWindow(view.hwnd, frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top, TRUE);" },
+        // The embedded manifest's DPI declarations: the ordered
+        // dpiAwareness list degrades PerMonitorV2 to PerMonitor, and the
+        // legacy dpiAware element covers systems that ignore dpiAwareness
+        // entirely.
+        .{ .path = "assets/native-sdk.manifest", .pattern = "<dpiAware xmlns=\"http://schemas.microsoft.com/SMI/2005/WindowsSettings\">true/pm</dpiAware>" },
+        .{ .path = "assets/native-sdk.manifest", .pattern = "<dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">PerMonitorV2, PerMonitor</dpiAwareness>" },
+        // The host's runtime DPI resolution mirrors that manifest chain:
+        // GetDpiForWindow, then shcore's GetDpiForMonitor (per-monitor v1),
+        // then the system DPI. Without the per-monitor-v1 and system rungs
+        // an aware process on a pre-1607 system would render at real
+        // physical pixels while the host still scaled everything at 1x.
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "GetProcAddress(shcore, \"GetDpiForMonitor\")" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "return systemDpi();" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-text-command-bridge", "Verify AppKit GPU text widgets route native text commands", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)selectAll:(id)sender" },

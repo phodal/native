@@ -18,6 +18,7 @@ const mirrors = [
   { source: 'LICENSE', target: 'LICENSE' },
   { source: 'skills', target: 'skills' },
   { source: 'skill-data', target: 'skill-data' },
+  { source: 'third_party/webview2', target: 'third_party/webview2' },
 ];
 
 const errors = [];
@@ -132,7 +133,13 @@ if (errors.length > 0) {
   if (errors.length > 20) {
     console.error(`  ... ${errors.length - 20} more`);
   }
-  console.error('\nRun "node packages/native-sdk/scripts/copy-framework.js" from the repo root.');
+  console.error('');
+  console.error('The package mirror is GENERATED output: copy-framework.js stages it');
+  console.error('from the repo-root framework sources (prepack and scripts:check run');
+  console.error('the copy first), and the mirror paths are gitignored — committing the');
+  console.error('mirror is not the fix. Regenerate it, then re-run this check:');
+  console.error('');
+  console.error('  node packages/native-sdk/scripts/copy-framework.js   (from the repo root)');
   process.exit(1);
 }
 

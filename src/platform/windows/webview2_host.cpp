@@ -27,19 +27,22 @@
 #include <thread>
 #include <vector>
 
+/* The WebView2 SDK header is vendored (third_party/webview2/include) and
+ * every first-party build graph puts it on the include path, so a build
+ * that cannot see it is misconfigured — fail it loudly instead of
+ * shipping a host whose WebView loads report WebViewNotFound at runtime.
+ * NATIVE_SDK_ALLOW_WEBVIEW2_STUB opts a hand-rolled build into the old
+ * stubbed layer (canvas apps are unaffected by the stub). */
 #if __has_include(<WebView2.h>) && __has_include(<wrl.h>)
 #include <WebView2.h>
 #include <wrl.h>
 #define NATIVE_SDK_HAS_WEBVIEW2 1
-using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
-#else
+#elif defined(NATIVE_SDK_ALLOW_WEBVIEW2_STUB)
 #define NATIVE_SDK_HAS_WEBVIEW2 0
-/* Loud on purpose: without the WebView2 SDK header on the include path
- * the host builds with the embedded WebView layer stubbed out — canvas
- * apps are unaffected, but apps that load a WebView report
- * WebViewNotFound at start. */
 #pragma message("WebView2.h not found: building the Windows host without the embedded WebView layer (canvas apps unaffected; WebView loads will report WebViewNotFound)")
+#else
+#error "WebView2.h not found: add third_party/webview2/include to the include path, or define NATIVE_SDK_ALLOW_WEBVIEW2_STUB to build without the embedded WebView layer"
 #endif
 
 /* Media Foundation (the audio backend below) + WinHTTP (the audio cache
@@ -557,6 +560,9 @@ struct Host {
     int appearance_color_scheme = -1;
     int appearance_reduce_motion = -1;
     int appearance_high_contrast = -1;
+    /* Whether the CoInitializeEx in native_sdk_windows_create succeeded
+     * and native_sdk_windows_destroy owes the balancing CoUninitialize. */
+    bool com_initialized = false;
     AudioState audio;
     AudioSpectrumState spectrum;
     std::shared_ptr<HostLifetime> lifetime = std::make_shared<HostLifetime>();
@@ -1124,6 +1130,8 @@ static std::string extractHtmlClipboardFragment(const std::string &payload) {
     return payload;
 }
 
+static UINT dpiForWindow(HWND hwnd);
+
 static void emit(Host *host, const Window &window, EventKind kind) {
     if (!host || !host->callback) return;
     RECT rect = {};
@@ -1131,9 +1139,14 @@ static void emit(Host *host, const Window &window, EventKind kind) {
     WindowsEvent event = {};
     event.kind = kind;
     event.window_id = window.id;
-    event.width = rect.right > rect.left ? (double)(rect.right - rect.left) : window.width;
-    event.height = rect.bottom > rect.top ? (double)(rect.bottom - rect.top) : window.height;
-    event.scale = 1.0;
+    /* Window geometry crosses the runtime boundary in LOGICAL points:
+     * the client rect is physical pixels, so divide by the window's
+     * device scale. In a DPI-unaware process the reported DPI is 96 and
+     * the two units coincide, so this stays the identity there. */
+    const double scale = window.hwnd ? (double)dpiForWindow(window.hwnd) / 96.0 : 1.0;
+    event.width = rect.right > rect.left ? (double)(rect.right - rect.left) / scale : window.width;
+    event.height = rect.bottom > rect.top ? (double)(rect.bottom - rect.top) / scale : window.height;
+    event.scale = scale;
     event.x = window.x;
     event.y = window.y;
     event.open = window.hwnd != nullptr;
@@ -1421,17 +1434,51 @@ static int webViewExtent(double value) {
     return value > 1 ? (int)(value + 0.5) : 1;
 }
 
+/* Explicit webview frames arrive from the runtime in LOGICAL points and
+ * scale to physical pixels at the window's DPI, exactly like native view
+ * frames. The auto-filling main webview is the one exception: its frame
+ * is copied straight from the physical client rect (the top-level
+ * WM_SIZE handler), so it passes through unscaled. */
+static double webViewFrameScale(const ChildWebView &webview) {
+    if (!webview.frame_explicit || !webview.hwnd) return 1.0;
+    return (double)dpiForWindow(webview.hwnd) / 96.0;
+}
+
 static bool validChildWebViewFrame(double x, double y, double width, double height) {
     return x >= 0 && y >= 0 && width > 0 && height > 0;
 }
 
-static int nativeViewCoord(double value) {
+static constexpr int nativeViewCoord(double value) {
     return value > 0 ? (int)(value + 0.5) : 0;
 }
 
-static int nativeViewExtent(double value) {
-    return value > 0 ? (int)(value + 0.5) : 0;
+/* Compile-time proof of the accumulate-then-round frame policy (see
+ * nativeViewPhysicalFrame): rounding each nesting level separately drifts
+ * from the round of the logical sum — parent x=10.4 plus child x=10.4 at
+ * scale 1.5 is round(15.6) + round(15.6) = 32, one pixel right of the
+ * true origin round(20.8 * 1.5) = 31 — and an independently rounded
+ * extent opens the same one-pixel seam against an edge derived from the
+ * accumulated logical coordinates: origin 10.2 with width 10.2 at scale
+ * 1.5 ends at round(15.3) + round(15.3) = 30, but the true right edge is
+ * round(20.4 * 1.5) = 31. */
+static_assert(nativeViewCoord(10.4 * 1.5) + nativeViewCoord(10.4 * 1.5) == 32 && nativeViewCoord((10.4 + 10.4) * 1.5) == 31,
+    "per-level rounding must drift so the accumulate-then-round policy is load-bearing");
+static_assert(nativeViewCoord(10.2 * 1.5) + nativeViewCoord(10.2 * 1.5) == 30 && nativeViewCoord((10.2 + 10.2) * 1.5) == 31,
+    "independently rounded extents must open seams that edge-derived extents close");
+
+/* A scaled window CONTENT extent rounded to whole physical pixels — the
+ * same round-once policy as native view frames (see
+ * nativeViewPhysicalFrame). Truncating instead would land fractional-DPI
+ * windows one physical pixel short of the request: logical 726 at 125%
+ * is 907.5 physical, which must become 908, not 907. Every conversion of
+ * a scaled content size to a physical extent goes through here so the
+ * standard-chrome and hidden-titlebar paths cannot drift apart. */
+static constexpr LONG physicalContentExtent(double value) {
+    return (LONG)(value + 0.5);
 }
+
+static_assert(physicalContentExtent(726 * 1.25) == 908 && (LONG)(726 * 1.25) == 907,
+    "truncation must land a pixel short of the round so the rounding is load-bearing");
 
 static bool validNativeViewFrame(double x, double y, double width, double height) {
     return x >= 0 && y >= 0 && width >= 0 && height >= 0;
@@ -1507,17 +1554,53 @@ static void applySegmentedControlText(HWND hwnd, const std::string &text) {
     TabCtrl_SetCurSel(hwnd, 0);
 }
 
-static POINT nativeViewAbsoluteOrigin(Host *host, const NativeView &view) {
-    POINT point = { nativeViewCoord(view.x), nativeViewCoord(view.y) };
-    if (!host || view.parent.empty()) return point;
+/* Scale for converting the runtime's LOGICAL view frames into physical
+ * client pixels: the owning top-level window's DPI over 96. A
+ * DPI-unaware process reports 96, so this is 1.0 there and view frames
+ * pass through unchanged. */
+static double nativeViewFrameScale(Host *host, const NativeView &view) {
+    if (!host) return 1.0;
+    auto window = host->windows.find(view.window_id);
+    if (window == host->windows.end() || !window->second.hwnd) return 1.0;
+    return (double)dpiForWindow(window->second.hwnd) / 96.0;
+}
+
+/* Absolute LOGICAL origin of a view: its own frame origin plus every
+ * ancestor's, summed before any scaling or rounding. */
+static void nativeViewLogicalOrigin(Host *host, const NativeView &view, double *logical_x, double *logical_y) {
+    *logical_x = view.x;
+    *logical_y = view.y;
+    if (!host || view.parent.empty()) return;
     auto parent = host->native_views.find(nativeViewKey(view.window_id, view.parent));
     while (parent != host->native_views.end()) {
-        point.x += nativeViewCoord(parent->second.x);
-        point.y += nativeViewCoord(parent->second.y);
+        *logical_x += parent->second.x;
+        *logical_y += parent->second.y;
         if (parent->second.parent.empty()) break;
         parent = host->native_views.find(nativeViewKey(parent->second.window_id, parent->second.parent));
     }
-    return point;
+}
+
+/* Physical frame policy: every physical EDGE is the once-rounded product
+ * of an ACCUMULATED logical coordinate and the window scale. Accumulating
+ * before rounding matters because the sum of per-level rounds drifts from
+ * the round of the sum at fractional scales (and at fractional logical
+ * coordinates even at scale 1.0) — see the static_asserts beside
+ * nativeViewCoord for the numeric proof. Width and height fall out as
+ * edge differences (right = round((logical_x + width) * scale)) rather
+ * than independently rounded extents, so frames that abut logically —
+ * a sibling starting where the previous one ends, a child flush against
+ * its parent's edge — land on the same physical pixel column with no
+ * one-pixel gap or overlap at any scale. */
+static RECT nativeViewPhysicalFrame(Host *host, const NativeView &view, double scale) {
+    double logical_x = 0;
+    double logical_y = 0;
+    nativeViewLogicalOrigin(host, view, &logical_x, &logical_y);
+    RECT frame = {};
+    frame.left = nativeViewCoord(logical_x * scale);
+    frame.top = nativeViewCoord(logical_y * scale);
+    frame.right = nativeViewCoord((logical_x + view.width) * scale);
+    frame.bottom = nativeViewCoord((logical_y + view.height) * scale);
+    return frame;
 }
 
 static void applyNativeViewText(NativeView &view, const std::string &text) {
@@ -1561,8 +1644,9 @@ static void applyNativeViewAccessibility(NativeView &view) {
 
 static void applyNativeViewFrame(Host *host, NativeView &view) {
     if (!view.hwnd) return;
-    POINT origin = nativeViewAbsoluteOrigin(host, view);
-    MoveWindow(view.hwnd, origin.x, origin.y, nativeViewExtent(view.width), nativeViewExtent(view.height), TRUE);
+    const double scale = nativeViewFrameScale(host, view);
+    RECT frame = nativeViewPhysicalFrame(host, view, scale);
+    MoveWindow(view.hwnd, frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top, TRUE);
 }
 
 static void applyNativeViewState(NativeView &view, bool update_text, const std::string &text) {
@@ -1740,20 +1824,12 @@ static uint64_t gpuTimestampNs() {
     return seconds * 1000000000ull + remainder * 1000000000ull / (uint64_t)frequency.QuadPart;
 }
 
-/* Device scale for a gpu_surface child. GetDpiForWindow is resolved
- * dynamically so the host keeps working on Windows versions (and Wine
- * prefixes) that predate per-monitor DPI. In a DPI-unaware process the
- * call reports 96, so logical size == client pixels, matching how the
- * rest of this host treats coordinates. */
+/* Device scale for a gpu_surface child: the shared per-window DPI
+ * resolution (dpiForWindow) over the 96-dpi baseline. In a DPI-unaware
+ * process the resolved DPI is 96, so logical size == client pixels,
+ * matching how the rest of this host treats coordinates. */
 static double gpuSurfaceScale(HWND hwnd) {
-    using GetDpiForWindowFn = UINT(WINAPI *)(HWND);
-    static GetDpiForWindowFn get_dpi = reinterpret_cast<GetDpiForWindowFn>(
-        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow")));
-    if (get_dpi && hwnd) {
-        const UINT dpi = get_dpi(hwnd);
-        if (dpi > 0) return (double)dpi / 96.0;
-    }
-    return 1.0;
+    return hwnd ? (double)dpiForWindow(hwnd) / 96.0 : 1.0;
 }
 
 static NativeView *gpuSurfaceViewForHwnd(Host *host, HWND hwnd) {
@@ -1846,8 +1922,17 @@ static Window *chromelessWindowForHwnd(Host *host, HWND hwnd) {
     return nullptr;
 }
 
-/* Per-window dpi with the same dynamic resolution (and the same 96
- * fallback) as gpuSurfaceScale. */
+static UINT systemDpi();
+
+/* Per-window DPI, resolved dynamically to mirror the awareness chain
+ * the embedded manifest declares. GetDpiForWindow (Windows 10 1607+,
+ * per-monitor v2 — modern Wine prefixes export it too) is preferred;
+ * where it is absent, shcore's GetDpiForMonitor reports the effective
+ * DPI of the window's monitor (Windows 8.1+, matching per-monitor v1
+ * awareness); where shcore is absent too, the system DPI (matching
+ * system-DPI awareness; older Wine prefixes land here through
+ * systemDpi's GetDeviceCaps branch). A DPI-unaware process reports 96
+ * on every branch, so logical points == client pixels there. */
 static UINT dpiForWindow(HWND hwnd) {
     using GetDpiForWindowFn = UINT(WINAPI *)(HWND);
     static GetDpiForWindowFn get_dpi = reinterpret_cast<GetDpiForWindowFn>(
@@ -1856,7 +1941,22 @@ static UINT dpiForWindow(HWND hwnd) {
         const UINT dpi = get_dpi(hwnd);
         if (dpi > 0) return dpi;
     }
-    return 96;
+    using GetDpiForMonitorFn = HRESULT(WINAPI *)(HMONITOR, int, UINT *, UINT *);
+    static GetDpiForMonitorFn get_monitor_dpi = []() -> GetDpiForMonitorFn {
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        if (!shcore) return nullptr;
+        return reinterpret_cast<GetDpiForMonitorFn>(
+            reinterpret_cast<void *>(GetProcAddress(shcore, "GetDpiForMonitor")));
+    }();
+    if (get_monitor_dpi && hwnd) {
+        HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        UINT dpi_x = 0;
+        UINT dpi_y = 0;
+        /* 0 = MDT_EFFECTIVE_DPI, spelled numerically so headers that
+         * predate shellscalingapi.h still compile. */
+        if (monitor && get_monitor_dpi(monitor, 0, &dpi_x, &dpi_y) == S_OK && dpi_y > 0) return dpi_y;
+    }
+    return systemDpi();
 }
 
 /* Caption metrics MUST scale with the monitor the window sits on, or a
@@ -1869,6 +1969,43 @@ static int systemMetricForDpi(int index, UINT dpi) {
         reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForDpi")));
     if (get_metric) return get_metric(index, dpi);
     return GetSystemMetrics(index);
+}
+
+/* System DPI for sizing a window that does not exist yet (creation
+ * scales the requested logical content size to physical pixels before
+ * the first monitor is known; WM_DPICHANGED re-derives the frame when
+ * the window lands elsewhere), and the tail of dpiForWindow's chain
+ * where no per-monitor API is available. GetDpiForSystem is resolved
+ * dynamically (Windows 10 1607+) with the desktop DC's LOGPIXELSY,
+ * then 96, as fallbacks. A DPI-unaware process reports 96 on every
+ * branch, keeping points == pixels exactly as before. */
+static UINT systemDpi() {
+    using GetDpiForSystemFn = UINT(WINAPI *)();
+    static GetDpiForSystemFn get_dpi = reinterpret_cast<GetDpiForSystemFn>(
+        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForSystem")));
+    if (get_dpi) {
+        const UINT dpi = get_dpi();
+        if (dpi > 0) return dpi;
+    }
+    HDC dc = GetDC(nullptr);
+    if (dc) {
+        const int dpi = GetDeviceCaps(dc, LOGPIXELSY);
+        ReleaseDC(nullptr, dc);
+        if (dpi > 0) return (UINT)dpi;
+    }
+    return 96;
+}
+
+/* AdjustWindowRectEx pinned to an explicit DPI so the frame borders
+ * match the monitor the window is being sized against; resolved
+ * dynamically (Windows 10 1607+) with the classic system-metric call
+ * as the fallback. */
+static BOOL adjustWindowRectForDpi(RECT *rect, DWORD style, BOOL menu, DWORD ex_style, UINT dpi) {
+    using AdjustWindowRectExForDpiFn = BOOL(WINAPI *)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    static AdjustWindowRectExForDpiFn adjust = reinterpret_cast<AdjustWindowRectExForDpiFn>(
+        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi")));
+    if (adjust) return adjust(rect, style, menu, ex_style, dpi);
+    return AdjustWindowRectEx(rect, style, menu, ex_style);
 }
 
 /* Thickness of the top resize frame (sizing border + padded border) at
@@ -1943,12 +2080,12 @@ static void applyHiddenTitlebarFrame(Window &window) {
  * bottom borders, plus the menu bar when one is attached. Plain
  * AdjustWindowRectEx would count the caption band the custom calc gives
  * back, landing the client one band taller than requested. */
-static SIZE hiddenOuterSizeForContent(DWORD style, DWORD ex_style, bool has_menu, double content_width, double content_height) {
+static SIZE hiddenOuterSizeForContent(DWORD style, DWORD ex_style, bool has_menu, double content_width, double content_height, UINT dpi) {
     RECT borders = { 0, 0, 0, 0 };
-    AdjustWindowRectEx(&borders, style & ~WS_CAPTION, FALSE, ex_style);
+    adjustWindowRectForDpi(&borders, style & ~WS_CAPTION, FALSE, ex_style, dpi);
     SIZE outer = {};
-    outer.cx = (LONG)content_width + (borders.right - borders.left);
-    outer.cy = (LONG)content_height + borders.bottom + (has_menu ? GetSystemMetrics(SM_CYMENU) : 0);
+    outer.cx = physicalContentExtent(content_width) + (borders.right - borders.left);
+    outer.cy = physicalContentExtent(content_height) + borders.bottom + (has_menu ? systemMetricForDpi(SM_CYMENU, dpi) : 0);
     return outer;
 }
 
@@ -3821,6 +3958,92 @@ static void destroyAllWindows(Host *host) {
 #if NATIVE_SDK_HAS_WEBVIEW2
 using CreateEnvironmentFn = HRESULT (STDAPICALLTYPE *)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions *, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler *);
 
+/* The event-handler factory. The full WRL provides this as
+ * Microsoft::WRL::Callback, but the mingw WRL subset only carries ComPtr,
+ * so the handful of WebView2 completion and event handlers are built on
+ * this minimal equivalent: one refcounted COM object per handler that
+ * forwards Invoke to the wrapped callable. QueryInterface needs each
+ * handler's IID at runtime; the constants mirror the interface
+ * declarations in WebView2.h (mingw's __uuidof only covers interfaces
+ * its own headers declare, the same reason the WIC GUIDs further down
+ * are defined locally). */
+static const GUID kNativeSdkIID_EnvironmentCompletedHandler = {0x4e8a3389, 0xc9d8, 0x4bd2, {0xb6, 0xb5, 0x12, 0x4f, 0xee, 0x6c, 0xc1, 0x4d}};
+static const GUID kNativeSdkIID_ControllerCompletedHandler = {0x6c4819f3, 0xc9b7, 0x4260, {0x81, 0x27, 0xc9, 0xf5, 0xbd, 0xe7, 0xf6, 0x8c}};
+static const GUID kNativeSdkIID_WebMessageReceivedHandler = {0x57213f19, 0x00e6, 0x49fa, {0x8e, 0x07, 0x89, 0x8e, 0xa0, 0x1e, 0xcb, 0xd2}};
+static const GUID kNativeSdkIID_AcceleratorKeyPressedHandler = {0xb29c7e28, 0xfa79, 0x41a8, {0x8e, 0x44, 0x65, 0x81, 0x1c, 0x76, 0xdc, 0xb2}};
+static const GUID kNativeSdkIID_WebResourceRequestedHandler = {0xab00b74c, 0x15f1, 0x4646, {0x80, 0xe8, 0xe7, 0x63, 0x41, 0xd2, 0x5d, 0x71}};
+static const GUID kNativeSdkIID_NavigationStartingHandler = {0x9adbe429, 0xf36d, 0x432b, {0x9d, 0xdc, 0xf8, 0x88, 0x1f, 0xbd, 0x76, 0xe3}};
+
+template <typename Interface> struct WebView2HandlerIid;
+template <> struct WebView2HandlerIid<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> {
+    static const GUID &value() { return kNativeSdkIID_EnvironmentCompletedHandler; }
+};
+template <> struct WebView2HandlerIid<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler> {
+    static const GUID &value() { return kNativeSdkIID_ControllerCompletedHandler; }
+};
+template <> struct WebView2HandlerIid<ICoreWebView2WebMessageReceivedEventHandler> {
+    static const GUID &value() { return kNativeSdkIID_WebMessageReceivedHandler; }
+};
+template <> struct WebView2HandlerIid<ICoreWebView2AcceleratorKeyPressedEventHandler> {
+    static const GUID &value() { return kNativeSdkIID_AcceleratorKeyPressedHandler; }
+};
+template <> struct WebView2HandlerIid<ICoreWebView2WebResourceRequestedEventHandler> {
+    static const GUID &value() { return kNativeSdkIID_WebResourceRequestedHandler; }
+};
+template <> struct WebView2HandlerIid<ICoreWebView2NavigationStartingEventHandler> {
+    static const GUID &value() { return kNativeSdkIID_NavigationStartingHandler; }
+};
+
+/* Every handler interface above declares a two-argument Invoke; this
+ * trait reads the argument types off the interface so the override below
+ * matches exactly. */
+template <typename Method> struct WebView2InvokeSignature;
+template <typename Interface, typename FirstArg, typename SecondArg>
+struct WebView2InvokeSignature<HRESULT (STDMETHODCALLTYPE Interface::*)(FirstArg, SecondArg)> {
+    using First = FirstArg;
+    using Second = SecondArg;
+};
+
+template <typename Interface, typename Callable>
+class WebView2Handler final : public Interface {
+public:
+    explicit WebView2Handler(Callable callable) : callable_(std::move(callable)) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object) override {
+        if (!object) return E_POINTER;
+        if (IsEqualIID(riid, WebView2HandlerIid<Interface>::value()) || IsEqualIID(riid, IID_IUnknown)) {
+            *object = static_cast<Interface *>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return refs_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG remaining = refs_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0) delete this;
+        return remaining;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(
+        typename WebView2InvokeSignature<decltype(&Interface::Invoke)>::First first,
+        typename WebView2InvokeSignature<decltype(&Interface::Invoke)>::Second second) override {
+        return callable_(first, second);
+    }
+
+private:
+    std::atomic<ULONG> refs_{1};
+    Callable callable_;
+};
+
+template <typename Interface, typename Callable>
+static ComPtr<Interface> Callback(Callable callable) {
+    ComPtr<Interface> handler;
+    handler.Attach(new WebView2Handler<Interface, Callable>(std::move(callable)));
+    return handler;
+}
+
 static const wchar_t *nativeSdkBridgeScript() {
     return LR"ZN((function(){
 	if(window.zero&&window.zero.invoke&&window.zero.on&&window.zero._emit){return;}
@@ -3942,17 +4165,19 @@ static const wchar_t *nativeSdkBridgeScript() {
 }
 
 static RECT webViewRect(const ChildWebView &webview) {
+    const double scale = webViewFrameScale(webview);
     RECT rect = {};
     rect.left = 0;
     rect.top = 0;
-    rect.right = webViewExtent(webview.width);
-    rect.bottom = webViewExtent(webview.height);
+    rect.right = webViewExtent(webview.width * scale);
+    rect.bottom = webViewExtent(webview.height * scale);
     return rect;
 }
 
 static void applyWebViewFrame(ChildWebView &webview) {
     if (!webview.hwnd) return;
-    MoveWindow(webview.hwnd, webViewCoord(webview.x), webViewCoord(webview.y), webViewExtent(webview.width), webViewExtent(webview.height), TRUE);
+    const double scale = webViewFrameScale(webview);
+    MoveWindow(webview.hwnd, webViewCoord(webview.x * scale), webViewCoord(webview.y * scale), webViewExtent(webview.width * scale), webViewExtent(webview.height * scale), TRUE);
     if (webview.controller) {
         RECT bounds = webViewRect(webview);
         webview.controller->put_Bounds(bounds);
@@ -4107,7 +4332,7 @@ static bool createChildWebView(Host *host, const std::string &key) {
                             uint64_t bridge_window_id = found->second.window_id;
                             std::string bridge_label = found->second.label;
                             found->second.webview->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                                [host, bridge_window_id, bridge_label, lifetime](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
+                                [host, key, bridge_window_id, bridge_label, lifetime](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
                                     auto token = lifetime.lock();
                                     if (!token) return S_OK;
                                     std::lock_guard<std::recursive_mutex> guard(token->mutex);
@@ -4545,6 +4770,56 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
                 }
             }
             return 0;
+        case WM_DPICHANGED:
+            /* The window moved to a monitor with a different DPI (or the
+             * user changed display scaling). Adopt the system-suggested
+             * frame — it keeps the window the same LOGICAL size on the
+             * new scale — then re-derive everything DPI-dependent: the
+             * hidden-titlebar band (its caption metrics scale with the
+             * monitor), each native child's physical frame, every gpu
+             * surface's logical-size/scale pairing so the runtime
+             * re-rasterizes at the new density, and each explicit child
+             * webview's physical frame. The SetWindowPos WM_SIZE
+             * re-emits kResize, which now carries the new scale. Only
+             * per-monitor-DPI-aware processes receive this message. */
+            if (host) {
+                const RECT *suggested = reinterpret_cast<const RECT *>(lparam);
+                if (suggested) {
+                    SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left, suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                for (auto &entry : host->windows) {
+                    if (entry.second.hwnd == hwnd && windowUsesHiddenTitlebar(entry.second)) applyHiddenTitlebarFrame(entry.second);
+                }
+                for (auto &view_entry : host->native_views) {
+                    NativeView &view = view_entry.second;
+                    if (!view.hwnd || GetAncestor(view.hwnd, GA_ROOT) != hwnd) continue;
+                    applyNativeViewFrame(host, view);
+                    if (view.kind != kViewGpuSurface) continue;
+                    const double surface_scale = gpuSurfaceScale(view.hwnd);
+                    double width = 0;
+                    double height = 0;
+                    if (gpuSurfaceLogicalSize(view, view.hwnd, surface_scale, &width, &height)) {
+                        (void)syncGpuSurfaceGeometry(host, view, width, height, surface_scale);
+                    }
+                }
+#if NATIVE_SDK_HAS_WEBVIEW2
+                for (auto &webview_entry : host->webviews) {
+                    ChildWebView &webview = webview_entry.second;
+                    /* Explicit frames are LOGICAL points scaled to
+                     * physical pixels at apply time, so a monitor-scale
+                     * change strands them until re-applied here. The
+                     * auto-fill main webview stores PHYSICAL client-rect
+                     * pixels and already re-derived them in the WM_SIZE
+                     * that the SetWindowPos above dispatched, so it is
+                     * skipped. */
+                    if (!webview.frame_explicit) continue;
+                    if (!webview.hwnd || GetAncestor(webview.hwnd, GA_ROOT) != hwnd) continue;
+                    applyWebViewFrame(webview);
+                }
+#endif
+                return 0;
+            }
+            break;
         case WM_TIMER:
             if (host && handleAppTimerMessage(host, wparam)) return 0;
             if (host && handleAudioTimerMessage(host, wparam)) return 0;
@@ -4558,20 +4833,26 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
                     Window &window = entry.second;
                     if (window.hwnd != hwnd) continue;
                     if (window.min_width <= 0 && window.min_height <= 0) break;
-                    /* The declared floor is a CONTENT size; convert to the
-                     * outer track size for this window's current style.
-                     * Hidden titlebar styles carry no top chrome (the
-                     * custom WM_NCCALCSIZE hands the caption band to the
-                     * client), so their conversion skips it too. */
-                    RECT frame = { 0, 0, (LONG)(window.min_width > 0 ? window.min_width : 0), (LONG)(window.min_height > 0 ? window.min_height : 0) };
+                    /* The declared floor is a CONTENT size in LOGICAL
+                     * points; scale to physical pixels at this window's
+                     * DPI, then convert to the outer track size for its
+                     * current style. Hidden titlebar styles carry no top
+                     * chrome (the custom WM_NCCALCSIZE hands the caption
+                     * band to the client), so their conversion skips it
+                     * too. */
+                    const UINT dpi = dpiForWindow(hwnd);
+                    const double scale = (double)dpi / 96.0;
+                    const double min_content_width = window.min_width > 0 ? window.min_width * scale : 0;
+                    const double min_content_height = window.min_height > 0 ? window.min_height * scale : 0;
+                    RECT frame = { 0, 0, physicalContentExtent(min_content_width), physicalContentExtent(min_content_height) };
                     const DWORD style = (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE);
                     const DWORD ex_style = (DWORD)GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                     const bool has_menu = GetMenu(hwnd) != nullptr;
-                    AdjustWindowRectEx(&frame, style, has_menu, ex_style);
+                    adjustWindowRectForDpi(&frame, style, has_menu, ex_style, dpi);
                     LONG outer_width = frame.right - frame.left;
                     LONG outer_height = frame.bottom - frame.top;
                     if (windowUsesHiddenTitlebar(window)) {
-                        const SIZE outer = hiddenOuterSizeForContent(style, ex_style, has_menu, window.min_width > 0 ? window.min_width : 0, window.min_height > 0 ? window.min_height : 0);
+                        const SIZE outer = hiddenOuterSizeForContent(style, ex_style, has_menu, min_content_width, min_content_height, dpi);
                         outer_width = outer.cx;
                         outer_height = outer.cy;
                     }
@@ -4640,19 +4921,26 @@ static bool createNativeWindow(Host *host, Window &window) {
         style = WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX;
         if (window.resizable) style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
     }
-    /* The requested frame is a CONTENT size (the other hosts size the
-     * content area); grow it to the outer size for this style so the
-     * client rect lands at the request. The menu bar is attached after
-     * creation, so account for it here when menus are declared. Hidden
-     * styles use the custom-calc shape (no top chrome) — plain
-     * AdjustWindowRectEx would land their client one caption band tall. */
+    /* The requested frame is a CONTENT size in LOGICAL points (the
+     * other hosts size the content area); scale it to physical pixels
+     * at the DPI the window opens at (the system DPI — WM_DPICHANGED
+     * re-derives the frame if it lands on another monitor), then grow
+     * it to the outer size for this style so the client rect lands at
+     * the request. The menu bar is attached after creation, so account
+     * for it here when menus are declared. Hidden styles use the
+     * custom-calc shape (no top chrome) — plain adjustment would land
+     * their client one caption band tall. */
     const bool has_menu = !host->menus.empty();
-    RECT frame = { 0, 0, (LONG)window.width, (LONG)window.height };
-    AdjustWindowRectEx(&frame, style, has_menu ? TRUE : FALSE, 0);
+    const UINT dpi = systemDpi();
+    const double scale = (double)dpi / 96.0;
+    const double content_width = window.width * scale;
+    const double content_height = window.height * scale;
+    RECT frame = { 0, 0, physicalContentExtent(content_width), physicalContentExtent(content_height) };
+    adjustWindowRectForDpi(&frame, style, has_menu ? TRUE : FALSE, 0, dpi);
     LONG outer_width = frame.right - frame.left;
     LONG outer_height = frame.bottom - frame.top;
     if (windowUsesHiddenTitlebar(window)) {
-        const SIZE outer = hiddenOuterSizeForContent(style, 0, has_menu, window.width, window.height);
+        const SIZE outer = hiddenOuterSizeForContent(style, 0, has_menu, content_width, content_height, dpi);
         outer_width = outer.cx;
         outer_height = outer.cy;
     }
@@ -4706,6 +4994,15 @@ Host *native_sdk_windows_create(const char *app_name, size_t app_name_len, const
     InitCommonControlsEx(&controls);
 
     Host *host = new Host();
+    /* The WebView2 environment factory requires a single-threaded
+     * apartment on the calling thread; without one it fails with
+     * CO_E_NOTINITIALIZED. Create, run, and destroy all execute on the
+     * app's main thread, so one init here pairs with the CoUninitialize
+     * at the end of native_sdk_windows_destroy — after the controllers
+     * are closed. S_FALSE (already initialized) still pairs;
+     * RPC_E_CHANGED_MODE (an MTA got there first) leaves nothing to
+     * balance. */
+    host->com_initialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
     host->app_name = slice(app_name, app_name_len);
     host->window_title = slice(window_title, window_title_len);
     host->bundle_id = slice(bundle_id, bundle_id_len);
@@ -4749,7 +5046,9 @@ void native_sdk_windows_destroy(Host *host) {
     audioReleaseSession(host, true);
     removeNotificationIcon(host);
     destroyAllWindows(host);
+    const bool com_initialized = host->com_initialized;
     delete host;
+    if (com_initialized) CoUninitialize();
 }
 
 void native_sdk_windows_run(Host *host, EventCallback callback, void *context) {
@@ -5367,16 +5666,17 @@ int native_sdk_windows_create_view(Host *host, uint64_t window_id, const char *l
     }
     if (view.visible) style |= WS_VISIBLE;
 
-    POINT origin = nativeViewAbsoluteOrigin(host, view);
+    const double scale = nativeViewFrameScale(host, view);
+    RECT frame = nativeViewPhysicalFrame(host, view, scale);
     HWND hwnd = CreateWindowExW(
         ex_style,
         class_name.c_str(),
         wide_text.c_str(),
         style,
-        origin.x,
-        origin.y,
-        nativeViewExtent(width),
-        nativeViewExtent(height),
+        frame.left,
+        frame.top,
+        frame.right - frame.left,
+        frame.bottom - frame.top,
         window->second.hwnd,
         nullptr,
         host->instance,
@@ -5923,15 +6223,19 @@ int native_sdk_windows_create_webview(Host *host, uint64_t window_id, const char
     if (host->webviews.find(key) != host->webviews.end()) return 0;
 
     std::string url_string = slice(url, url_len);
+    /* The requested frame is in logical points (frame_explicit child
+     * webviews scale like native view frames); physical placement at
+     * the owning window's DPI. */
+    const double frame_scale = (double)dpiForWindow(window->second.hwnd) / 96.0;
     HWND hwnd = CreateWindowExW(
         0,
         L"STATIC",
         L"",
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
-        webViewCoord(x),
-        webViewCoord(y),
-        webViewExtent(width),
-        webViewExtent(height),
+        webViewCoord(x * frame_scale),
+        webViewCoord(y * frame_scale),
+        webViewExtent(width * frame_scale),
+        webViewExtent(height * frame_scale),
         window->second.hwnd,
         nullptr,
         host->instance,
@@ -5973,7 +6277,8 @@ int native_sdk_windows_set_webview_frame(Host *host, uint64_t window_id, const c
     found->second.width = width;
     found->second.height = height;
     found->second.frame_explicit = true;
-    MoveWindow(found->second.hwnd, webViewCoord(x), webViewCoord(y), webViewExtent(width), webViewExtent(height), TRUE);
+    const double frame_scale = webViewFrameScale(found->second);
+    MoveWindow(found->second.hwnd, webViewCoord(x * frame_scale), webViewCoord(y * frame_scale), webViewExtent(width * frame_scale), webViewExtent(height * frame_scale), TRUE);
 #if NATIVE_SDK_HAS_WEBVIEW2
     if (found->second.controller) {
         RECT bounds = webViewRect(found->second);

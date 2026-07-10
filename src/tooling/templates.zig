@@ -3203,10 +3203,50 @@ fn nativeDependencyPath(allocator: std.mem.Allocator, io: std.Io, destination: [
         return error.CrossVolumeFramework;
     }
     if (relative.len == 0) {
+        // Dupe before freeing `relative`: if the dupe fails, the errdefer
+        // above still owns `relative` and must free it exactly once.
+        const dot = try allocator.dupe(u8, ".");
         allocator.free(relative);
-        return allocator.dupe(u8, ".");
+        return dot;
     }
     return relative;
+}
+
+test "nativeDependencyPath falls back to `.` for a same-directory scaffold" {
+    const io = std.testing.io;
+    const destination = ".zig-cache/test-native-dependency-same-dir";
+    try std.Io.Dir.cwd().createDirPath(io, destination);
+    const destination_real = try std.Io.Dir.cwd().realPathFileAlloc(io, destination, std.testing.allocator);
+    defer std.testing.allocator.free(destination_real);
+
+    const dependency = try nativeDependencyPath(std.testing.allocator, io, destination, destination_real);
+    defer std.testing.allocator.free(dependency);
+    try std.testing.expectEqualStrings(".", dependency);
+}
+
+fn expectSameDirDependencyDot(allocator: std.mem.Allocator, io: std.Io, destination: []const u8, framework_path: []const u8) !void {
+    const dependency = try nativeDependencyPath(allocator, io, destination, framework_path);
+    defer allocator.free(dependency);
+    try std.testing.expectEqualStrings(".", dependency);
+}
+
+test "nativeDependencyPath survives every allocation-failure point of the `.` fallback" {
+    // Walks every allocation-failure point of the `.` fallback and asserts
+    // no leak and no swallowed OutOfMemory at each index. The fallback's
+    // ownership rule — the errdefer releases the relative path exactly
+    // once, so the fallible dupe must run before the manual free — keeps
+    // this loop clean at the index where the dupe itself fails. (The slice
+    // in this branch is empty, and freeing an empty slice is a no-op, so a
+    // free-then-dupe ordering would not crash here today; the test pins
+    // the ordering so the branch stays safe if it ever handles a non-empty
+    // allocation.)
+    const io = std.testing.io;
+    const destination = ".zig-cache/test-native-dependency-oom";
+    try std.Io.Dir.cwd().createDirPath(io, destination);
+    const destination_real = try std.Io.Dir.cwd().realPathFileAlloc(io, destination, std.testing.allocator);
+    defer std.testing.allocator.free(destination_real);
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, expectSameDirDependencyDot, .{ io, destination, destination_real });
 }
 
 fn appendZigString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: []const u8) !void {

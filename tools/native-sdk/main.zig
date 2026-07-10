@@ -646,6 +646,11 @@ fn iosPackageLibrary(allocator: std.mem.Allocator, io: std.Io, env_map: *std.pro
                 "  build it first (`zig build lib -Dtarget={s}`) or pass --binary <path>; the app must expose a mobile UiApp (`mobileOptions`)\n", .{tooling.ios.LibSlice.device.zigTriple()});
             return null;
         },
+        // Cross-volume SDK: the junction bridge failed, so the generated
+        // host project could not build against the SDK either — a
+        // libraryless project would ship broken. The teaching message is
+        // already on screen; fail the whole package verb without a trace.
+        error.CrossVolumeFramework => std.process.exit(1),
         else => return err,
     };
 }
@@ -666,6 +671,11 @@ fn androidPackageLibrary(allocator: std.mem.Allocator, io: std.Io, env_map: *std
                 "  build it first (`zig build lib -Dtarget={s}`) or pass --binary <path>; the app must expose a mobile UiApp (`mobileOptions`)\n", .{tooling.android.zig_triple});
             return null;
         },
+        // Cross-volume SDK: the junction bridge failed, so the generated
+        // host project could not build against the SDK either — a
+        // libraryless project would ship broken. The teaching message is
+        // already on screen; fail the whole package verb without a trace.
+        error.CrossVolumeFramework => std.process.exit(1),
         else => return err,
     };
 }

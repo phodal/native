@@ -700,7 +700,13 @@ pub fn canvasWidgetLayoutNodeWithTextReconcileState(
         const source_matches_runtime_text = std.mem.eql(u8, entry.text, copy.widget.text);
         if (!source_unchanged and !source_matches_runtime_text) return copy;
         if (source_unchanged) copy.widget.text = entry.text;
-        if (copy.widget.kind == .textarea) copy.widget.value = entry.value;
+        // The retained scroll offset rides `value` for every editable
+        // text kind: the textarea's vertical offset and the single-line
+        // field's horizontal one both survive rebuilds through this
+        // restore (and re-clamp in `clampCanvasWidgetLayoutTextOffsets`
+        // right after, so a resized or re-texted field never keeps a
+        // stale offset).
+        if (canvasWidgetEditableTextKind(copy.widget.kind)) copy.widget.value = entry.value;
         if (copy.widget.text_selection == null and copy.widget.text_composition == null) {
             copy.widget.text_selection = entry.text_selection;
             copy.widget.text_composition = entry.text_composition;
@@ -903,8 +909,22 @@ pub fn clampCanvasWidgetLayoutScrollOffsets(nodes: []canvas.WidgetLayoutNode, st
 
 pub fn clampCanvasWidgetLayoutTextOffsets(nodes: []canvas.WidgetLayoutNode, tokens: canvas.DesignTokens) void {
     for (nodes) |*node| {
-        if (node.widget.kind != .textarea) continue;
-        node.widget.value = canvas.clampedTextInputScrollOffsetForWidget(node.widget, tokens, node.widget.value);
+        if (node.widget.kind == .textarea) {
+            node.widget.value = canvas.clampedTextInputScrollOffsetForWidget(node.widget, tokens, node.widget.value);
+            continue;
+        }
+        if (!canvasWidgetSingleLineTextKind(node.widget.kind)) continue;
+        // Single-line fields clamp their horizontal offset against the
+        // just-reconciled text and frame, and a field holding a caret
+        // also keeps it inside the visible span — this is where a layout
+        // width change (a resized window narrowing the field) is first
+        // known, so the caret never strands outside the clip after a
+        // resize. Deterministic in retained state: the offset only moves
+        // when the clamp or the caret demands it.
+        node.widget.value = if (node.widget.text_selection != null)
+            canvas.textInputCaretVisibleScrollOffsetForWidget(node.widget, tokens, node.widget.value)
+        else
+            canvas.clampedTextInputHorizontalScrollOffsetForWidget(node.widget, tokens, node.widget.value);
     }
 }
 

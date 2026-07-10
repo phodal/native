@@ -7,6 +7,7 @@ const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
 const unionRects = canvas_frame_helpers.unionRects;
 const CanvasWidgetScrollKeyboardTarget = canvas_widget_runtime.CanvasWidgetScrollKeyboardTarget;
 const canvasWidgetScrollableKind = canvas_widget_runtime.canvasWidgetScrollableKind;
+const canvasWidgetSingleLineTextKind = canvas_widget_runtime.canvasWidgetSingleLineTextKind;
 
 pub const CanvasWidgetScrollSource = enum {
     discrete,
@@ -335,9 +336,19 @@ pub fn RuntimeViewCanvasWidgetScroll(comptime RuntimeView: type) type {
             }
         }
 
-        pub fn scrollCanvasTextareaCaretIntoView(self: *RuntimeView, index: usize) void {
+        /// Keep the editable field's caret inside its visible span after
+        /// a text or caret change: textareas scroll vertically, single-
+        /// line fields horizontally — both through the widget's retained
+        /// `value` offset channel.
+        pub fn scrollCanvasTextInputCaretIntoView(self: *RuntimeView, index: usize) void {
             if (index >= self.widget_layout_node_count) return;
             var widget = self.widget_layout_nodes[index].widget;
+            if (canvasWidgetSingleLineTextKind(widget.kind)) {
+                const next_offset = canvas.textInputCaretVisibleScrollOffsetForWidget(widget, self.widget_tokens, widget.value);
+                if (next_offset == widget.value) return;
+                self.widget_layout_nodes[index].widget.value = next_offset;
+                return;
+            }
             if (widget.kind != .textarea) return;
 
             const viewport = canvas.textInputViewportForWidget(widget, self.widget_tokens) orelse return;

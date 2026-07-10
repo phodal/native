@@ -41,6 +41,7 @@ const widgetTextInputOrigin = widget_text_input.widgetTextInputOrigin;
 const widgetTextInputClipRect = widget_text_input.widgetTextInputClipRect;
 const widgetTextInputDrawText = widget_text_input.widgetTextInputDrawText;
 const widgetTextInputInset = widget_text_input.widgetTextInputInset;
+const widgetTextInputClipsText = widget_text_input.widgetTextInputClipsText;
 const textInputClearButtonRect = widget_text_input.textInputClearButtonRect;
 const widgetButtonTextSize = widget_metrics.widgetButtonTextSize;
 const widgetBodyTextSize = widget_metrics.widgetBodyTextSize;
@@ -466,7 +467,12 @@ pub fn emitTextFieldWidget(builder: *Builder, widget: Widget, tokens: DesignToke
     const selection_range = widgetTextSelectionRange(widget);
     const composition_range = widgetTextCompositionRange(widget);
     const has_text_affordances = selection_range != null or composition_range != null;
-    const clips_text = widget.kind == .textarea;
+    // Textareas always clip (their overflow scrolls vertically); a
+    // single-line field clips once its value overflows the content rect,
+    // so the horizontally scrolled text, selection rects, composition
+    // underline, and caret all cut at the field's border instead of
+    // painting past it. Short values emit no clip — unchanged emission.
+    const clips_text = widgetTextInputClipsText(widget, tokens, text_size, text_inset, layout_options);
 
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
@@ -555,11 +561,20 @@ pub fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTo
     const icon_size = @max(8, text_size - 2);
     const text_inset = widgetTextInputInset(widget, tokens);
     const layout_options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
+    const clip_rect = widgetTextInputClipRect(widget, tokens, text_size, text_inset, layout_options);
     const origin = widgetTextInputOrigin(widget, tokens, text_size, text_inset, layout_options);
     const selection_range = widgetTextSelectionRange(widget);
     const composition_range = widgetTextCompositionRange(widget);
     const text_color = widgetForegroundColor(widget, tokens, visual.foreground orelse tokens.colors.text);
     const draw_text = widgetTextInputDrawText(widget, tokens, text_size, origin, text_color, layout_options);
+    // Same overflow contract as the text-field emitter: clip only once
+    // the value (or placeholder) overflows the content rect, so the
+    // horizontally scrolled text and its affordances cut at the border.
+    // The leading glass, trailing chevron, and clear affordance draw
+    // outside the clip — they are chrome, not scrolling content. Slot 7
+    // is clear of the field chrome (1..6, 8..13), the focus ring (14),
+    // and the clear affordance's shape range (15..).
+    const clips_text = widgetTextInputClipsText(widget, tokens, text_size, text_inset, layout_options);
 
     try builder.fillRoundedRect(.{
         .id = widgetPartId(widget.id, 1),
@@ -578,6 +593,7 @@ pub fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTo
     }));
     if (widget.state.focused) try emitWidgetFocusRingForRect(builder, widget, tokens, 14, widget.frame, radius);
     try emitSearchFieldIcon(builder, widget, tokens, icon_size);
+    if (clips_text) try builder.pushClip(.{ .id = widgetPartId(widget.id, 7), .rect = clip_rect, .radius = radius });
     if (selection_range) |range| {
         if (!range.isCollapsed(widget.text.len)) {
             try emitWidgetTextSelectionRects(builder, widget, draw_text, layout_options, range, 8, 0, 1, tokens);
@@ -609,6 +625,7 @@ pub fn emitSearchFieldWidget(builder: *Builder, widget: Widget, tokens: DesignTo
             }
         }
     }
+    if (clips_text) try builder.popClip();
     if (widget.kind == .combobox) {
         try emitComboboxChevron(builder, widget, tokens, visual);
     }

@@ -2102,3 +2102,104 @@ test "word selection feeds the shared selection state: copy and shift-arrow just
     } });
     try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 6 }, try retainedTextSelection(harness, 1));
 }
+
+test "runtime scrolls single-line fields horizontally to keep the caret visible" {
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-widget-field-scroll", .source = platform.WebViewSource.html("<h1>Hello</h1>") };
+        }
+    };
+
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 260, 160),
+    });
+
+    const field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 120, 32),
+        .semantics = .{ .label = "Name" },
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{field} }, geometry.RectF.init(0, 0, 260, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .x = 20,
+        .y = 30,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+
+    // A short value never scrolls: the offset channel stays at zero.
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = "short" });
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqual(@as(f32, 0), retained.nodes[1].widget.value);
+
+    // Typing past the field's span scrolls forward so the caret stays
+    // inside the visible span; the emitted stream clips at the border.
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .insert_text = " value far too long for this narrow field to show" });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.nodes[1].widget.value > 0);
+    try std.testing.expect(canvas.textInputMaxHorizontalScrollOffsetForWidget(retained.nodes[1].widget, .{}) > 0);
+    const viewport = canvas.textInputViewportForWidget(retained.nodes[1].widget, .{}).?;
+    const scrolled_geometry = try harness.runtime.canvasWidgetTextGeometry(1, "canvas", 2);
+    const scrolled_caret = scrolled_geometry.caret_bounds.?;
+    try std.testing.expect(scrolled_caret.x >= viewport.x - 0.001);
+    try std.testing.expect(scrolled_caret.maxX() <= viewport.maxX() + 0.001);
+
+    _ = try harness.runtime.emitCanvasWidgetDisplayList(1, "canvas", .{});
+    const display_list = try harness.runtime.canvasDisplayList(1, "canvas");
+    var saw_field_clip = false;
+    for (display_list.commands) |command| {
+        switch (command) {
+            .push_clip => |clip| {
+                if (clip.id == testCanvasWidgetPartId(2, 16)) {
+                    try std.testing.expectEqualDeep(viewport, clip.rect);
+                    saw_field_clip = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(saw_field_clip);
+
+    // The retained offset survives a source rebuild (the reconcile pass
+    // restores it alongside the text), and the clamp pass re-checks the
+    // caret against the new geometry.
+    var rebuild_nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const rebuild = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{field} }, geometry.RectF.init(0, 0, 260, 160), &rebuild_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", rebuild);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.nodes[1].widget.value > 0);
+
+    // Home: the caret returns to byte zero and the field scrolls all the
+    // way back.
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .move_caret = .{ .direction = .start } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(0), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqual(@as(f32, 0), retained.nodes[1].widget.value);
+
+    // Deleting the overflow clamps the offset back to zero — the field
+    // never shows trailing emptiness while text could fill it.
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .move_caret = .{ .direction = .end } });
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expect(retained.nodes[1].widget.value > 0);
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .{ .set_selection = .{ .anchor = 5, .focus = 55 } });
+    _ = try harness.runtime.editCanvasWidgetText(1, "canvas", 2, .delete_backward);
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("short", retained.nodes[1].widget.text);
+    try std.testing.expectEqual(@as(f32, 0), retained.nodes[1].widget.value);
+}

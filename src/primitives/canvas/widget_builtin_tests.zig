@@ -3349,3 +3349,247 @@ test "hairline borders snap to whole device columns with smooth arcs" {
     const corner = surface.pixelRgba8(5, 4)[3];
     try std.testing.expect(corner > 0 and corner < 255);
 }
+
+test "single-line fields clip and horizontally scroll an overflowing value" {
+    const long_text = "a value far too long for a narrow single-line field to show at once";
+    const field = Widget{
+        .id = 7,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(10, 12, 120, 32),
+        .text = long_text,
+        .text_selection = TextSelection.collapsed(long_text.len),
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Name" },
+        // The retained offset channel: an oversized write clamps to the
+        // farthest the value can scroll, exactly like the textarea's
+        // vertical offset does.
+        .value = 100000,
+    };
+    const max_offset = support.textInputMaxHorizontalScrollOffsetForWidget(field, .{});
+    try std.testing.expect(max_offset > 0);
+    try std.testing.expectEqual(max_offset, support.clampedTextInputHorizontalScrollOffsetForWidget(field, .{}, 100000));
+
+    var zero_offset_field = field;
+    zero_offset_field.value = 0;
+
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, field, .{});
+    const display_list = builder.displayList();
+    var zero_commands: [8]CanvasCommand = undefined;
+    var zero_builder = Builder.init(&zero_commands);
+    try emitWidgetTree(&zero_builder, zero_offset_field, .{});
+    const zero_display_list = zero_builder.displayList();
+
+    // Fill, border, offset focus ring, clip, text, caret, pop.
+    try std.testing.expectEqual(@as(usize, 7), display_list.commandCount());
+    const viewport = textInputViewportForWidget(field, .{}).?;
+    switch (display_list.commands[3]) {
+        .push_clip => |clip| {
+            try std.testing.expectEqual(widgetPartId(7, 16), clip.id);
+            try expectRectApprox(viewport, clip.rect);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // The draw-text origin shifts left by exactly the clamped offset.
+    const scrolled_origin = switch (display_list.commands[4]) {
+        .draw_text => |text| text.origin,
+        else => return error.TestUnexpectedResult,
+    };
+    const resting_origin = switch (zero_display_list.commands[4]) {
+        .draw_text => |text| text.origin,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectApproxEqAbs(resting_origin.x - max_offset, scrolled_origin.x, 0.001);
+    try std.testing.expectEqual(resting_origin.y, scrolled_origin.y);
+    // The end-of-value caret rides the same origin, landing inside the
+    // clip instead of past the field's border.
+    switch (display_list.commands[5]) {
+        .fill_rect => |caret| {
+            try std.testing.expect(caret.rect.x >= viewport.x - 0.001);
+            try std.testing.expect(caret.rect.maxX() <= viewport.maxX() + 0.001);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(CanvasCommand.pop_clip, display_list.commands[6]);
+}
+
+test "the caret keep-visible offset scrolls to the caret and returns home" {
+    const long_text = "a value far too long for a narrow single-line field to show at once";
+    var field = Widget{
+        .id = 7,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(10, 12, 120, 32),
+        .text = long_text,
+        .text_selection = TextSelection.collapsed(long_text.len),
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Name" },
+    };
+    const max_offset = support.textInputMaxHorizontalScrollOffsetForWidget(field, .{});
+    try std.testing.expect(max_offset > 0);
+
+    // Caret at the end, unscrolled: the recompute scrolls forward far
+    // enough that the caret sits inside the visible span.
+    const end_offset = support.textInputCaretVisibleScrollOffsetForWidget(field, .{}, 0);
+    try std.testing.expect(end_offset > 0);
+    try std.testing.expect(end_offset <= max_offset + 0.001);
+    field.value = end_offset;
+    const viewport = textInputViewportForWidget(field, .{}).?;
+    const end_geometry = textGeometryForWidget(field, .{});
+    const end_caret = end_geometry.caret_bounds.?;
+    try std.testing.expect(end_caret.x >= viewport.x - 0.001);
+    try std.testing.expect(end_caret.maxX() <= viewport.maxX() + 0.001);
+
+    // Home: caret back at byte zero scrolls all the way back — the field
+    // never shows trailing emptiness while text could fill it.
+    field.text_selection = TextSelection.collapsed(0);
+    try std.testing.expectEqual(@as(f32, 0), support.textInputCaretVisibleScrollOffsetForWidget(field, .{}, end_offset));
+
+    // A value that fits never scrolls and never adjusts.
+    var short = field;
+    short.text = "short";
+    short.text_selection = TextSelection.collapsed(5);
+    try std.testing.expectEqual(@as(f32, 0), support.textInputMaxHorizontalScrollOffsetForWidget(short, .{}));
+    try std.testing.expectEqual(@as(f32, 0), support.textInputCaretVisibleScrollOffsetForWidget(short, .{}, 25));
+}
+
+test "scrolled single-line selection rects shift with the text origin" {
+    const long_text = "a value far too long for a narrow single-line field to show at once";
+    const scrolled = Widget{
+        .id = 7,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(10, 12, 120, 32),
+        .text = long_text,
+        .text_selection = .{ .anchor = 2, .focus = 9 },
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Name" },
+        .value = 20,
+    };
+    var resting = scrolled;
+    resting.value = 0;
+
+    var commands: [10]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, scrolled, .{});
+    const display_list = builder.displayList();
+    var resting_commands: [10]CanvasCommand = undefined;
+    var resting_builder = Builder.init(&resting_commands);
+    try emitWidgetTree(&resting_builder, resting, .{});
+    const resting_display_list = resting_builder.displayList();
+
+    // Fill, border, focus ring, clip, selection rect, text, selected
+    // glyphs, pop — the same shape at both offsets.
+    try std.testing.expectEqual(display_list.commandCount(), resting_display_list.commandCount());
+    const scrolled_selection = switch (display_list.commands[4]) {
+        .fill_rect => |rect| rect.rect,
+        else => return error.TestUnexpectedResult,
+    };
+    const resting_selection = switch (resting_display_list.commands[4]) {
+        .fill_rect => |rect| rect.rect,
+        else => return error.TestUnexpectedResult,
+    };
+    const scrolled_text = switch (display_list.commands[5]) {
+        .draw_text => |text| text.origin,
+        else => return error.TestUnexpectedResult,
+    };
+    const resting_text = switch (resting_display_list.commands[5]) {
+        .draw_text => |text| text.origin,
+        else => return error.TestUnexpectedResult,
+    };
+    // Selection geometry and the draw-text origin move together, by
+    // exactly the scroll offset.
+    try std.testing.expectApproxEqAbs(@as(f32, 20), resting_selection.x - scrolled_selection.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), resting_text.x - scrolled_text.x, 0.001);
+    try std.testing.expectApproxEqAbs(resting_selection.width, scrolled_selection.width, 0.001);
+}
+
+test "short single-line values emit no clip and an unshifted origin" {
+    const field = Widget{
+        .id = 7,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(10, 12, 120, 32),
+        .text = "short",
+        .text_selection = TextSelection.collapsed(5),
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Name" },
+        // A stale offset on a value that fits clamps to zero: fitting
+        // fields render exactly as they did before fields scrolled.
+        .value = 40,
+    };
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, field, .{});
+    const display_list = builder.displayList();
+    // Fill, border, offset focus ring, text, caret — no clip pair.
+    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
+    for (display_list.commands) |command| {
+        try std.testing.expect(command != .push_clip and command != .pop_clip);
+    }
+    var zero = field;
+    zero.value = 0;
+    var zero_commands: [8]CanvasCommand = undefined;
+    var zero_builder = Builder.init(&zero_commands);
+    try emitWidgetTree(&zero_builder, zero, .{});
+    const zero_display_list = zero_builder.displayList();
+    switch (display_list.commands[3]) {
+        .draw_text => |text| {
+            try std.testing.expectEqual(switch (zero_display_list.commands[3]) {
+                .draw_text => |zero_text| zero_text.origin.x,
+                else => return error.TestUnexpectedResult,
+            }, text.origin.x);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "search fields clip an overflowing value and keep chrome outside the clip" {
+    const long_text = "an overflowing search query that runs past the narrow field";
+    const field = Widget{
+        .id = 9,
+        .kind = .search_field,
+        .frame = geometry.RectF.init(10, 12, 140, 32),
+        .text = long_text,
+        .text_selection = TextSelection.collapsed(long_text.len),
+        .state = .{ .focused = true },
+        .semantics = .{ .label = "Search" },
+        .value = 100000,
+    };
+    try std.testing.expect(support.textInputMaxHorizontalScrollOffsetForWidget(field, .{}) > 0);
+
+    var commands: [24]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try emitWidgetTree(&builder, field, .{});
+    const display_list = builder.displayList();
+
+    var clip_index: ?usize = null;
+    var pop_index: ?usize = null;
+    var text_index: ?usize = null;
+    var caret_index: ?usize = null;
+    var clear_transform_index: ?usize = null;
+    for (display_list.commands, 0..) |command, index| {
+        switch (command) {
+            .push_clip => |clip| {
+                try std.testing.expectEqual(widgetPartId(9, 7), clip.id);
+                try expectRectApprox(textInputViewportForWidget(field, .{}).?, clip.rect);
+                clip_index = index;
+            },
+            .pop_clip => pop_index = index,
+            .draw_text => |text| {
+                if (text.id == widgetPartId(9, 9)) text_index = index;
+            },
+            .fill_rect => |caret| {
+                if (caret.id == widgetPartId(9, 11)) caret_index = index;
+            },
+            .transform => {
+                if (clear_transform_index == null and pop_index != null) clear_transform_index = index;
+            },
+            else => {},
+        }
+    }
+    // Text and caret sit inside the clip pair; the trailing clear
+    // affordance draws after the pop, outside it.
+    try std.testing.expect(clip_index.? < text_index.?);
+    try std.testing.expect(text_index.? < caret_index.?);
+    try std.testing.expect(caret_index.? < pop_index.?);
+    try std.testing.expect(pop_index.? < clear_transform_index.?);
+}

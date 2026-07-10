@@ -17,7 +17,9 @@ const TextSelection = text_model.TextSelection;
 const DesignTokens = token_model.DesignTokens;
 const Widget = widget_model.Widget;
 const snapTextSelection = text_model.snapTextSelection;
+const snapTextOffset = text_model.snapTextOffset;
 const snapTextRange = text_model.snapTextRange;
+const measureTextWidthForFont = text_model.measureTextWidthForFont;
 const nextTextLineEnd = text_model.nextTextLineEnd;
 const isTextBreakByte = text_model.isTextBreakByte;
 const textLineRange = text_model.textLineRange;
@@ -94,6 +96,29 @@ fn widgetTextInputScrollOffset(widget: Widget, tokens: DesignTokens, text_size: 
     return std.math.clamp(widget.value, 0, widgetTextInputMaxScrollOffset(widget, tokens, text_size, text_inset, options));
 }
 
+/// Advance the horizontal scroll math reserves past the last glyph so a
+/// caret parked at the end of the value lands inside the clip instead of
+/// exactly on its trailing edge (the caret bar is one point wide).
+const text_input_caret_reserve: f32 = 1;
+
+/// The single-line field's horizontal scroll offset: the same retained
+/// `value` channel the textarea scrolls vertically, clamped so the field
+/// never shows trailing emptiness while text could fill the span. Zero
+/// whenever the value fits — a short value renders exactly as an
+/// unscrolled field always has.
+fn widgetTextInputHorizontalScrollOffset(widget: Widget, tokens: DesignTokens, text_size: f32, text_inset: f32, options: TextLayoutOptions) f32 {
+    if (options.wrap != .none) return 0;
+    return std.math.clamp(widget.value, 0, widgetTextInputMaxHorizontalScrollOffset(widget, tokens, text_size, text_inset, options));
+}
+
+fn widgetTextInputMaxHorizontalScrollOffset(widget: Widget, tokens: DesignTokens, text_size: f32, text_inset: f32, options: TextLayoutOptions) f32 {
+    if (options.wrap != .none or widget.text.len == 0) return 0;
+    const viewport = widgetTextInputClipRect(widget, tokens, text_size, text_inset, options);
+    if (viewport.width <= 0) return 0;
+    const text_width = measureTextWidthForFont(options.measure, tokens.typography.font_id, widget.text, text_size);
+    return @max(0, text_width + text_input_caret_reserve - viewport.width);
+}
+
 pub fn widgetTextInputOrigin(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32, options: TextLayoutOptions) geometry.PointF {
     if (options.wrap != .none) {
         const scroll_offset = widgetTextInputScrollOffset(widget, tokens, text_size, inset, options);
@@ -102,7 +127,14 @@ pub fn widgetTextInputOrigin(widget: Widget, tokens: DesignTokens, text_size: f3
             widget.frame.y + widgetTextInputVerticalInset(widget, tokens, text_size, options) + text_size - scroll_offset,
         );
     }
-    return textInputOriginForFrame(widget.frame, text_size, inset);
+    // Single-line fields scroll horizontally through the same origin:
+    // selection rects, composition underlines, the caret, and hit-testing
+    // all derive their geometry from this point, so shifting it moves
+    // every text affordance together. The offset stays in logical
+    // coordinates here — `widgetTextInputDrawText` snaps the final point.
+    const scroll_offset = widgetTextInputHorizontalScrollOffset(widget, tokens, text_size, inset, options);
+    const origin = textInputOriginForFrame(widget.frame, text_size, inset);
+    return geometry.PointF.init(origin.x - scroll_offset, origin.y);
 }
 
 pub fn widgetTextInputClipRect(widget: Widget, tokens: DesignTokens, text_size: f32, inset: f32, options: TextLayoutOptions) geometry.RectF {
@@ -145,6 +177,77 @@ pub fn textInputMaxScrollOffsetForWidget(widget: Widget, tokens: DesignTokens) f
 pub fn clampedTextInputScrollOffsetForWidget(widget: Widget, tokens: DesignTokens, offset: f32) f32 {
     if (!widget_access.widgetTextInputKind(widget.kind)) return 0;
     return std.math.clamp(offset, 0, textInputMaxScrollOffsetForWidget(widget, tokens));
+}
+
+/// The furthest a single-line field may scroll horizontally: value width
+/// (plus the caret's own advance) past the visible span, zero when the
+/// value fits or the field wraps.
+pub fn textInputMaxHorizontalScrollOffsetForWidget(widget: Widget, tokens: DesignTokens) f32 {
+    if (!widget_access.widgetTextInputKind(widget.kind)) return 0;
+    const text_size = widgetTextInputSize(widget, tokens);
+    const text_inset = widgetTextInputInset(widget, tokens);
+    const options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
+    return widgetTextInputMaxHorizontalScrollOffset(widget, tokens, text_size, text_inset, options);
+}
+
+pub fn clampedTextInputHorizontalScrollOffsetForWidget(widget: Widget, tokens: DesignTokens, offset: f32) f32 {
+    if (!widget_access.widgetTextInputKind(widget.kind)) return 0;
+    return std.math.clamp(offset, 0, textInputMaxHorizontalScrollOffsetForWidget(widget, tokens));
+}
+
+/// Keep-visible edge margin for the single-line caret: enough neighbor
+/// glyphs stay in view to give the caret context, shrinking with the
+/// field so tiny spans still fit both margins plus the caret.
+fn textInputCaretVisibleMargin(viewport_width: f32) f32 {
+    return @min(8, viewport_width * 0.25);
+}
+
+/// The minimally-adjusted horizontal scroll offset that keeps the
+/// selection's focus end visible inside the field's content rect (with a
+/// small edge margin for context). Fields whose value fits, wrapping
+/// fields, and fields without a selection just clamp — the offset only
+/// moves when the caret would otherwise leave the visible span.
+pub fn textInputCaretVisibleScrollOffsetForWidget(widget: Widget, tokens: DesignTokens, offset: f32) f32 {
+    const clamped = clampedTextInputHorizontalScrollOffsetForWidget(widget, tokens, offset);
+    if (!widget_access.widgetTextInputKind(widget.kind)) return clamped;
+    const selection = widget.text_selection orelse return clamped;
+    const text_size = widgetTextInputSize(widget, tokens);
+    const text_inset = widgetTextInputInset(widget, tokens);
+    const options = widgetTextInputLayoutOptions(widget, tokens, text_size, text_inset);
+    if (options.wrap != .none) return clamped;
+    const viewport = widgetTextInputClipRect(widget, tokens, text_size, text_inset, options);
+    if (viewport.width <= 0) return clamped;
+
+    // Caret x in content (unscrolled) coordinates: the width of the value
+    // up to the caret byte, measured on the same seam the line layout and
+    // selection rects measure with.
+    const caret_offset = snapTextOffset(widget.text, selection.focus);
+    const caret_x = measureTextWidthForFont(options.measure, tokens.typography.font_id, widget.text[0..caret_offset], text_size);
+    const margin = textInputCaretVisibleMargin(viewport.width);
+    var next = clamped;
+    const scrolled_in = caret_x + text_input_caret_reserve + margin - viewport.width;
+    const scrolled_back = caret_x - margin;
+    if (next < scrolled_in) next = scrolled_in;
+    if (next > scrolled_back) next = scrolled_back;
+    return clampedTextInputHorizontalScrollOffsetForWidget(widget, tokens, next);
+}
+
+/// Whether the field's painted text needs the content-rect clip: a
+/// textarea always clips (its overflow scrolls vertically), a single-line
+/// field clips once its value can scroll, and an overflowing placeholder
+/// clips at the same border the value would. Short values emit no clip,
+/// exactly as before fields scrolled.
+pub fn widgetTextInputClipsText(widget: Widget, tokens: DesignTokens, text_size: f32, text_inset: f32, options: TextLayoutOptions) bool {
+    if (widget.kind == .textarea) return true;
+    if (options.wrap != .none) return false;
+    if (widgetTextInputMaxHorizontalScrollOffset(widget, tokens, text_size, text_inset, options) > 0) return true;
+    if (widget.text.len == 0) {
+        const placeholder = widgetPlaceholder(widget);
+        if (placeholder.len == 0) return false;
+        const viewport = widgetTextInputClipRect(widget, tokens, text_size, text_inset, options);
+        return measureTextWidthForFont(options.measure, tokens.typography.font_id, placeholder, text_size) > viewport.width;
+    }
+    return false;
 }
 
 fn widgetTextInputMaxScrollOffset(widget: Widget, tokens: DesignTokens, text_size: f32, text_inset: f32, options: TextLayoutOptions) f32 {

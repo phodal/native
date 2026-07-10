@@ -950,6 +950,7 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\
         \\    const dev = b.addSystemCommand(&.{ "native", "dev", "--manifest", "app.zon", "--binary" });
         \\    dev.addFileArg(exe.getEmittedBin());
+        \\    addWebView2RuntimeRunFiles(b, target, dev, web_engine, native_sdk_path);
         \\    dev.step.dependOn(&exe.step);
         \\    dev.step.dependOn(&frontend_install.step);
         \\    const dev_step = b.step("dev", "Run the frontend dev server and native shell");
@@ -973,6 +974,11 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\        b.fmt("zig-out/package/{s}-0.1.0-{s}-{s}{s}", .{ app_exe_name, @tagName(package_target), optimize_name, packageSuffix(package_target) }),
         \\        "--binary",
         \\    });
+        \\    // The CLI resolves SDK-owned package inputs (the vendored WebView2
+        \\    // loader) from the framework root; a PATH-resolved `native` could
+        \\    // belong to a different checkout than the one this build compiled
+        \\    // against, so hand the same root over explicitly.
+        \\    package.setEnvironmentVariable("NATIVE_SDK_PATH", b.pathFromRoot(native_sdk_path));
         \\    package.addFileArg(exe.getEmittedBin());
         \\    package.addArgs(&.{ "--web-engine", @tagName(web_engine), "--cef-dir", cef_dir });
         \\    if (cef_auto_install) package.addArg("--cef-auto-install");
@@ -1194,9 +1200,10 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\        "third_party/webview2/x64/WebView2Loader.dll";
         \\}
         \\
-        \\/// `zig build run` executes the cached artifact, which has no installed
-        \\/// WebView2Loader.dll beside it; the vendored loader's directory goes on
-        \\/// the run step's PATH so the host's LoadLibrary resolves it in dev runs.
+        \\/// `zig build run` and `zig build dev` execute the cached artifact, which
+        \\/// has no installed WebView2Loader.dll beside it; the vendored loader's
+        \\/// directory goes on the step's PATH so the host's LoadLibrary resolves it
+        \\/// (`native dev` passes its environment on to the app it spawns).
         \\fn addWebView2RuntimeRunFiles(b: *std.Build, target: std.Build.ResolvedTarget, run: *std.Build.Step.Run, web_engine: WebEngineOption, native_sdk_path: []const u8) void {
         \\    if (web_engine != .system) return;
         \\    if (target.result.os.tag != .windows) return;
@@ -2867,6 +2874,8 @@ test "writeDefaultApp emits Vite project files" {
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "frontend_build.step.dependOn(&frontend_install.step)") != null);
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "\"native\", \"dev\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "dev.step.dependOn(&frontend_install.step)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "addWebView2RuntimeRunFiles(b, target, dev, web_engine, native_sdk_path)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "package.setEnvironmentVariable(\"NATIVE_SDK_PATH\", b.pathFromRoot(native_sdk_path))") != null);
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "chromium") != null);
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "cef-dir") != null);
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "src/platform/macos/cef_host.mm") != null);

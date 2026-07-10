@@ -1818,20 +1818,12 @@ static uint64_t gpuTimestampNs() {
     return seconds * 1000000000ull + remainder * 1000000000ull / (uint64_t)frequency.QuadPart;
 }
 
-/* Device scale for a gpu_surface child. GetDpiForWindow is resolved
- * dynamically so the host keeps working on Windows versions (and Wine
- * prefixes) that predate per-monitor DPI. In a DPI-unaware process the
- * call reports 96, so logical size == client pixels, matching how the
- * rest of this host treats coordinates. */
+/* Device scale for a gpu_surface child: the shared per-window DPI
+ * resolution (dpiForWindow) over the 96-dpi baseline. In a DPI-unaware
+ * process the resolved DPI is 96, so logical size == client pixels,
+ * matching how the rest of this host treats coordinates. */
 static double gpuSurfaceScale(HWND hwnd) {
-    using GetDpiForWindowFn = UINT(WINAPI *)(HWND);
-    static GetDpiForWindowFn get_dpi = reinterpret_cast<GetDpiForWindowFn>(
-        reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow")));
-    if (get_dpi && hwnd) {
-        const UINT dpi = get_dpi(hwnd);
-        if (dpi > 0) return (double)dpi / 96.0;
-    }
-    return 1.0;
+    return hwnd ? (double)dpiForWindow(hwnd) / 96.0 : 1.0;
 }
 
 static NativeView *gpuSurfaceViewForHwnd(Host *host, HWND hwnd) {
@@ -1924,8 +1916,17 @@ static Window *chromelessWindowForHwnd(Host *host, HWND hwnd) {
     return nullptr;
 }
 
-/* Per-window dpi with the same dynamic resolution (and the same 96
- * fallback) as gpuSurfaceScale. */
+static UINT systemDpi();
+
+/* Per-window DPI, resolved dynamically to mirror the awareness chain
+ * the embedded manifest declares. GetDpiForWindow (Windows 10 1607+,
+ * per-monitor v2 — modern Wine prefixes export it too) is preferred;
+ * where it is absent, shcore's GetDpiForMonitor reports the effective
+ * DPI of the window's monitor (Windows 8.1+, matching per-monitor v1
+ * awareness); where shcore is absent too, the system DPI (matching
+ * system-DPI awareness; older Wine prefixes land here through
+ * systemDpi's GetDeviceCaps branch). A DPI-unaware process reports 96
+ * on every branch, so logical points == client pixels there. */
 static UINT dpiForWindow(HWND hwnd) {
     using GetDpiForWindowFn = UINT(WINAPI *)(HWND);
     static GetDpiForWindowFn get_dpi = reinterpret_cast<GetDpiForWindowFn>(
@@ -1934,7 +1935,22 @@ static UINT dpiForWindow(HWND hwnd) {
         const UINT dpi = get_dpi(hwnd);
         if (dpi > 0) return dpi;
     }
-    return 96;
+    using GetDpiForMonitorFn = HRESULT(WINAPI *)(HMONITOR, int, UINT *, UINT *);
+    static GetDpiForMonitorFn get_monitor_dpi = []() -> GetDpiForMonitorFn {
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        if (!shcore) return nullptr;
+        return reinterpret_cast<GetDpiForMonitorFn>(
+            reinterpret_cast<void *>(GetProcAddress(shcore, "GetDpiForMonitor")));
+    }();
+    if (get_monitor_dpi && hwnd) {
+        HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        UINT dpi_x = 0;
+        UINT dpi_y = 0;
+        /* 0 = MDT_EFFECTIVE_DPI, spelled numerically so headers that
+         * predate shellscalingapi.h still compile. */
+        if (monitor && get_monitor_dpi(monitor, 0, &dpi_x, &dpi_y) == S_OK && dpi_y > 0) return dpi_y;
+    }
+    return systemDpi();
 }
 
 /* Caption metrics MUST scale with the monitor the window sits on, or a
@@ -1952,10 +1968,11 @@ static int systemMetricForDpi(int index, UINT dpi) {
 /* System DPI for sizing a window that does not exist yet (creation
  * scales the requested logical content size to physical pixels before
  * the first monitor is known; WM_DPICHANGED re-derives the frame when
- * the window lands elsewhere). GetDpiForSystem is resolved dynamically
- * (Windows 10 1607+) with the desktop DC's LOGPIXELSY, then 96, as
- * fallbacks. A DPI-unaware process reports 96 on every branch, keeping
- * points == pixels exactly as before. */
+ * the window lands elsewhere), and the tail of dpiForWindow's chain
+ * where no per-monitor API is available. GetDpiForSystem is resolved
+ * dynamically (Windows 10 1607+) with the desktop DC's LOGPIXELSY,
+ * then 96, as fallbacks. A DPI-unaware process reports 96 on every
+ * branch, keeping points == pixels exactly as before. */
 static UINT systemDpi() {
     using GetDpiForSystemFn = UINT(WINAPI *)();
     static GetDpiForSystemFn get_dpi = reinterpret_cast<GetDpiForSystemFn>(

@@ -705,6 +705,14 @@ pub fn build(b: *std.Build) void {
         // entirely.
         .{ .path = "assets/native-sdk.manifest", .pattern = "<dpiAware xmlns=\"http://schemas.microsoft.com/SMI/2005/WindowsSettings\">true/pm</dpiAware>" },
         .{ .path = "assets/native-sdk.manifest", .pattern = "<dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">PerMonitorV2, PerMonitor</dpiAwareness>" },
+        // The host's runtime DPI resolution mirrors that manifest chain:
+        // GetDpiForWindow, then shcore's GetDpiForMonitor (per-monitor v1),
+        // then the system DPI. Without the per-monitor-v1 and system rungs
+        // an aware process on a pre-1607 system would render at real
+        // physical pixels while the host still scaled everything at 1x.
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "GetProcAddress(shcore, \"GetDpiForMonitor\")" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "return systemDpi();" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-text-command-bridge", "Verify AppKit GPU text widgets route native text commands", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)selectAll:(id)sender" },

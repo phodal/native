@@ -2,9 +2,30 @@
 
 All notable changes to the Native SDK (formerly zero-native) will be documented in this file.
 
-## 0.4.1
+## 0.4.2
 
 <!-- release:start -->
+
+### Improvements
+
+- **Windows rendering is DPI-aware and sharper**: Windows apps now declare Per-Monitor V2 DPI awareness, each window carries its own device scale, and canvases, native child views, hidden-titlebar sizing, and explicit WebView frames re-render/re-round correctly when moved across mixed-DPI monitors (#81).
+- **Smoother canvas geometry**: rounded-rect fills and strokes now render through continuous coverage while eligible hairline borders snap to crisp device-pixel columns, so arcs stay anti-aliased and 1px borders stay sharp under the default house and Geist packs (#81).
+- **Canonical package and documentation metadata**: npm package metadata, release automation, docs, templates, and examples now point at the renamed `vercel-labs/native` repository and `native-sdk.dev`; `version:sync` stamps repository/homepage metadata into platform packages and `version:check` rejects drift before publish (#78, #80).
+
+### Bug Fixes
+
+- **Windows embedded WebView is real from a plain checkout**: the WebView2 SDK header and loader are vendored under `third_party/webview2/` (BSD-licensed), every build graph puts the header on the include path, and the host now refuses to compile with the WebView layer silently stubbed — previously every Windows build shipped the stub and WebView loads reported `WebViewNotFound` at runtime (#86).
+- **WebView2 host conformance fixes**: a missing lambda capture in the bridge message handler, a mingw-compatible WRL event-handler factory, an `EventToken` shim, and STA COM initialization on the host thread let WebView2 environment creation and bridge messaging run on Windows (#86).
+- **WebView2Loader.dll ships with the app**: `zig build` installs the architecture's loader next to the executable, `zig build run` resolves it during dev runs, generated frontend/package commands carry `NATIVE_SDK_PATH`, and `native package --target windows` includes the loader in the artifact (the Evergreen WebView2 runtime itself is preinstalled on current Windows) (#86).
+- **Checkbox marks use the vector core**: checked boxes now draw one stroked polyline with round caps and joins instead of two aliased diagonal lines, and stroke caps ride the GPU packet path so the host and reference renderer agree (#87).
+- **Path geometry lifetimes are owned by the builder**: chart, spinner, and checkbox path commands no longer borrow threadlocal frame scratch, so separately emitted trees cannot alias each other's path elements (#87).
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.4.1
 
 ### Bug Fixes
 
@@ -14,7 +35,6 @@ All notable changes to the Native SDK (formerly zero-native) will be documented 
 
 - @ctate
 - @lzitser23
-<!-- release:end -->
 
 ## 0.4.0
 

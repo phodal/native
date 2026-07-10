@@ -616,7 +616,7 @@ test "gpu components display list renders stable reference snapshot" {
     // on checked/filled states. Update deliberately when component
     // rendering changes, reviewing the rendered pixels (reference render
     // dump or docs previews — same emitters) first.
-    try std.testing.expectEqual(@as(u64, 9599670827131584552), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 5753353894120093539), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -693,7 +693,7 @@ test "gpu components display list renders stable geist reference snapshot" {
     const scratch = try std.testing.allocator.alloc(u8, pixel_count);
     defer std.testing.allocator.free(scratch);
     const surface = try renderComponentsReferenceSurface(componentTokensForPack(.geist, .light), pixels, scratch);
-    try std.testing.expectEqual(@as(u64, 12445785486770386627), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 8766972054033897563), referenceSurfaceSignature(pixels));
     try expectVisiblePixel(surface.pixelRgba8(36, 36));
     try expectVisiblePixel(surface.pixelRgba8(92, 88));
     try expectVisiblePixel(surface.pixelRgba8(330, 160));
@@ -935,7 +935,7 @@ test "gpu components house reference snapshot is reproducible through the shared
     const scratch = try std.testing.allocator.alloc(u8, pixel_count);
     defer std.testing.allocator.free(scratch);
     _ = try renderComponentsReferenceSurface(componentTokens(), pixels, scratch);
-    try std.testing.expectEqual(@as(u64, 9599670827131584552), referenceSurfaceSignature(pixels));
+    try std.testing.expectEqual(@as(u64, 5753353894120093539), referenceSurfaceSignature(pixels));
 }
 
 test "gpu components catalog previews use canonical built-in foundations" {

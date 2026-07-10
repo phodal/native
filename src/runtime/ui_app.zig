@@ -659,6 +659,15 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             on_close: ?MsgT = null,
             installed: bool = false,
             canvas_size: geometry.SizeF = .{ .width = 1, .height = 1 },
+            /// The device scale of THIS window's surface, adopted from
+            /// its own frame and resize events. Secondary windows can sit
+            /// on a different-density monitor than the main canvas, so
+            /// the scale is per-window state: the app owns ONE appearance,
+            /// but each slot's rebuild stamps its own scale into
+            /// `pixel_snap.scale` (`slotEffectiveTokens`) so this window's
+            /// hairlines snap against the grid it actually renders on.
+            /// The main canvas keeps its scale in `Self.pixel_snap_scale`.
+            pixel_snap_scale: f32 = 1,
             tree: ?Ui.Tree = null,
             arena_index: usize = 0,
             arenas: [2]std.heap.ArenaAllocator,
@@ -1156,6 +1165,17 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 .pack = self.options.theme,
             });
             tokens.pixel_snap.scale = self.pixel_snap_scale;
+            return tokens;
+        }
+
+        /// The design tokens for a secondary window's rebuild: the same
+        /// app-owned appearance as `effectiveTokens`, restamped with the
+        /// SLOT's device scale. Each window snaps hairlines against its
+        /// own monitor's grid — only the scale differs per window, never
+        /// the appearance.
+        fn slotEffectiveTokens(self: *const Self, slot: *const WindowSlot) canvas.DesignTokens {
+            var tokens = self.effectiveTokens();
+            tokens.pixel_snap.scale = slot.pixel_snap_scale;
             return tokens;
         }
 
@@ -1751,6 +1771,10 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             slot.on_close = descriptor.on_close;
             slot.installed = false;
             slot.canvas_size = .{ .width = descriptor.width, .height = descriptor.height };
+            // Until this window's first frame reports its real density,
+            // assume the main canvas's — new windows usually open on the
+            // same monitor, and the installing frame corrects the guess.
+            slot.pixel_snap_scale = self.pixel_snap_scale;
             slot.tree = null;
             slot.arena_index = 0;
             self.window_slot_count += 1;
@@ -1827,7 +1851,7 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
 
         fn rebuildWindowSlot(self: *Self, runtime: *Runtime, slot: *WindowSlot) anyerror!void {
             const window_view = self.options.window_view orelse return;
-            const tokens = runtime.tokensWithTextMeasure(self.effectiveTokens());
+            const tokens = runtime.tokensWithTextMeasure(self.slotEffectiveTokens(slot));
             const next_index = slot.arena_index ^ 1;
             _ = slot.arenas[next_index].reset(.retain_capacity);
             var ui = Ui.init(slot.arenas[next_index].allocator());
@@ -2802,13 +2826,24 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         fn handleWindowSlotFrame(self: *Self, runtime: *Runtime, frame_event: platform.GpuSurfaceFrameEvent) anyerror!void {
             const slot = self.windowSlotByCanvasLabel(frame_event.label) orelse return;
             slot.window_id = frame_event.window_id;
+            const scale = normalizedSurfaceScale(frame_event.scale_factor);
             var installing = false;
             if (!slot.installed) {
                 installing = true;
                 slot.canvas_size = frame_event.size;
+                slot.pixel_snap_scale = scale;
                 try self.rebuildWindowSlot(runtime, slot);
-                _ = try runtime.emitCanvasWidgetDisplayList(slot.window_id, slot.canvasLabel(), runtime.tokensWithTextMeasure(self.effectiveTokens()));
+                _ = try runtime.emitCanvasWidgetDisplayList(slot.window_id, slot.canvasLabel(), runtime.tokensWithTextMeasure(self.slotEffectiveTokens(slot)));
                 slot.installed = true;
+            } else if (@abs(slot.pixel_snap_scale - scale) > 0.001) {
+                // THIS window moved to a different density (the main
+                // canvas may still be on its old monitor): adopt the
+                // slot's scale and rebuild so the re-emit inside
+                // `rebuildWindowSlot` re-snaps this window's hairlines —
+                // static-token apps included, because the stored copy
+                // holds the stale scale (`rebuildEmitsTokens`).
+                slot.pixel_snap_scale = scale;
+                try self.rebuildWindowSlot(runtime, slot);
             }
             try self.presentFrame(runtime, frame_event, slot.canvasLabel(), installing);
         }
@@ -2921,13 +2956,22 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         }
 
         fn handleResize(self: *Self, runtime: *Runtime, resize_event: platform.GpuSurfaceResizeEvent) anyerror!void {
+            // Resize events carry the surface density alongside the frame:
+            // a move to a different-DPI monitor can arrive as a resize
+            // whose LOGICAL size is unchanged (the OS rescales the frame),
+            // so the scale must be adopted BEFORE the rebuild below — the
+            // rebuild's re-emit then stamps freshly-snapped tokens, and
+            // `rebuildEmitsTokens` sees the stored copy's stale scale and
+            // forces the emission even when nothing else changed.
             if (!std.mem.eql(u8, resize_event.label, self.options.canvas_label)) {
                 const slot = self.windowSlotByCanvasLabel(resize_event.label) orelse return;
                 slot.canvas_size = .{ .width = resize_event.frame.width, .height = resize_event.frame.height };
+                slot.pixel_snap_scale = normalizedSurfaceScale(resize_event.scale_factor);
                 if (slot.installed) try self.rebuildWindowSlot(runtime, slot);
                 return;
             }
             self.canvas_size = .{ .width = resize_event.frame.width, .height = resize_event.frame.height };
+            self.pixel_snap_scale = normalizedSurfaceScale(resize_event.scale_factor);
             if (!self.installed) return;
             // Fullscreen transitions resize the canvas AND flip the
             // chrome overlay insets (macOS hides the titlebar band and

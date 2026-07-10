@@ -2,9 +2,25 @@
 
 All notable changes to the Native SDK (formerly zero-native) will be documented in this file.
 
-## 0.4.2
+## 0.4.3
 
 <!-- release:start -->
+
+### Improvements
+
+- **Linear-light edge blending**: anti-aliased fringes on opaque rounded rectangles, path fills, and strokes now composite through a linear-light coverage path, removing the dark rims that sRGB blending produced on curved geometry while keeping opaque interiors, glyph coverage, and translucent overlays byte-identical (#89).
+
+### Bug Fixes
+
+- **Single-line fields handle overflowing values**: text, selection rects, composition underlines, and the caret now clip to the field's content rect, and a horizontal scroll offset keeps the caret visible — typing past the edge scrolls the value, Home scrolls back, and deleting never leaves trailing emptiness. Covers text fields, inputs, search fields, and comboboxes; values that fit render exactly as before (#90).
+- **Cross-drive apps on Windows**: `native dev|build|test` no longer fails with `expected path relative to build root; found absolute path` when the app and the npm-installed SDK live on different drives — the generated build graph now bridges volumes with a `.native/sdk` directory junction (no admin rights needed) and keeps the zon dependency relative; the junction is retargeted automatically when the SDK moves or upgrades. Where the bridge cannot apply (`native eject`, full-shape `native init`, or a filesystem that refuses junctions), the CLI explains the cross-volume constraint and both ways out instead of writing a build Zig would reject (#92).
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.4.2
 
 ### Improvements
 
@@ -23,7 +39,6 @@ All notable changes to the Native SDK (formerly zero-native) will be documented 
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.4.1
 

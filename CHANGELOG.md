@@ -2,9 +2,27 @@
 
 All notable changes to the Native SDK (formerly zero-native) will be documented in this file.
 
-## 0.4.3
+## 0.4.4
 
 <!-- release:start -->
+
+### New Features
+
+- **Native-only host builds (Windows)**: the build graph now infers web use from app.zon — a `.frontend` block, the `"webview"` capability, a `.shell` webview view, or the Chromium engine — and an app that declares none of them compiles its Windows host without the embedded WebView layer: no WebView2 header, no `WebView2Loader.dll` installed, staged, or referenced by the executable. A new `.webview_layer = "auto"|"include"|"exclude"` manifest field (and `-Dweb-layer`) overrides the inference, an exclude that contradicts a web declaration is rejected at validate, configure, and package time, and a native-only build that reaches webview creation at runtime fails fast with a teaching `WebViewLayerNotBuilt` error. `native check` and the package report print the web-layer verdict, and a CI cross-audit asserts the presence/absence of the loader reference in real cross-compiled executables (#107).
+- **Native-only host builds (Linux)**: the WebKitGTK compile seam mirrors the Windows one — an app whose app.zon declares no web use compiles its GTK host with `NATIVE_SDK_ALLOW_WEBKITGTK_STUB`, so the executable neither links `webkitgtk-6.0` nor references any `webkit_`/`jsc_` symbol, building needs no WebKitGTK development package, and users need no `libwebkitgtk` at runtime. The web-layer auditor (`tools/audit_web_layer.zig`) grew a hand-rolled ELF reader (DT_NEEDED entries + dynamic symbols) that CI runs both ways: the native-only fixture must scan clean even with the dev package installed, and the Linux canvas smoke now builds on a runner without WebKitGTK at all. `native package` refuses to package a WebKitGTK-linking binary under a native-only decision, record→replay and automation-driven sessions are pinned on native-only apps, and the macOS GPU dashboard smoke asserts a native-only app spawns zero WebKit helper processes (#110).
+
+### Improvements
+
+- **Zig 0.16 guidance**: a new `zig` skill (`native skills get zig`) maps each pre-0.16 std idiom's compile error to the current one — `std.Io` file IO and writers, unmanaged `ArrayList`, `main(std.process.Init)`, spawning, clocks, `{t}`/`{f}` formatting, `build.zig` modules — with the same content for humans as the docs' Zig 0.16 Notes page; the native-ui skill carries the short table, and a failing `native build|test|dev` now points at the catalog when std members come up missing (#105).
+- **Lazy Linux WebView startup**: GTK windows now create only GTK chrome at window creation and materialize the main `WebKitWebView` on first web use, so canvas-only apps do not start WebKit processes on Linux; child-WebView bridge responses no longer require a main WebView to exist (#106).
+
+### Contributors
+
+- @ctate
+- @WhiteHades
+<!-- release:end -->
+
+## 0.4.3
 
 ### Improvements
 
@@ -18,7 +36,8 @@ All notable changes to the Native SDK (formerly zero-native) will be documented 
 ### Contributors
 
 - @ctate
-<!-- release:end -->
+- @fleeting-zone
+- @kvnwdev
 
 ## 0.4.2
 

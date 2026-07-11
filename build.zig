@@ -483,16 +483,24 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/linux/gtk_host.c", .pattern = "#define NATIVE_SDK_GST_STATE_CHANGE_ASYNC 2" },
     });
     // The embedded-WebView layer must stay real AND declare-to-use: the
-    // vendored WebView2 SDK header turns the guard on, the standard build
-    // graph puts it on the include path exactly when app.zon declares web
-    // use (`if (web_layer)`), and only that native-only branch may opt
-    // into the stub define — a web build that cannot see the header still
-    // fails at compile time instead of quietly shipping the stubbed host
-    // (whose WebView loads report WebViewNotFound at runtime).
+    // standard build graph puts the vendored WebView2 SDK header on the
+    // include path exactly when app.zon declares web use (`if
+    // (web_layer)`), and only the native-only branch passes the stub
+    // define. In the guard the stub define is tested FIRST, before
+    // header visibility: on a machine where the WebView2 SDK headers are
+    // reachable through the system include paths, an
+    // include-path-decides guard would compile the full layer into a
+    // native-only build and reintroduce the WebView2Loader.dll reference
+    // its executable must not carry. Without the define the header is
+    // required — a web build that cannot see it fails at compile time
+    // instead of quietly shipping the stubbed host (whose WebView loads
+    // report WebViewNotFound at runtime).
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-windows-webview2-vendor", "Verify the vendored WebView2 SDK stays wired into every web-declaring Windows build graph", &.{
         .{ .path = "third_party/webview2/include/WebView2.h", .pattern = "CreateCoreWebView2EnvironmentWithOptions" },
         .{ .path = "third_party/webview2/include/EventToken.h", .pattern = "EventRegistrationToken" },
         .{ .path = "third_party/webview2/LICENSE.txt", .pattern = "Redistribution and use in source and binary forms" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "#if defined(NATIVE_SDK_ALLOW_WEBVIEW2_STUB)" },
+        .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "#elif __has_include(<WebView2.h>) && __has_include(<wrl.h>)" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "#error \"WebView2.h not found" },
         .{ .path = "src/platform/windows/webview2_host.cpp", .pattern = "LoadLibraryW(L\"WebView2Loader.dll\")" },
         .{ .path = "build/app.zig", .pattern = ".system => if (web_layer) {" },

@@ -585,10 +585,12 @@ fn linkPlatform(b: *std.Build, dep: *std.Build.Dependency, target: std.Build.Res
             } else {
                 // Native-only app (nothing in app.zon declares web use):
                 // compile the host without the embedded-WebView layer.
-                // The stub define opts into the header-less compile, the
-                // WebView2 include path stays off, and no
-                // WebView2Loader.dll is installed or path-wired — the
-                // executable carries no reference to it at all.
+                // The stub define excludes the layer outright — the host
+                // honors it before probing for the WebView2 header, so
+                // the layer stays out even on machines where the SDK
+                // headers are reachable through the system include paths
+                // — no WebView2Loader.dll is installed or path-wired,
+                // and the executable carries no reference to it at all.
                 app_mod.addCSourceFile(.{ .file = dep.path("src/platform/windows/webview2_host.cpp"), .flags = &.{ "-std=c++17", "-DNATIVE_SDK_ALLOW_WEBVIEW2_STUB" } });
             },
             .chromium => {

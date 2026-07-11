@@ -525,9 +525,11 @@ fn runCheck(allocator: std.mem.Allocator, io: std.Io, strict: bool) !void {
     tooling.manifest.printDiagnostic(result);
     if (!result.ok) return error.InvalidManifest;
     // The build-graph web-layer inference, surfaced where authors look:
-    // whether this app ships the embedded web layer, and why.
+    // whether this app ships the embedded web layer, and why. `check`
+    // takes no engine flag, so the manifest's own engine is the resolved
+    // engine here.
     const metadata = try tooling.manifest.readMetadata(allocator, io, "app.zon");
-    if (tooling.manifest.webLayer(metadata)) |layer| {
+    if (tooling.manifest.webLayerFromManifest(metadata)) |layer| {
         std.debug.print("web layer: {s} ({s})\n", .{ if (layer.enabled) "included" else "none", layer.sourceText() });
     } else |_| {
         // Contradictions and invalid values were already rejected by the

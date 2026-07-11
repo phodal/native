@@ -5,6 +5,12 @@
 
 const std = @import("std");
 
+/// The shared web-layer inference contract: this build graph is one thin
+/// adapter over it (the CLI's manifest tooling and the app runner are the
+/// others), feeding it the inputs only this boundary sees — the
+/// `-Dweb-engine` and `-Dweb-layer` flags resolved against app.zon.
+const web_layer_contract = @import("../src/primitives/app_manifest/web_layer.zig");
+
 const PlatformOption = enum {
     auto,
     null,
@@ -20,16 +26,9 @@ const TraceOption = enum {
     all,
 };
 
-const WebEngineOption = enum {
-    system,
-    chromium,
-};
+const WebEngineOption = web_layer_contract.WebEngine;
 
-const WebLayerOption = enum {
-    auto,
-    include,
-    exclude,
-};
+const WebLayerOption = web_layer_contract.WebViewLayer;
 
 pub const AppOptions = struct {
     name: []const u8,
@@ -706,7 +705,7 @@ const AppManifestBuildConfig = struct {
     /// The first web declaration found (for teaching messages), or null
     /// when app.zon declares no web use. `web_engine = "system"` alone is
     /// NOT web intent — it is the default in many canvas manifests.
-    web_declaration: ?[]const u8 = null,
+    web_declaration: ?web_layer_contract.Declaration = null,
 };
 
 /// The lenient app.zon shape the build graph parses for inference: only
@@ -752,67 +751,33 @@ fn appManifestBuildConfig(b: *std.Build, app_root: []const u8) AppManifestBuildC
     // The fallback for a manifest this lenient parse cannot read keeps
     // the web layer (see AppManifestBuildConfig): a shape mismatch here
     // is not proof the app declares no web use.
-    const fallback: AppManifestBuildConfig = .{ .web_declaration = "an app.zon the build graph could not parse" };
+    const fallback: AppManifestBuildConfig = .{ .web_declaration = .unreadable_manifest };
     const source = b.build_root.handle.readFileAlloc(b.graph.io, appPath(b, app_root, "app.zon"), b.allocator, .limited(1024 * 1024)) catch return fallback;
     const source_z = b.allocator.dupeZ(u8, source) catch return fallback;
     @setEvalBranchQuota(2000);
     const raw = std.zon.parse.fromSliceAlloc(InferenceManifest, b.allocator, source_z, null, .{ .ignore_unknown_fields = true }) catch return fallback;
-    var config: AppManifestBuildConfig = .{
-        .web_engine = parseWebEngine(raw.web_engine) orelse .system,
+    return .{
+        .web_engine = web_layer_contract.parseWebEngine(raw.web_engine) orelse .system,
         .cef_dir = raw.cef.dir,
         .cef_auto_install = raw.cef.auto_install,
-        .webview_layer = parseWebLayer(raw.webview_layer) orelse @panic("app.zon .webview_layer must be \"auto\", \"include\", or \"exclude\""),
+        .webview_layer = web_layer_contract.parseWebViewLayer(raw.webview_layer) orelse @panic("app.zon .webview_layer must be \"auto\", \"include\", or \"exclude\""),
+        .web_declaration = web_layer_contract.manifestDeclaration(raw),
     };
-    config.web_declaration = blk: {
-        if (raw.frontend != null) break :blk "a .frontend block";
-        for (raw.capabilities) |capability| {
-            if (std.mem.eql(u8, capability, "webview")) break :blk "the \"webview\" capability";
-        }
-        for (raw.shell.windows) |window| {
-            for (window.views) |view| {
-                if (std.mem.eql(u8, view.kind, "webview")) break :blk "a .shell webview view";
-            }
-        }
-        break :blk null;
-    };
-    return config;
 }
 
-/// The web-layer decision for this build: an app is WEB when app.zon
-/// declares web use (a .frontend block, the "webview" capability, a
-/// .shell webview view) or the build resolves to the Chromium engine;
-/// otherwise it is NATIVE-ONLY and the platform host compiles without
-/// the embedded-WebView layer. `.webview_layer` (and `-Dweb-layer`)
-/// override the inference — but an exclude that contradicts a web
-/// declaration is a hard configure error, never a silently broken app.
+/// The web-layer decision for this build: the shared contract fed this
+/// boundary's inputs — the manifest declarations from the lenient parse
+/// and the engine RESOLVED from `-Dweb-engine` orelse app.zon. WEB means
+/// the embedded-WebView layer compiles in; NATIVE-ONLY compiles the host
+/// without it. `.webview_layer` (and `-Dweb-layer`) override the
+/// inference — but an exclude that contradicts a web declaration is a
+/// hard configure error, never a silently broken app.
 fn resolveWebLayer(config: AppManifestBuildConfig, web_engine: WebEngineOption, override: ?WebLayerOption) bool {
     const setting = override orelse config.webview_layer;
-    const declaration: ?[]const u8 = config.web_declaration orelse
-        (if (web_engine == .chromium) "the Chromium web engine" else null);
-    return switch (setting) {
-        .include => true,
-        .auto => declaration != null,
-        .exclude => {
-            if (declaration) |reason| {
-                std.debug.panic(
-                    "the web layer is excluded ({s}) but the app declares web use ({s}); remove the exclude or drop the web declaration",
-                    .{ if (override != null) "-Dweb-layer=exclude" else "app.zon .webview_layer = \"exclude\"", reason },
-                );
-            }
-            return false;
-        },
-    };
-}
-
-fn parseWebEngine(value: []const u8) ?WebEngineOption {
-    if (std.mem.eql(u8, value, "system")) return .system;
-    if (std.mem.eql(u8, value, "chromium")) return .chromium;
-    return null;
-}
-
-fn parseWebLayer(value: []const u8) ?WebLayerOption {
-    if (std.mem.eql(u8, value, "auto")) return .auto;
-    if (std.mem.eql(u8, value, "include")) return .include;
-    if (std.mem.eql(u8, value, "exclude")) return .exclude;
-    return null;
+    const declaration = web_layer_contract.foldEngine(config.web_declaration, web_engine);
+    const decision = web_layer_contract.decide(setting, declaration) catch std.debug.panic(
+        "the web layer is excluded ({s}) but the app declares web use ({s}); remove the exclude or drop the web declaration",
+        .{ if (override != null) "-Dweb-layer=exclude" else "app.zon .webview_layer = \"exclude\"", declaration.?.text() },
+    );
+    return decision.enabled;
 }

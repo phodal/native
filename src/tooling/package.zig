@@ -89,12 +89,15 @@ pub const PackageStats = struct {
 };
 
 /// The web-layer verdict for a package, from the same declare-to-use
-/// inference the build graph runs. Metadata that cannot be inferred
-/// (invalid or contradictory `.webview_layer`) keeps the layer here —
-/// `createPackage` refuses those loudly up front, and the direct
-/// artifact helpers must not silently strip a layer on bad input.
-fn webLayerFor(metadata: manifest_tool.Metadata) manifest_tool.WebLayer {
-    return manifest_tool.webLayer(metadata) catch .{ .enabled = true, .reason = .declared_include };
+/// inference the build graph runs — fed the RESOLVED engine
+/// (`--web-engine` orelse app.zon, resolved by the CLI before packaging)
+/// so a Chromium flag on a system manifest still ships the layer.
+/// Metadata that cannot be inferred (invalid or contradictory
+/// `.webview_layer`) keeps the layer here — `createPackage` refuses
+/// those loudly up front, and the direct artifact helpers must not
+/// silently strip a layer on bad input.
+fn webLayerFor(metadata: manifest_tool.Metadata, web_engine: WebEngine) manifest_tool.WebLayer {
+    return manifest_tool.webLayer(metadata, web_engine) catch .{ .enabled = true, .reason = .declared_include };
 }
 
 /// The verdict line's engine half: what web layer this artifact ships.
@@ -116,9 +119,9 @@ pub fn artifactName(buffer: []u8, metadata: manifest_tool.Metadata, target: Pack
 
 pub fn createPackage(allocator: std.mem.Allocator, io: std.Io, options: PackageOptions) !PackageStats {
     // The package boundary of the reject-conflicts contract: a manifest
-    // that excludes the web layer while declaring web content never
-    // becomes an artifact.
-    _ = manifest_tool.webLayer(options.metadata) catch |err| {
+    // that excludes the web layer while declaring web content — or while
+    // the resolved engine is Chromium — never becomes an artifact.
+    _ = manifest_tool.webLayer(options.metadata, options.web_engine) catch |err| {
         switch (err) {
             error.WebViewLayerConflict => std.debug.print("error: {s}\n", .{manifest_tool.web_layer_conflict_message}),
             error.InvalidWebViewLayer => std.debug.print("error: app.zon webview_layer is invalid - expected \"auto\", \"include\", or \"exclude\"\n", .{}),
@@ -222,7 +225,7 @@ pub fn createMacosApp(allocator: std.mem.Allocator, io: std.Io, options: Package
         .signing_mode = options.signing.mode,
         .asset_count = bundle_stats.asset_count,
         .web_engine = options.web_engine,
-        .web_layer = webLayerFor(options.metadata),
+        .web_layer = webLayerFor(options.metadata, options.web_engine),
     };
 }
 
@@ -243,7 +246,7 @@ fn createDesktopArtifact(allocator: std.mem.Allocator, io: std.Io, options: Pack
     // Native-only apps ship no WebView2 loader: their host was compiled
     // without the embedded web layer, so the loader would be dead bytes
     // pretending the app can spawn a webview.
-    const wants_webview2_loader = options.target == .windows and options.web_engine == .system and webLayerFor(options.metadata).enabled;
+    const wants_webview2_loader = options.target == .windows and options.web_engine == .system and webLayerFor(options.metadata, options.web_engine).enabled;
     if (options.binary_path) |binary_path| {
         const binary_subpath = try std.fmt.allocPrint(allocator, "bin/{s}", .{executable_name});
         defer allocator.free(binary_subpath);
@@ -293,7 +296,7 @@ fn createDesktopArtifact(allocator: std.mem.Allocator, io: std.Io, options: Pack
         try copyDesktopCefRuntime(allocator, io, dir, options.target, options.cef_dir);
     }
     try writeReport(allocator, dir, io, "package-manifest.zon", options, executable_name, bundle_stats.asset_count);
-    return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = options.target, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine, .web_layer = webLayerFor(options.metadata) };
+    return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = options.target, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine, .web_layer = webLayerFor(options.metadata, options.web_engine) };
 }
 
 /// The iOS host tier: a COMPLETE Xcode project the user never edits —
@@ -365,7 +368,7 @@ fn createIosArtifact(allocator: std.mem.Allocator, io: std.Io, options: PackageO
     defer allocator.free(readme);
     try writeFile(dir, io, "README.md", readme);
     try writeReport(allocator, dir, io, "package-manifest.zon", options, "libnative-sdk.a", bundle_stats.asset_count);
-    return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = .ios, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine, .web_layer = webLayerFor(options.metadata) };
+    return .{ .path = options.output_path, .artifact_name = std.fs.path.basename(options.output_path), .target = .ios, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine, .web_layer = webLayerFor(options.metadata, options.web_engine) };
 }
 
 fn iosProjectReadme(allocator: std.mem.Allocator, metadata: manifest_tool.Metadata) ![]const u8 {
@@ -432,7 +435,7 @@ fn createAndroidArtifact(allocator: std.mem.Allocator, io: std.Io, options: Pack
     if (try assembleAndroidApk(allocator, io, options)) |apk_name| {
         artifact_name = apk_name;
     }
-    return .{ .path = options.output_path, .artifact_name = artifact_name, .target = .android, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine, .web_layer = webLayerFor(options.metadata) };
+    return .{ .path = options.output_path, .artifact_name = artifact_name, .target = .android, .asset_count = bundle_stats.asset_count, .web_engine = options.web_engine, .web_layer = webLayerFor(options.metadata, options.web_engine) };
 }
 
 /// Assemble the debug APK inside the generated project when the caller
@@ -1060,7 +1063,7 @@ fn writeReport(allocator: std.mem.Allocator, dir: std.Io.Dir, io: std.Io, subpat
     // "engine (source)" shape the package diagnostic prints — e.g.
     // "none (inferred: nothing in app.zon declares web use)" or
     // "webview2 (declared: capabilities)".
-    const layer = webLayerFor(options.metadata);
+    const layer = webLayerFor(options.metadata, options.web_engine);
     const web_layer_value = try std.fmt.allocPrint(allocator, "{s} ({s})", .{ webLayerEngineName(layer, options.target, options.web_engine), layer.sourceText() });
     defer allocator.free(web_layer_value);
     const web_layer = try zonStringAlloc(allocator, web_layer_value);
@@ -1761,7 +1764,6 @@ test "mobile package templates ship the toolkit hosts" {
     try std.testing.expect(std.mem.indexOf(u8, android_bridge, "WINDOW_FORMAT_RGBA_8888") != null);
 }
 
-
 test "mobile package artifacts use manifest identity metadata" {
     var cwd = std.Io.Dir.cwd();
     try cwd.deleteTree(std.testing.io, ".zig-cache/test-package-mobile-identity");
@@ -2282,6 +2284,51 @@ test "package refuses a manifest that excludes the web layer while declaring web
         .metadata = metadata,
         .target = .windows,
         .output_path = ".zig-cache/test-package-web-layer-conflict",
+    }));
+}
+
+test "package web layer follows the resolved engine, not the raw manifest" {
+    var cwd = std.Io.Dir.cwd();
+    const root = ".zig-cache/test-package-web-layer-resolved-engine";
+    try cwd.deleteTree(std.testing.io, root);
+    defer cwd.deleteTree(std.testing.io, root) catch {};
+    try cwd.createDirPath(std.testing.io, root ++ "/assets");
+    try cwd.writeFile(std.testing.io, .{ .sub_path = root ++ "/assets/index.html", .data = "<h1>Web</h1>" });
+
+    // A system manifest with no web declarations, packaged with the
+    // engine the CLI resolved from `--web-engine chromium`: the layer
+    // ships, and the verdict names the engine as the cause.
+    const metadata: manifest_tool.Metadata = .{
+        .id = "dev.example.resolved",
+        .name = "resolved-demo",
+        .version = "1.0.0",
+    };
+    const stats = try createPackage(std.testing.allocator, std.testing.io, .{
+        .metadata = metadata,
+        .target = .ios,
+        .output_path = root ++ "/ios",
+        .assets_dir = root ++ "/assets",
+        .web_engine = .chromium,
+    });
+    try std.testing.expect(stats.web_layer.?.enabled);
+    try std.testing.expectEqual(manifest_tool.WebLayerReason.chromium_engine, stats.web_layer.?.reason);
+}
+
+test "package refuses an exclude against a resolved Chromium engine" {
+    // `.webview_layer = "exclude"` with `--web-engine chromium` is the
+    // same contradiction as exclude + a manifest web declaration: the
+    // package boundary rejects it exactly like build configure does.
+    const metadata: manifest_tool.Metadata = .{
+        .id = "dev.example.exclude-chromium",
+        .name = "exclude-chromium-demo",
+        .version = "1.0.0",
+        .webview_layer = "exclude",
+    };
+    try std.testing.expectError(error.WebViewLayerConflict, createPackage(std.testing.allocator, std.testing.io, .{
+        .metadata = metadata,
+        .target = .macos,
+        .output_path = ".zig-cache/test-package-web-layer-exclude-chromium",
+        .web_engine = .chromium,
     }));
 }
 

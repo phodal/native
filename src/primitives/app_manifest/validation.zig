@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const web_layer = @import("web_layer.zig");
 
 const ValidationError = types.ValidationError;
 const max_shortcuts = types.max_shortcuts;
@@ -90,21 +91,12 @@ pub fn validateManifest(manifest: Manifest) ValidationError!void {
     try validateUpdates(manifest.updates);
 }
 
-/// Whether the manifest declares web content: a `.frontend` block, the
-/// `webview` capability, a `.shell` webview view, or the Chromium
-/// engine. The same declare-to-use test the build graph runs to decide
-/// whether the app ships the embedded web layer at all.
+/// Whether the manifest declares web content — the shared declare-to-use
+/// contract (web_layer.zig) over the typed manifest. Validation has no
+/// engine flag, so the manifest's own engine is the resolved engine here;
+/// flag-resolved engines are the build graph's and the CLI's inputs.
 pub fn manifestDeclaresWebContent(manifest: Manifest) bool {
-    if (manifest.frontend != null) return true;
-    for (manifest.capabilities) |capability| {
-        if (capability.kind() == .webview) return true;
-    }
-    for (manifest.shell.windows) |window| {
-        for (window.views) |view| {
-            if (view.kind == .webview) return true;
-        }
-    }
-    return manifest.package.web_engine == .chromium;
+    return web_layer.webDeclaration(manifest, manifest.package.web_engine) != null;
 }
 
 /// `.webview_layer = "exclude"` promises a native-only app; a manifest
@@ -112,8 +104,7 @@ pub fn manifestDeclaresWebContent(manifest: Manifest) bool {
 /// contradiction is refused here — never resolved silently in either
 /// direction.
 pub fn validateWebViewLayer(manifest: Manifest) ValidationError!void {
-    if (manifest.webview_layer != .exclude) return;
-    if (manifestDeclaresWebContent(manifest)) return error.WebViewLayerConflict;
+    _ = web_layer.decide(manifest.webview_layer, web_layer.webDeclaration(manifest, manifest.package.web_engine)) catch return error.WebViewLayerConflict;
 }
 
 pub fn validateIdentity(identity: AppIdentity) ValidationError!void {

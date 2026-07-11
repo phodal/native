@@ -254,17 +254,29 @@ pub fn manifestThemePack() native_sdk.canvas.ThemePack {
         @compileError("unknown app.zon theme \"" ++ name ++ "\" — expected one of: house, geist");
 }
 
-/// Whether app.zon declares web content: the `webview` capability or a
-/// `frontend` block. Hosts build honest default menus from this — web
-/// items like Reload only exist when a webview can answer them, so
-/// canvas-only apps never ship dead menu items.
+/// Whether app.zon declares web content — the shared declare-to-use
+/// contract (`native_sdk.app_manifest.web_layer`) over the comptime
+/// manifest import: a `.frontend` block, the `"webview"` capability, a
+/// `.shell` webview view, or `.web_engine = "chromium"`. Hosts build
+/// honest default menus from this — web items like Reload only exist
+/// when a webview can answer them, so canvas-only apps never ship dead
+/// menu items.
 fn manifestHasWebContent() bool {
-    if (comptime @hasField(@TypeOf(app_manifest), "frontend")) return true;
-    if (comptime !@hasField(@TypeOf(app_manifest), "capabilities")) return false;
-    inline for (app_manifest.capabilities) |capability| {
-        if (comptime std.mem.eql(u8, capability, "webview")) return true;
-    }
-    return false;
+    return manifestWebDeclaration() != null;
+}
+
+/// The first web declaration visible in app.zon, evaluated at comptime.
+/// The engine input here is the MANIFEST engine: the runner never sees
+/// the `-Dweb-engine` flag, so an engine resolved to Chromium by flag
+/// alone is out of this boundary's reach — the standard build graph
+/// (build/app.zig), which does see the flag, owns that configure-time
+/// error. See the contract's module doc for the full ownership split.
+fn manifestWebDeclaration() ?native_sdk.app_manifest.web_layer.Declaration {
+    const engine: native_sdk.app_manifest.WebEngine = comptime blk: {
+        if (!@hasField(@TypeOf(app_manifest), "web_engine")) break :blk .system;
+        break :blk native_sdk.app_manifest.web_layer.parseWebEngine(app_manifest.web_engine) orelse .system;
+    };
+    return comptime native_sdk.app_manifest.web_layer.webDeclaration(app_manifest, engine);
 }
 
 /// Whether this build ships the embedded web layer. The standard build
@@ -280,10 +292,15 @@ fn webLayerEnabled() bool {
 // excludes the web layer while app.zon declares web use must fail at
 // compile time here too, so a hand-rolled build graph that bypasses the
 // standard configure-time error still cannot ship an app whose declared
-// webviews would fail at runtime.
+// webviews would fail at runtime. The guard covers every declaration
+// visible in the manifest; only a Chromium engine resolved from the
+// `-Dweb-engine` flag is invisible here, and that conflict is already a
+// configure-time error in the graph that resolved the flag.
 comptime {
-    if (!webLayerEnabled() and manifestHasWebContent()) {
-        @compileError("this build excludes the web layer (-Dweb-layer=exclude or a custom build graph) but app.zon declares web use (a .frontend block or the \"webview\" capability); remove the exclude or drop the web declaration");
+    if (!webLayerEnabled()) {
+        if (manifestWebDeclaration()) |declaration| {
+            @compileError("this build excludes the web layer (-Dweb-layer=exclude or a custom build graph) but app.zon declares web use (" ++ declaration.text() ++ "); remove the exclude or drop the web declaration");
+        }
     }
 }
 

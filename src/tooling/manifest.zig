@@ -1342,18 +1342,11 @@ fn parseWebViewLayer(value: []const u8) !app_manifest.WebViewLayer {
 /// The teaching message every boundary prints for the same
 /// contradiction: a manifest that excludes the web layer while declaring
 /// web content.
-pub const web_layer_conflict_message = "app.zon sets .webview_layer = \"exclude\" but declares web content (a .frontend block, the \"webview\" capability, a .shell webview view, or .web_engine = \"chromium\") - remove the web declarations or drop the exclude";
+pub const web_layer_conflict_message = "app.zon sets .webview_layer = \"exclude\" but the app declares web content (a .frontend block, the \"webview\" capability, a .shell webview view, or the Chromium web engine - from .web_engine or --web-engine) - remove the web declarations or drop the exclude";
 
-/// Why the web layer is (or is not) in the build, for verdict lines.
-pub const WebLayerReason = enum {
-    inferred_native_only,
-    declared_exclude,
-    capability,
-    frontend,
-    shell_webview,
-    chromium_engine,
-    declared_include,
-};
+/// Why the web layer is (or is not) in the build, for verdict lines —
+/// the shared contract's reason set.
+pub const WebLayerReason = app_manifest.web_layer.Reason;
 
 pub const WebLayer = struct {
     enabled: bool,
@@ -1368,40 +1361,38 @@ pub const WebLayer = struct {
             .capability => "declared: capabilities",
             .frontend => "declared: .frontend",
             .shell_webview => "declared: .shell webview view",
-            .chromium_engine => "declared: .web_engine = \"chromium\"",
+            .chromium_engine => "declared: the Chromium web engine (.web_engine or --web-engine)",
             .declared_include => "declared: .webview_layer = \"include\"",
+            // Only the build graph's lenient parse can produce this
+            // reason; parsed metadata always reaches this fn readable.
+            .unreadable_manifest => "kept: app.zon could not be parsed",
         };
     }
 };
 
 pub const WebLayerError = error{ InvalidWebViewLayer, WebViewLayerConflict };
 
-/// The CLI-side web-layer inference over parsed metadata — the same
-/// declare-to-use rule the build graph applies to app.zon: `.frontend`,
-/// the `webview` capability, a `.shell` webview view, or the Chromium
-/// engine means the app ships the web layer; none of them means
-/// native-only. `.webview_layer = "include"|"exclude"` overrides, and an
-/// exclude that contradicts a web declaration is refused.
-pub fn webLayer(metadata: Metadata) WebLayerError!WebLayer {
+/// The CLI-side adapter over the shared web-layer contract
+/// (app_manifest.web_layer): the same declare-to-use rule the build
+/// graph and the runner apply, fed the engine this boundary RESOLVED —
+/// `--web-engine` orelse app.zon, already resolved by the CLI's verb
+/// handlers. `.webview_layer = "include"|"exclude"` overrides, and an
+/// exclude that contradicts a web declaration (including a resolved
+/// Chromium engine) is refused.
+pub fn webLayer(metadata: Metadata, resolved_engine: web_engine_tool.Engine) WebLayerError!WebLayer {
     const setting = parseWebViewLayer(metadata.webview_layer) catch return error.InvalidWebViewLayer;
-    const declared: ?WebLayerReason = blk: {
-        if (metadata.frontend != null) break :blk .frontend;
-        for (metadata.capabilities) |capability| {
-            if (std.mem.eql(u8, capability, "webview")) break :blk .capability;
-        }
-        for (metadata.shell.windows) |window| {
-            for (window.views) |view| {
-                if (std.mem.eql(u8, view.kind, "webview")) break :blk .shell_webview;
-            }
-        }
-        if (std.mem.eql(u8, metadata.web_engine, "chromium")) break :blk .chromium_engine;
-        break :blk null;
+    const engine: app_manifest.WebEngine = switch (resolved_engine) {
+        .system => .system,
+        .chromium => .chromium,
     };
-    return switch (setting) {
-        .include => .{ .enabled = true, .reason = .declared_include },
-        .exclude => if (declared != null) error.WebViewLayerConflict else .{ .enabled = false, .reason = .declared_exclude },
-        .auto => if (declared) |reason| .{ .enabled = true, .reason = reason } else .{ .enabled = false, .reason = .inferred_native_only },
-    };
+    const decision = app_manifest.web_layer.infer(metadata, engine, setting) catch return error.WebViewLayerConflict;
+    return .{ .enabled = decision.enabled, .reason = decision.reason };
+}
+
+/// The web-layer verdict for callers with no engine flag in play
+/// (`native check`): the manifest's own engine is the resolved engine.
+pub fn webLayerFromManifest(metadata: Metadata) WebLayerError!WebLayer {
+    return webLayer(metadata, web_engine_tool.Engine.parse(metadata.web_engine) orelse .system);
 }
 
 fn validateRelativePath(path: []const u8) !void {
@@ -2010,41 +2001,49 @@ test "web layer inference is declare-to-use over parsed metadata" {
     // Nothing declared: native-only.
     const canvas_capabilities = [_][]const u8{ "native_views", "gpu_surfaces" };
     const canvas: Metadata = .{ .id = "dev.example.canvas", .name = "canvas", .version = "1.0.0", .capabilities = &canvas_capabilities };
-    const canvas_layer = try webLayer(canvas);
+    const canvas_layer = try webLayerFromManifest(canvas);
     try std.testing.expect(!canvas_layer.enabled);
     try std.testing.expectEqual(WebLayerReason.inferred_native_only, canvas_layer.reason);
 
     // Each web declaration flips the inference.
     const webview_capabilities = [_][]const u8{"webview"};
-    const by_capability = try webLayer(.{ .id = "dev.example.a", .name = "a", .version = "1.0.0", .capabilities = &webview_capabilities });
+    const by_capability = try webLayerFromManifest(.{ .id = "dev.example.a", .name = "a", .version = "1.0.0", .capabilities = &webview_capabilities });
     try std.testing.expect(by_capability.enabled);
     try std.testing.expectEqual(WebLayerReason.capability, by_capability.reason);
 
-    const by_frontend = try webLayer(.{ .id = "dev.example.b", .name = "b", .version = "1.0.0", .frontend = .{} });
+    const by_frontend = try webLayerFromManifest(.{ .id = "dev.example.b", .name = "b", .version = "1.0.0", .frontend = .{} });
     try std.testing.expect(by_frontend.enabled);
     try std.testing.expectEqual(WebLayerReason.frontend, by_frontend.reason);
 
     const shell_views = [_]ShellViewMetadata{.{ .label = "content", .kind = "webview", .url = "zero://app/index.html" }};
     const shell_windows = [_]ShellWindowMetadata{.{ .label = "main", .views = &shell_views }};
-    const by_shell = try webLayer(.{ .id = "dev.example.c", .name = "c", .version = "1.0.0", .shell = .{ .windows = &shell_windows } });
+    const by_shell = try webLayerFromManifest(.{ .id = "dev.example.c", .name = "c", .version = "1.0.0", .shell = .{ .windows = &shell_windows } });
     try std.testing.expect(by_shell.enabled);
     try std.testing.expectEqual(WebLayerReason.shell_webview, by_shell.reason);
 
     // The Chromium engine is web intent; the system default alone is not.
-    const by_chromium = try webLayer(.{ .id = "dev.example.d", .name = "d", .version = "1.0.0", .web_engine = "chromium" });
+    const by_chromium = try webLayerFromManifest(.{ .id = "dev.example.d", .name = "d", .version = "1.0.0", .web_engine = "chromium" });
     try std.testing.expect(by_chromium.enabled);
     try std.testing.expectEqual(WebLayerReason.chromium_engine, by_chromium.reason);
 
+    // The RESOLVED engine decides, not the raw manifest value: a system
+    // manifest packaged with `--web-engine chromium` ships the layer.
+    const by_resolved_chromium = try webLayer(.{ .id = "dev.example.i", .name = "i", .version = "1.0.0" }, .chromium);
+    try std.testing.expect(by_resolved_chromium.enabled);
+    try std.testing.expectEqual(WebLayerReason.chromium_engine, by_resolved_chromium.reason);
+
     // Explicit overrides.
-    const included = try webLayer(.{ .id = "dev.example.e", .name = "e", .version = "1.0.0", .webview_layer = "include" });
+    const included = try webLayerFromManifest(.{ .id = "dev.example.e", .name = "e", .version = "1.0.0", .webview_layer = "include" });
     try std.testing.expect(included.enabled);
-    const excluded = try webLayer(.{ .id = "dev.example.f", .name = "f", .version = "1.0.0", .webview_layer = "exclude" });
+    const excluded = try webLayerFromManifest(.{ .id = "dev.example.f", .name = "f", .version = "1.0.0", .webview_layer = "exclude" });
     try std.testing.expect(!excluded.enabled);
     try std.testing.expectEqual(WebLayerReason.declared_exclude, excluded.reason);
 
-    // Contradictions and typos are refused, never resolved silently.
-    try std.testing.expectError(error.WebViewLayerConflict, webLayer(.{ .id = "dev.example.g", .name = "g", .version = "1.0.0", .capabilities = &webview_capabilities, .webview_layer = "exclude" }));
-    try std.testing.expectError(error.InvalidWebViewLayer, webLayer(.{ .id = "dev.example.h", .name = "h", .version = "1.0.0", .webview_layer = "never" }));
+    // Contradictions and typos are refused, never resolved silently —
+    // including an exclude against a flag-resolved Chromium engine.
+    try std.testing.expectError(error.WebViewLayerConflict, webLayerFromManifest(.{ .id = "dev.example.g", .name = "g", .version = "1.0.0", .capabilities = &webview_capabilities, .webview_layer = "exclude" }));
+    try std.testing.expectError(error.WebViewLayerConflict, webLayer(.{ .id = "dev.example.j", .name = "j", .version = "1.0.0", .webview_layer = "exclude" }, .chromium));
+    try std.testing.expectError(error.InvalidWebViewLayer, webLayerFromManifest(.{ .id = "dev.example.h", .name = "h", .version = "1.0.0", .webview_layer = "never" }));
 }
 
 test "validate rejects a web-declaring manifest that excludes the web layer" {

@@ -347,6 +347,11 @@ pub fn addAppArtifacts(b: *std.Build, dep: *std.Build.Dependency, app_options: A
         // without its loader. Handing over the decision itself makes
         // exe/package agreement structural.
         package_run.addArgs(&.{ "--web-layer", if (web_layer) "include" else "exclude" });
+        // Same reasoning for the web engine: the CLI defaults to system, so
+        // a Chromium exe packaged without these flags would ship no CEF
+        // runtime (the generated build graph already forwards them).
+        package_run.addArgs(&.{ "--web-engine", @tagName(web_engine), "--cef-dir", cef_dir });
+        if (cef_auto_install) package_run.addArg("--cef-auto-install");
         package_run.has_side_effects = true;
         const package_step = b.step("package", "Create a distributable package via the native CLI");
         package_step.dependOn(&package_run.step);

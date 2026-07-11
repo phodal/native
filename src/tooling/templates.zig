@@ -717,9 +717,9 @@ fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
         \\        with:
         \\          version: 0.16.0
         \\      - name: Install GTK and Xvfb
-        \\        # No libwebkitgtk-6.0-dev: this app declares no web use, so its
+        \\        # No WebKitGTK dev package: this app declares no web use, so its
         \\        # Linux host compiles without the embedded web layer and never
-        \\        # links WebKitGTK (add the package alongside a .frontend block or
+        \\        # links WebKitGTK (install it alongside a .frontend block or
         \\        # the "webview" capability if the app grows web content).
         \\        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev xvfb
         \\      - name: Fetch native-sdk

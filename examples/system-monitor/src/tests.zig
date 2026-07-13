@@ -329,7 +329,9 @@ test "a full sample lands: fixtures through the collect exits, TestClock timesta
     defer arena_state.deinit();
     const status = model.statusLine(arena_state.allocator());
     try testing.expect(std.mem.indexOf(u8, status, "561 processes") != null);
-    try testing.expect(std.mem.indexOf(u8, status, "00:16:40") != null);
+    // The stamp SAYS it is UTC: the journaled clock is epoch time, and a
+    // local render would need a journaled tz channel to stay replayable.
+    try testing.expect(std.mem.indexOf(u8, status, "sampled at 00:16:40 UTC") != null);
 
     // The next tick spawns a fresh pair; a tick while they are in flight
     // is skipped and counted, never overlapped.
@@ -505,11 +507,15 @@ test "search filters by name and pid through typed dispatch" {
     try testing.expectEqual(@as(usize, 5), countListItems(tree.root));
     try testing.expect(findByLabel(tree.root, "Clear filter") == null);
 
-    // No matches renders the empty state instead of a list.
+    // No matches renders the empty state instead of a list, and it
+    // states its honest scope: search only sees the top-K-by-CPU
+    // selection the sampler keeps.
     model.search_buffer = canvas.TextBuffer(model_mod.max_search).init("zzzz");
     tree = try buildTree(arena, &model);
     try testing.expectEqual(@as(usize, 0), countListItems(tree.root));
     try testing.expect(findByLabel(tree.root, "No processes match") != null);
+    const hint = try std.fmt.allocPrint(arena, "Search sees the top {d} processes by CPU — filter matches command names and pids.", .{sampler.max_rows});
+    try testing.expect(findByText(tree.root, .text, hint) != null);
 }
 
 test "the process rows are table rows and the table scroll is controlled" {
@@ -613,11 +619,22 @@ test "kill and copy exits land as status notes through the live loop" {
     try live.wake();
     try testing.expect(std.mem.indexOf(u8, model.note(), "delivered") != null);
 
+    // The delivered notice is a moment, not a state: the NEXT applied
+    // sample (whose rows are the delivery's visible consequence)
+    // retires it from the footer.
+    apply(model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = ps_edge_fixture } });
+    try testing.expectEqual(@as(usize, 0), model.note().len);
+
     // A failing kill (not your process) is a note, never fatal.
     try live.dispatch(.{ .request_kill = 1 });
     try live.dispatch(.confirm_kill);
     try live.app_state.effects.feedExit(model_mod.kill_key, 1);
     try live.wake();
+    try testing.expect(std.mem.indexOf(u8, model.note(), "kill failed") != null);
+
+    // Failure is a state worth keeping: the next sample does NOT clear
+    // the failed note (only the delivered notice is transient).
+    apply(model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = ps_edge_fixture } });
     try testing.expect(std.mem.indexOf(u8, model.note(), "kill failed") != null);
 
     // Copy Name runs the clipboard effect with the process name.

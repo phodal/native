@@ -94,7 +94,10 @@
           <panel padding="24" background="surface" radius="lg" border-color="border" label="No processes match">
             <column gap="6">
               <text>{emptyTitle}</text>
-              <text size="sm" foreground="text_muted">Filter matches command names and pids.</text>
+              <!-- The honest scope hint once samples exist: search only
+                   sees the top-128-by-CPU selection the sampler keeps
+                   (core.ts emptyHint). -->
+              <text size="sm" foreground="text_muted">{emptyHint}</text>
             </column>
           </panel>
         </if>

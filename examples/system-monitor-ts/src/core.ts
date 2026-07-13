@@ -50,6 +50,7 @@ import {
   formatClock,
   intDiv,
   intDivRound,
+  MAX_ROWS,
   pad2,
   parseHostInfo,
   parseMeminfo,
@@ -193,6 +194,11 @@ export interface Model {
   readonly tableScroll: number;
 
   readonly note: Bytes;
+  /// A note that clears itself on the NEXT applied ps sample: the kill
+  /// path's "terminate request delivered" is a moment, not a state —
+  /// the following tick (whose rows are the delivery's visible
+  /// consequence) retires it instead of letting it sit forever.
+  readonly noteClearsOnSample: boolean;
 
   /// Chrome overlay geometry (tall hidden-inset titlebar) from the
   /// chromeMsg channel: the header leads with a spacer this wide so its
@@ -295,6 +301,7 @@ export const viewUnbound = [
   "sortDescending",
   "pendingKill",
   "note",
+  "noteClearsOnSample",
 ] as const;
 
 export function initialModel(): [Model, Cmd<Msg>] {
@@ -325,6 +332,7 @@ export function initialModel(): [Model, Cmd<Msg>] {
       pendingKill: null,
       tableScroll: 0,
       note: new Uint8Array(0),
+      noteClearsOnSample: false,
       chromeLeading: 0,
       headerHeight: HEADER_NATURAL_HEIGHT,
     },
@@ -472,6 +480,17 @@ export function emptyTitle(model: Model): Bytes {
   return concat3(asciiBytes('No matches for "'), model.search.bytes, asciiBytes('"'));
 }
 
+/// The empty state's second line: the honest scope hint once samples
+/// exist — search only sees the top-MAX_ROWS-by-CPU selection the
+/// sampler keeps, so a miss may simply be a quiet process outside it.
+export function emptyHint(model: Model): Bytes {
+  if (model.samplesTaken === 0) return asciiBytes("Filter matches command names and pids.");
+  return emDashJoin(
+    asciiBytes(`Search sees the top ${MAX_ROWS} processes by CPU`),
+    asciiBytes("filter matches command names and pids."),
+  );
+}
+
 // --------------------------------------------------- derived: status bar
 
 /// The status-bar line: sample facts, then any activity note.
@@ -488,7 +507,7 @@ export function statusLine(model: Model): Bytes {
   } else {
     line = dotJoin(
       asciiBytes(`${model.processCount} processes`),
-      concat2(asciiBytes("sampled at "), formatClock(model.sampledAtDayMs)),
+      concat3(asciiBytes("sampled at "), formatClock(model.sampledAtDayMs), asciiBytes(" UTC")),
     );
     if (model.paused) line = dotJoin(line, asciiBytes("paused"));
     if (model.ticksSkipped > 0) line = dotJoin(line, asciiBytes(`${model.ticksSkipped} ticks skipped`));
@@ -535,6 +554,10 @@ function appliedPsSample(model: Model, sample: PsSample): Model {
       : [...model.procHistory, sample.processCountFloat];
   return {
     ...model,
+    // A transient note ("terminate request delivered") retires with the
+    // sample that follows it — the fresh row set is the outcome.
+    note: model.noteClearsOnSample ? new Uint8Array(0) : model.note,
+    noteClearsOnSample: false,
     psInflight: false,
     processCount: sample.processCount,
     uptimeSeconds: sample.uptimeSeconds,
@@ -571,7 +594,13 @@ function sampling(model: Model): Model {
 }
 
 function withNote(model: Model, note: Bytes): Model {
-  return { ...model, note: note };
+  return { ...model, note: note, noteClearsOnSample: false };
+}
+
+/// A `withNote` that retires itself on the next applied ps sample (see
+/// `Model.noteClearsOnSample`).
+function withTransientNote(model: Model, note: Bytes): Model {
+  return { ...model, note: note, noteClearsOnSample: true };
 }
 
 export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
@@ -788,7 +817,10 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
       ];
     }
     case "kill_done": {
-      if (msg.code === 0) return withNote(model, asciiBytes("terminate request delivered"));
+      // Transient: the next sample's rows ARE the outcome, so the
+      // delivery notice retires with them instead of sitting in the
+      // footer forever.
+      if (msg.code === 0) return withTransientNote(model, asciiBytes("terminate request delivered"));
       return withNote(
         model,
         emDashJoin(asciiBytes(`kill failed (code ${msg.code}`), asciiBytes("not your process?)")),

@@ -163,7 +163,12 @@ export function formatBytes(bytes: number): Bytes {
   return asciiBytes(`${intDivRound(bytes, 1024)} KB`);
 }
 
-/// Day-clock ms -> `HH:MM:SS` (UTC; the point is "how fresh").
+/// Day-clock ms -> `HH:MM:SS` (UTC, and the footer SAYS so; the point
+/// is "how fresh", not a calendar). Local rendering would need the
+/// host's tz offset as journaled data — the core is pure and replay
+/// checkpoints fingerprint the rendered view, so an OS timezone read
+/// anywhere in the core would replay differently across machines.
+/// Until a journaled tz channel exists, the label is the honest fix.
 export function formatClock(dayMs: number): Bytes {
   const daySeconds = intDiv(dayMs, 1000);
   const hours = intDiv(daySeconds, 3600);

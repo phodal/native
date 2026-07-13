@@ -1476,6 +1476,115 @@ pub fn Effects(comptime Msg: type) type {
             }
         };
 
+        /// Everything a real spawn worker's BLOCKING phase may touch,
+        /// held out-of-line from the channel on its own heap block —
+        /// the spawn twin of `FileWorkerContext`, and the same
+        /// invariant: teardown may ABANDON a spawn worker whose child's
+        /// group-kill did not converge it (a descendant that escaped
+        /// the process group — `setsid`, a shell's `set -m` background
+        /// job — keeps the inherited stdout write end open, so the
+        /// worker's read never sees EOF), and everything the abandoned
+        /// worker can still wake into must live in process-lifetime
+        /// storage (`process_allocator`) and stay allocated forever.
+        /// The blocking phase therefore runs against copies: argv,
+        /// stdin, the line-framing and collect buffers, the stderr
+        /// tail ring, and the published-child handshake all live here,
+        /// never in the slot. Unlike a file op, a spawn DELIVERS while
+        /// it blocks (streaming lines ride the queue as the child
+        /// produces them), so the commit/abandon handshake fences two
+        /// things: every mid-stream channel touch happens under
+        /// `mutex` with `abandoned` re-checked (see
+        /// `produceSpawnLine`), and the terminal epilogue (publishing
+        /// collect payloads into the slot, posting the exit) runs only
+        /// after `committed` is taken while the channel provably
+        /// lives. Generic over the channel because it carries the
+        /// effect's Msg-typed `on_line` constructor.
+        const SpawnWorkerContext = struct {
+            /// Serializes the worker's channel touches (mid-stream
+            /// line enqueues, the commit-to-publish transition)
+            /// against teardown's abandon decision: whoever locks
+            /// first decides whether the worker may still touch the
+            /// channel (teardown joins it) or must walk away
+            /// (teardown leaks it).
+            mutex: SpinMutex = .{},
+            /// Teardown gave up on this worker: it must never touch
+            /// the channel again — the owner is about to free that
+            /// memory.
+            abandoned: bool = false,
+            /// The worker finished its blocking phase while the
+            /// channel was still alive: teardown must join it (its
+            /// epilogue touches the slot and queue, and converges
+            /// within milliseconds because the terminal post gives up
+            /// on shutdown).
+            committed: bool = false,
+            /// Set by `deinit` halfway through its spawn deadline:
+            /// the supervisor cancels the blocking task (best-effort
+            /// syscall interruption through the threaded io — the net
+            /// under a group-kill that could not converge the child).
+            interrupt: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+            /// Set by the task after `exit` is recorded.
+            done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+            /// Guards `child_id`/`reaping` between the blocking task
+            /// and `killPublishedChild` (cancel on the loop thread,
+            /// teardown): a kill is only sent while the task has not
+            /// started reaping, so the pid/handle is guaranteed
+            /// un-reaped (alive or zombie) when signaled. Lives here —
+            /// not on the slot — so the handshake works against
+            /// process-lived memory: the task locks it mid-blocking-
+            /// phase, which an abandoned worker may do long after the
+            /// channel is freed (the exact stale-slot `child_mutex`
+            /// crash the join discipline exists to prevent).
+            child_mutex: SpinMutex = .{},
+            child_id: ?std.process.Child.Id = null,
+            reaping: bool = false,
+            /// A kill was requested (cancel or teardown). Read by the
+            /// task so a kill that raced the child's publish still
+            /// lands, and so the recorded exit reports `.cancelled` —
+            /// the context's copy of the slot's `cancel_requested`,
+            /// readable without touching the channel.
+            kill_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+            /// The task's terminal result, published to the committed
+            /// epilogue (never read on abandon).
+            exit: EffectExit = .{ .key = 0, .code = effect_error_exit_code, .reason = .spawn_failed },
+            // ---- blocking-phase copies of the effect's parameters ----
+            key: u64 = 0,
+            on_line: ?LineMsgFn = null,
+            output_mode: EffectOutputMode = .lines,
+            line_limit: usize = max_effect_line_bytes,
+            /// Raised-bound line-framing buffer (its own
+            /// `process_allocator` allocation, leaked on abandon,
+            /// freed with the context by `joinWorker`); null means the
+            /// task frames into its stack buffer. Distinct from the
+            /// slot's `line_buffer`, which the fake executor keeps
+            /// using.
+            line_buffer: ?[]u8 = null,
+            /// Collect-mode stdout accumulation — the worker-private
+            /// twin of the slot's caller-allocated `collect_buffer`
+            /// (the committed epilogue publishes into that one).
+            collect_buffer: ?[]u8 = null,
+            collect_len: usize = 0,
+            collect_truncated: bool = false,
+            stderr_ring: [max_effect_stderr_tail_bytes]u8 = undefined,
+            stderr_total: usize = 0,
+            /// Producer-side drop accounting (the context twin of the
+            /// slot fields the fake executor uses).
+            dropped_pending: u32 = 0,
+            dropped_total: u32 = 0,
+            argv_slices: [max_effect_argv][]const u8 = undefined,
+            argv_count: usize = 0,
+            argv_storage: [max_effect_argv_bytes]u8 = undefined,
+            stdin_storage: [max_effect_stdin_bytes]u8 = undefined,
+            stdin_len: usize = 0,
+
+            fn argv(ctx: *const SpawnWorkerContext) []const []const u8 {
+                return ctx.argv_slices[0..ctx.argv_count];
+            }
+
+            fn stdinBytes(ctx: *const SpawnWorkerContext) []const u8 {
+                return ctx.stdin_storage[0..ctx.stdin_len];
+            }
+        };
+
         const Slot = struct {
             state: std.atomic.Value(SlotState) = std.atomic.Value(SlotState).init(.idle),
             generation: u32 = 0,
@@ -1496,13 +1605,6 @@ pub fn Effects(comptime Msg: type) type {
             /// lines the drain discards and whose exit reports
             /// `.cancelled`. Zero means none (generations start at 1).
             cancelled_generation: u32 = 0,
-            /// Guards `child_id`/`reaping` between the worker and
-            /// `cancel` on the loop thread: a kill is only sent while
-            /// the worker has not started reaping, so the pid/handle is
-            /// guaranteed un-reaped (alive or zombie) when signaled.
-            child_mutex: SpinMutex = .{},
-            child_id: ?std.process.Child.Id = null,
-            reaping: bool = false,
             /// The worker thread driving this occupancy (real spawn,
             /// fetch, and file effects; null for fake slots, host
             /// requests, and idle slots). Loop-thread bookkeeping:
@@ -1512,9 +1614,10 @@ pub fn Effects(comptime Msg: type) type {
             /// entire thread lifetime, so the channel's memory must
             /// never be freed while a handle here is outstanding —
             /// `deinit` joins every one before it returns, except a
-            /// file worker stuck past the teardown deadline, which is
-            /// detached after the handshake that guarantees it will
-            /// never touch the channel again (see `FileWorkerContext`).
+            /// file or spawn worker stuck past its teardown deadline,
+            /// which is detached after the handshake that guarantees
+            /// it will never touch the channel again (see
+            /// `FileWorkerContext` / `SpawnWorkerContext`).
             worker_thread: ?WorkerThread = null,
             /// The out-of-line world of a real file worker (null for
             /// every other occupancy). Created alongside the worker
@@ -1522,6 +1625,14 @@ pub fn Effects(comptime Msg: type) type {
             /// worker is gone — or deliberately leaked when teardown
             /// abandons the worker (see `FileWorkerContext`).
             file_ctx: ?*FileWorkerContext = null,
+            /// The out-of-line world of a real spawn worker (null for
+            /// every other occupancy, and for fake spawns). Same
+            /// lifecycle as `file_ctx`: freed by `joinWorker`, leaked
+            /// on abandon (see `SpawnWorkerContext`). Also where
+            /// `killPublishedChild` finds the published-child
+            /// handshake — the loop thread only dereferences it while
+            /// the channel is alive.
+            spawn_ctx: ?*SpawnWorkerContext = null,
             /// Producer-side drop accounting (worker in real mode, loop
             /// thread in fake mode; never both).
             dropped_pending: u32 = 0,
@@ -1707,6 +1818,27 @@ pub fn Effects(comptime Msg: type) type {
         /// bounded, warned leak — see `FileWorkerContext`). The seam
         /// tests assert against: zero on every healthy teardown.
         abandoned_file_workers: u32 = 0,
+        /// Teardown budget (total milliseconds) for spawn workers the
+        /// group-kill could not converge — a descendant that escaped
+        /// the child's process group (`setsid`, a shell's `set -m`
+        /// background job) keeps the inherited stdout write end open,
+        /// so the worker's read never sees EOF. Shares the file
+        /// deadline's default deliberately (the rationale is
+        /// identical: generous, and a healthy teardown — the kill
+        /// forcing EOF within milliseconds — never meets it) but stays
+        /// its own field so tests pin each worker class independently.
+        spawn_join_deadline_ms: u64 = default_effect_file_join_deadline_ms,
+        /// Best-effort interruption switch for spawn workers,
+        /// mirroring `file_join_interrupt`: halfway through the spawn
+        /// deadline, teardown cancels a stuck worker's blocking task
+        /// (the threaded io interrupts the blocked pipe read). Always
+        /// true in real use; tests disable it to reach the
+        /// abandon-and-leak safety net deterministically.
+        spawn_join_interrupt: bool = true,
+        /// How many spawn workers teardown has abandoned (each one a
+        /// bounded, warned leak — see `SpawnWorkerContext`). The seam
+        /// tests assert against: zero on every healthy teardown.
+        abandoned_spawn_workers: u32 = 0,
         /// Injectable concurrent-start switch for fetch supervisors,
         /// following `file_join_interrupt`: always true in real use;
         /// tests disable it to pin the no-capacity rejection path
@@ -1766,24 +1898,31 @@ pub fn Effects(comptime Msg: type) type {
 
         /// Kill every running effect, wait for the workers to finish
         /// (draining their final queue posts), JOIN every worker
-        /// thread, and release the executor io. Spawn and fetch joins
-        /// are unconditional — those workers converge deterministically
-        /// (children get a process-group kill, fetch supervisors cancel
-        /// on the shutdown flag) — so no spawn or fetch worker survives
-        /// this call. File workers run blocking I/O that nothing can
-        /// force to converge (a write to a FIFO with no reader, a read
-        /// against a stalled network filesystem), so they get
-        /// `file_join_deadline_ms` total, with a best-effort cancel of
-        /// the blocked task at the halfway mark; a worker still stuck
-        /// when the budget expires is ABANDONED — thread detached, its
-        /// out-of-line context, data buffer, and the executor io
-        /// deliberately leaked, one warning naming the stuck op and
-        /// path (see `FileWorkerContext` for the invariant). Either
-        /// way the owner may free the channel's memory — and tear down
-        /// the allocator behind it — the moment this returns: nothing
-        /// an abandoned worker can still reach lives in the channel or
-        /// in caller-allocator storage (the leakable set is allocated
-        /// from `process_allocator`).
+        /// thread, and release the executor io. Fetch joins are
+        /// unconditional — fetch supervisors cancel on the shutdown
+        /// flag (and an exchange that cannot start cancellably is
+        /// rejected up front), so no fetch worker survives this call.
+        /// Spawn and file workers get a deadline each
+        /// (`spawn_join_deadline_ms` / `file_join_deadline_ms`), with
+        /// a best-effort cancel of the blocked task at the halfway
+        /// mark: a spawn normally converges from the process-group
+        /// kill within milliseconds, but a descendant that escaped the
+        /// group (`setsid`, a shell's `set -m` background job) keeps
+        /// the stdout pipe open past every kill, and file I/O has no
+        /// converging force at all (a write to a FIFO with no reader,
+        /// a stalled network filesystem). A worker still stuck when
+        /// its budget expires is ABANDONED — thread detached, its
+        /// out-of-line context, private buffers, and the executor io
+        /// deliberately leaked, one warning naming the stuck op (see
+        /// `FileWorkerContext` / `SpawnWorkerContext` for the
+        /// invariant). Either way the owner may free the channel's
+        /// memory — and tear down the allocator behind it — the moment
+        /// this returns: nothing an abandoned worker can still reach
+        /// lives in the channel or in caller-allocator storage (the
+        /// leakable set is allocated from `process_allocator`). All
+        /// three worker classes share one terminal guarantee: teardown
+        /// returns bounded, and every byte a live thread can still
+        /// touch stays valid forever.
         ///
         /// Idempotent, and only the FIRST call may touch platform
         /// services — it ends by severing the services binding, so a
@@ -1832,56 +1971,73 @@ pub fn Effects(comptime Msg: type) type {
             if (io_threaded_supported) {
                 if (self.io_threaded) |threaded| {
                     // Wait for every worker's terminal post, then JOIN
-                    // every worker thread. For spawn and fetch workers
-                    // the wait is unbounded on purpose: a worker holds
-                    // pointers into this struct (its slot, the
-                    // completion queue, this io) for its whole thread
-                    // lifetime, and the owner frees this memory right
-                    // after deinit returns — a bounded give-up here
-                    // once left an abandoned worker writing into freed
+                    // every worker thread. For fetch workers the wait
+                    // is unbounded on purpose: a worker holds pointers
+                    // into this struct (its slot, the completion
+                    // queue, this io) for its whole thread lifetime,
+                    // and the owner frees this memory right after
+                    // deinit returns — a bounded give-up here once
+                    // left an abandoned worker writing into freed
                     // memory, which is exactly how a torn-down app
                     // crashed inside a stale slot's `child_mutex`.
-                    // Convergence is the kills' and the shutdown flag's
-                    // doing, not the queue's: every published child was
-                    // signaled above (a blocked stdout read ends at the
-                    // kill-forced EOF, `child.wait` reaps a dead
-                    // process, a raced pre-publish cancel is re-checked
-                    // by the worker itself), fetch supervisors poll
-                    // `shutdown` and cancel their exchange (one that
-                    // cannot start cancellably is rejected up front,
-                    // never run inline), and the
+                    // Fetch convergence is the shutdown flag's doing:
+                    // supervisors poll it and cancel their exchange
+                    // (one that cannot start cancellably is rejected
+                    // up front, never run inline), and the
                     // terminal-post retry loops give up on `shutdown`
-                    // within a millisecond. File workers are the one
-                    // exception: their blocking read/write has no
-                    // converging force (nothing to kill, no flag the OS
-                    // call polls), so their wait is bounded by
-                    // `file_join_deadline_ms` — halfway through it the
+                    // within a millisecond. Spawn and file workers get
+                    // a deadline each instead, because their blocking
+                    // phase can outlive every converging force: the
+                    // group-kill above forces most spawn reads to EOF
+                    // within milliseconds (`child.wait` then reaps a
+                    // dead process, and a raced pre-publish cancel is
+                    // re-checked by the task itself), but a descendant
+                    // that escaped the process group keeps the pipe
+                    // open past every kill; file I/O has nothing to
+                    // kill at all. Halfway through each deadline the
                     // supervisor is asked to cancel the blocked task
-                    // (the threaded io interrupts blocked syscalls with
-                    // a no-op signal on POSIX and
+                    // (the threaded io interrupts blocked syscalls
+                    // with a no-op signal on POSIX and
                     // NtCancelSynchronousIoFile on Windows), and a
                     // worker still stuck at the end is abandoned below
-                    // instead of hanging teardown forever. The queue is
-                    // still drained while waiting so posts that landed
-                    // before the flag retire promptly.
+                    // instead of hanging teardown forever. The queue
+                    // is still drained while waiting so posts that
+                    // landed before the flag retire promptly.
                     const io = threaded.io();
                     const file_deadline_ms = self.file_join_deadline_ms;
+                    const spawn_deadline_ms = self.spawn_join_deadline_ms;
                     var waited_ms: u64 = 0;
-                    var interrupt_sent = false;
+                    var file_interrupt_sent = false;
+                    var spawn_interrupt_sent = false;
                     while (true) {
                         var converging = false;
                         var file_pending = false;
+                        var spawn_pending = false;
                         for (&self.slots) |*slot| {
                             if (slot.fake or slot.state.load(.acquire) != .running) continue;
-                            if (slot.kind == .file) file_pending = true else converging = true;
+                            switch (slot.kind) {
+                                .file => file_pending = true,
+                                .spawn => spawn_pending = true,
+                                else => converging = true,
+                            }
                         }
-                        if (!converging and (!file_pending or waited_ms >= file_deadline_ms)) break;
-                        if (file_pending and !interrupt_sent and self.file_join_interrupt and waited_ms >= file_deadline_ms / 2) {
-                            interrupt_sent = true;
+                        if (!converging and
+                            (!file_pending or waited_ms >= file_deadline_ms) and
+                            (!spawn_pending or waited_ms >= spawn_deadline_ms)) break;
+                        if (file_pending and !file_interrupt_sent and self.file_join_interrupt and waited_ms >= file_deadline_ms / 2) {
+                            file_interrupt_sent = true;
                             for (&self.slots) |*slot| {
                                 if (slot.kind != .file or slot.fake) continue;
                                 if (slot.state.load(.acquire) != .running) continue;
                                 if (slot.file_ctx) |ctx| ctx.interrupt.store(true, .release);
+                            }
+                        }
+                        if (spawn_pending and !spawn_interrupt_sent and self.spawn_join_interrupt and waited_ms >= spawn_deadline_ms / 2) {
+                            spawn_interrupt_sent = true;
+                            for (&self.slots) |*slot| {
+                                if (slot.kind != .spawn or slot.fake) continue;
+                                if (slot.state.load(.acquire) != .running) continue;
+                                if (slot.spawn_ctx) |ctx| ctx.interrupt.store(true, .release);
                             }
                         }
                         self.clearQueue();
@@ -1937,6 +2093,49 @@ pub fn Effects(comptime Msg: type) type {
                         slot.generation = 0;
                         slot.state.store(.idle, .release);
                         self.abandoned_file_workers += 1;
+                        abandoned_any = true;
+                    }
+                    for (&self.slots) |*slot| {
+                        if (slot.kind != .spawn or slot.fake) continue;
+                        if (slot.state.load(.acquire) != .running) continue;
+                        const ctx = slot.spawn_ctx orelse continue;
+                        // The same commit/abandon handshake as the file
+                        // block above: a worker that committed is in
+                        // its epilogue right now and the unconditional
+                        // join below collects it; one still blocked is
+                        // fenced off the channel forever.
+                        ctx.mutex.lock();
+                        const committed = ctx.committed;
+                        if (!committed) ctx.abandoned = true;
+                        ctx.mutex.unlock();
+                        if (committed) continue;
+                        std.debug.print(
+                            "effects teardown: spawned command '{s}' still holds its worker after {d}ms (an escaped descendant is keeping its pipe open past the group kill); abandoning the worker thread and leaking its context so teardown can return safely\n",
+                            .{ if (slot.argv_count > 0) slot.argv_slices[0] else "", spawn_deadline_ms },
+                        );
+                        // DELIBERATE LEAK, same invariant as the file
+                        // abandon above: the worker may wake at any
+                        // later time (the escaped descendant exits and
+                        // EOF finally arrives), so its context — the
+                        // argv/stdin copies, the child handshake it
+                        // will still lock to reap, its private
+                        // framing/collect buffers — and the executor
+                        // io stay allocated forever in
+                        // `process_allocator` storage. The handshake
+                        // guarantees it touches nothing else: not this
+                        // slot (whose caller-owned collect buffer the
+                        // sweep below frees normally), not the queue
+                        // (`produceSpawnLine` re-checks the abandon
+                        // under the fence), not the channel. Bounded
+                        // and loud, exactly like the file leak.
+                        if (slot.worker_thread) |thread| {
+                            slot.worker_thread = null;
+                            thread.detach();
+                        }
+                        slot.spawn_ctx = null;
+                        slot.generation = 0;
+                        slot.state.store(.idle, .release);
+                        self.abandoned_spawn_workers += 1;
                         abandoned_any = true;
                     }
                     for (&self.slots) |*slot| joinWorker(slot);
@@ -2214,8 +2413,6 @@ pub fn Effects(comptime Msg: type) type {
             // from a cancelled previous occupant may still sit in the
             // queue, and the sticky value keeps filtering them after the
             // slot is reused (the new generation never matches it).
-            slot.child_id = null;
-            slot.reaping = false;
             slot.dropped_pending = 0;
             slot.dropped_total = 0;
             slot.argv_count = options.argv.len;
@@ -2241,14 +2438,19 @@ pub fn Effects(comptime Msg: type) type {
             }
             slot.line_limit = options.max_line_bytes;
             if (options.output == .collect) {
+                // The slot's CHANNEL-owned collect buffer: the drain
+                // hands it to `update` (real mode receives the bytes
+                // from the worker context at commit; fake mode
+                // accumulates into it directly).
                 slot.collect_buffer = self.allocator.alloc(u8, max_effect_collect_bytes) catch {
                     return self.reject(options);
                 };
-            } else if (options.max_line_bytes > max_effect_line_bytes) {
-                slot.line_buffer = self.allocator.alloc(u8, options.max_line_bytes) catch {
-                    return self.reject(options);
-                };
             }
+            // No slot-side line buffer for spawns: a real worker frames
+            // raised-bound lines into its context's process-lived
+            // buffer (see `SpawnWorkerContext.line_buffer`), and the
+            // fake executor's `feedLine` never frames. (`.stream`
+            // fetches still allocate the slot buffer in `fetch`.)
             slot.fake = self.executor == .fake;
             slot.state.store(.running, .release);
 
@@ -2258,7 +2460,56 @@ pub fn Effects(comptime Msg: type) type {
                 self.releaseSpawnSlot(slot);
                 return self.reject(options);
             };
-            const thread = std.Thread.spawn(.{}, workerMain, .{ self, slot_index, slot.generation, io }) catch {
+            // The worker's blocking phase touches only this out-of-line
+            // context (argv/stdin copies, the child handshake, its own
+            // framing/collect buffers), never the channel — the seam
+            // that lets teardown abandon a worker whose child's
+            // group-kill did not converge it and still free the channel
+            // (see `SpawnWorkerContext`). Context and buffers come from
+            // `process_allocator`, never `self.allocator`: teardown may
+            // leak them under a live thread, and the channel's
+            // caller-owned allocator dies with the owner. The happy
+            // path frees them in `joinWorker`, through the same
+            // process-lifetime seam.
+            const ctx = process_allocator.create(SpawnWorkerContext) catch {
+                self.releaseSpawnSlot(slot);
+                return self.reject(options);
+            };
+            ctx.* = .{
+                .key = options.key,
+                .on_line = options.on_line,
+                .output_mode = options.output,
+                .line_limit = options.max_line_bytes,
+                .exit = .{ .key = options.key, .code = effect_error_exit_code, .reason = .spawn_failed },
+                .argv_count = options.argv.len,
+                .stdin_len = stdin_bytes.len,
+            };
+            // Slices must point into the heap context, so they are
+            // built in place after the copy above.
+            var ctx_offset: usize = 0;
+            for (options.argv, 0..) |arg, index| {
+                @memcpy(ctx.argv_storage[ctx_offset .. ctx_offset + arg.len], arg);
+                ctx.argv_slices[index] = ctx.argv_storage[ctx_offset .. ctx_offset + arg.len];
+                ctx_offset += arg.len;
+            }
+            @memcpy(ctx.stdin_storage[0..stdin_bytes.len], stdin_bytes);
+            if (options.output == .collect) {
+                ctx.collect_buffer = process_allocator.alloc(u8, max_effect_collect_bytes) catch {
+                    process_allocator.destroy(ctx);
+                    self.releaseSpawnSlot(slot);
+                    return self.reject(options);
+                };
+            } else if (options.max_line_bytes > max_effect_line_bytes) {
+                ctx.line_buffer = process_allocator.alloc(u8, options.max_line_bytes) catch {
+                    process_allocator.destroy(ctx);
+                    self.releaseSpawnSlot(slot);
+                    return self.reject(options);
+                };
+            }
+            slot.spawn_ctx = ctx;
+            const thread = std.Thread.spawn(.{}, spawnWorkerMain, .{ self, slot_index, slot.generation, io, ctx }) catch {
+                destroySpawnContext(ctx);
+                slot.spawn_ctx = null;
                 self.releaseSpawnSlot(slot);
                 return self.reject(options);
             };
@@ -2333,8 +2584,6 @@ pub fn Effects(comptime Msg: type) type {
             slot.cancel_requested.store(false, .release);
             slot.fetch_done.store(false, .release);
             // `cancelled_generation` stays sticky, exactly as in `spawn`.
-            slot.child_id = null;
-            slot.reaping = false;
             slot.dropped_pending = 0;
             slot.dropped_total = 0;
             @memcpy(slot.url_storage[0..options.url.len], options.url);
@@ -2433,8 +2682,6 @@ pub fn Effects(comptime Msg: type) type {
             slot.on_file = on_result;
             slot.cancel_requested.store(false, .release);
             // `cancelled_generation` stays sticky, exactly as in `spawn`.
-            slot.child_id = null;
-            slot.reaping = false;
             slot.dropped_pending = 0;
             slot.dropped_total = 0;
             @memcpy(slot.url_storage[0..file_path.len], file_path);
@@ -2560,8 +2807,6 @@ pub fn Effects(comptime Msg: type) type {
             slot.on_clipboard = on_result;
             slot.cancel_requested.store(false, .release);
             // `cancelled_generation` stays sticky, exactly as in `spawn`.
-            slot.child_id = null;
-            slot.reaping = false;
             slot.dropped_pending = 0;
             slot.dropped_total = 0;
             slot.url_len = 0;
@@ -2714,8 +2959,6 @@ pub fn Effects(comptime Msg: type) type {
             slot.on_host = options.on_result;
             slot.cancel_requested.store(false, .release);
             // `cancelled_generation` stays sticky, exactly as in `spawn`.
-            slot.child_id = null;
-            slot.reaping = false;
             slot.dropped_pending = 0;
             slot.dropped_total = 0;
             @memcpy(slot.url_storage[0..options.name.len], options.name);
@@ -4382,16 +4625,29 @@ pub fn Effects(comptime Msg: type) type {
                 slot.worker_thread = null;
                 thread.join();
                 // The join proves the worker is gone: its out-of-line
-                // file context (file workers only) has no user left.
-                // Context and buffer are process-lifetime allocations
-                // (see `process_allocator`), so they free through that
-                // seam, not the channel's allocator.
+                // context (file and spawn workers) has no user left.
+                // Contexts and their buffers are process-lifetime
+                // allocations (see `process_allocator`), so they free
+                // through that seam, not the channel's allocator.
                 if (slot.file_ctx) |ctx| {
                     process_allocator.free(ctx.buffer);
                     process_allocator.destroy(ctx);
                     slot.file_ctx = null;
                 }
+                if (slot.spawn_ctx) |ctx| {
+                    destroySpawnContext(ctx);
+                    slot.spawn_ctx = null;
+                }
             }
+        }
+
+        /// Return a spawn worker context and its private buffers to
+        /// `process_allocator` — the happy-path counterpart of the
+        /// abandon leak (spawn-time failures and `joinWorker`).
+        fn destroySpawnContext(ctx: *SpawnWorkerContext) void {
+            if (ctx.line_buffer) |buffer| process_allocator.free(buffer);
+            if (ctx.collect_buffer) |buffer| process_allocator.free(buffer);
+            process_allocator.destroy(ctx);
         }
 
         fn reclaimSlots(self: *Self) void {
@@ -4516,16 +4772,83 @@ pub fn Effects(comptime Msg: type) type {
             self.wakeHost();
         }
 
-        /// Send a kill to the published child id, but only while the
-        /// worker has not begun reaping (guarded by the slot mutex), so
-        /// the pid/handle is guaranteed to still name this process.
+        /// `produceLine` for a real spawn's blocking task: entry
+        /// parameters and drop accounting come from the worker context,
+        /// and every channel touch (the caller-owned allocator for an
+        /// oversized line, the queue, the wake) happens under the
+        /// context's abandon fence — teardown may ABANDON this worker
+        /// at any pre-commit moment, and whoever takes `ctx.mutex`
+        /// first decides: an abandoned task drops the line and walks
+        /// away (the channel may already be freed), while a delivery in
+        /// flight under the lock finishes before teardown can mark the
+        /// abandon. Streaming deliveries therefore keep their live
+        /// arrival order and byte identity on every healthy path.
+        fn produceSpawnLine(self: *Self, ctx: *SpawnWorkerContext, slot_index: u16, generation: u32, bytes: []const u8, truncated: bool) void {
+            var len = @min(bytes.len, ctx.line_limit);
+            var entry: Entry = .{
+                .kind = .line,
+                .slot_index = slot_index,
+                .generation = generation,
+                .key = ctx.key,
+                .truncated = truncated or bytes.len > ctx.line_limit,
+                .dropped_before = ctx.dropped_pending,
+                .line_fn = ctx.on_line,
+            };
+            ctx.mutex.lock();
+            defer ctx.mutex.unlock();
+            if (ctx.abandoned) return;
+            if (len <= max_effect_line_bytes) {
+                @memcpy(entry.line_bytes[0..len], bytes[0..len]);
+            } else if (self.allocator.alloc(u8, len)) |heap| {
+                @memcpy(heap, bytes[0..len]);
+                entry.heap_line = heap;
+            } else |_| {
+                len = max_effect_line_bytes;
+                entry.truncated = true;
+                @memcpy(entry.line_bytes[0..len], bytes[0..len]);
+            }
+            entry.line_len = @intCast(len);
+            if (self.enqueue(&entry)) {
+                ctx.dropped_pending = 0;
+            } else {
+                if (entry.heap_line) |heap| self.allocator.free(heap);
+                ctx.dropped_pending +|= 1;
+                ctx.dropped_total +|= 1;
+            }
+            self.wakeHost();
+        }
+
+        /// Request a kill of a real spawn's child through its worker
+        /// context: record the request (so a kill that races the
+        /// child's publish still lands — the task re-checks after
+        /// publishing) and signal the published id. Loop-thread only
+        /// (cancel, teardown), while the channel is alive; the
+        /// handshake itself lives in the process-lived context so the
+        /// blocking task can take it channel-blind.
         fn killPublishedChild(self: *Self, slot: *Slot) void {
             _ = self;
-            slot.child_mutex.lock();
-            defer slot.child_mutex.unlock();
-            if (slot.reaping) return;
-            const id = slot.child_id orelse return;
+            const ctx = slot.spawn_ctx orelse return;
+            ctx.kill_requested.store(true, .release);
+            killPublishedChildCtx(ctx);
+        }
+
+        /// Send a kill to the published child id, but only while the
+        /// task has not begun reaping (guarded by the context mutex),
+        /// so the pid/handle is guaranteed to still name this process.
+        fn killPublishedChildCtx(ctx: *SpawnWorkerContext) void {
+            ctx.child_mutex.lock();
+            defer ctx.child_mutex.unlock();
+            if (ctx.reaping) return;
+            const id = ctx.child_id orelse return;
             if (builtin.os.tag == .windows) {
+                // Windows has no process groups in this sense: the
+                // direct-handle terminate cannot reach descendants, so
+                // an escaped grandchild holding the stdout pipe is
+                // converged by the teardown interruption (the threaded
+                // io cancels the blocked read) or, past the deadline,
+                // by the abandon net. Job objects would kill the whole
+                // tree properly — the future strengthening; not built
+                // here.
                 _ = std.os.windows.ntdll.NtTerminateProcess(id, @enumFromInt(1));
             } else {
                 // The child owns its process group (see the spawn in
@@ -4533,7 +4856,11 @@ pub fn Effects(comptime Msg: type) type {
                 // descendant still in it — the grandchildren of a
                 // shell-wrapped command included, which is what lets
                 // the worker's stdout read reach EOF promptly. The
-                // direct-pid fallback covers a group already gone.
+                // direct-pid fallback covers a group already gone. A
+                // descendant that LEFT the group (`setsid`, `set -m`)
+                // is out of reach by construction; the teardown
+                // interruption and abandon net bound the worker
+                // instead.
                 std.posix.kill(-id, .KILL) catch {
                     std.posix.kill(id, .KILL) catch {};
                 };
@@ -4542,28 +4869,99 @@ pub fn Effects(comptime Msg: type) type {
 
         // ------------------------------------------------------------ worker
 
-        fn workerMain(self: *Self, slot_index: usize, generation: u32, io: std.Io) void {
+        /// Supervises one real spawn, mirroring `fileWorkerMain`: the
+        /// blocking phase (child spawn, stream reads, wait/reap) runs
+        /// as a cancelable `Io` task that touches only its out-of-line
+        /// `SpawnWorkerContext` — plus the queue, under the context's
+        /// abandon fence, for streaming line deliveries (see
+        /// `produceSpawnLine`). Convergence at teardown is normally
+        /// the group-kill's doing (EOF within milliseconds); when a
+        /// descendant escaped the group and keeps the pipe open,
+        /// teardown sets `ctx.interrupt` at half its spawn deadline
+        /// and the supervisor cancels the task (the threaded io
+        /// interrupts the blocked read), and past the full deadline
+        /// the worker is abandoned. After the task ends the supervisor
+        /// COMMITS under the context's mutex — from that point it may
+        /// touch the slot and queue (publishing collect payloads into
+        /// the slot's delivery buffer, posting the exit), and teardown
+        /// will join it — or finds itself abandoned and returns
+        /// without touching the channel again.
+        fn spawnWorkerMain(self: *Self, slot_index: usize, generation: u32, io: std.Io, ctx: *SpawnWorkerContext) void {
+            supervise: {
+                var future = std.Io.concurrent(io, spawnTask, .{ self, ctx, @as(u16, @intCast(slot_index)), generation, io }) catch {
+                    // No concurrent capacity: run the blocking phase
+                    // inline. Teardown cannot interrupt it, but the
+                    // group-kill converges the common case and the
+                    // deadline still bounds deinit via the abandon
+                    // net. (Deliberately unlike fetch, which REJECTS
+                    // when its exchange cannot start cancellably:
+                    // fetch joins are unconditional and unbounded,
+                    // while a stuck spawn worker — like a file one —
+                    // has the abandon safety net.)
+                    spawnTask(self, ctx, @intCast(slot_index), generation, io);
+                    break :supervise;
+                };
+                superviseWorkerTask(io, &future, &ctx.done, &ctx.interrupt);
+            }
+            ctx.mutex.lock();
+            if (ctx.abandoned) {
+                // Teardown gave up on this worker: the channel may
+                // already be freed. The context (and everything the
+                // task touched through it) is intentionally leaked and
+                // stays valid forever — touch nothing else.
+                ctx.mutex.unlock();
+                return;
+            }
+            ctx.committed = true;
+            ctx.mutex.unlock();
+            // Committed: the channel is alive, and a concurrent
+            // teardown now JOINS this thread instead of abandoning it.
+            // The epilogue below touches the slot and queue freely and
+            // converges within milliseconds (the terminal post gives
+            // up on shutdown).
             const slot = &self.slots[slot_index];
-            var exit: EffectExit = .{
-                .key = slot.key,
-                .code = effect_error_exit_code,
-                .reason = .spawn_failed,
-            };
-            self.runChild(slot, @intCast(slot_index), generation, io, &exit);
-            exit.dropped_lines = slot.dropped_total;
+            var exit = ctx.exit;
+            exit.dropped_lines = ctx.dropped_total;
+            slot.dropped_total = ctx.dropped_total;
+            if (ctx.output_mode == .collect) {
+                // Publish the collected payloads into the slot's
+                // channel-owned delivery storage (what the drain hands
+                // to `update`): the blocking phase filled only the
+                // context's process-lived private copies.
+                if (slot.collect_buffer) |delivery| {
+                    const publish_len = @min(ctx.collect_len, delivery.len);
+                    @memcpy(delivery[0..publish_len], ctx.collect_buffer.?[0..publish_len]);
+                    slot.collect_len = publish_len;
+                } else {
+                    slot.collect_len = 0;
+                }
+                slot.collect_truncated = ctx.collect_truncated;
+                slot.stderr_ring = ctx.stderr_ring;
+                slot.stderr_total = ctx.stderr_total;
+            }
             self.postExit(slot, @intCast(slot_index), generation, io, exit);
             // A collect slot still owns its stdout buffer; park it in
             // `.draining` until the drain takes the buffer (fetch-style).
-            slot.state.store(if (slot.output_mode == .collect) .draining else .done, .release);
+            slot.state.store(if (ctx.output_mode == .collect) .draining else .done, .release);
             self.wakeHost();
         }
 
-        fn runChild(self: *Self, slot: *Slot, slot_index: u16, generation: u32, io: std.Io, exit: *EffectExit) void {
+        /// The blocking spawn phase as a cancelable task on the
+        /// executor io. Always records a terminal `ctx.exit` before
+        /// `done`. Touches only the leaked-on-abandon context, the io,
+        /// and — under the context's abandon fence — the completion
+        /// queue for streaming lines (see `SpawnWorkerContext`).
+        fn spawnTask(self: *Self, ctx: *SpawnWorkerContext, slot_index: u16, generation: u32, io: std.Io) void {
+            defer ctx.done.store(true, .release);
+            self.runChild(ctx, slot_index, generation, io);
+        }
+
+        fn runChild(self: *Self, ctx: *SpawnWorkerContext, slot_index: u16, generation: u32, io: std.Io) void {
             var child = std.process.spawn(io, .{
-                .argv = slot.argv(),
-                .stdin = if (slot.stdin_len > 0) .pipe else .ignore,
+                .argv = ctx.argv(),
+                .stdin = if (ctx.stdin_len > 0) .pipe else .ignore,
                 .stdout = .pipe,
-                .stderr = if (slot.output_mode == .collect) .pipe else .ignore,
+                .stderr = if (ctx.output_mode == .collect) .pipe else .ignore,
                 // POSIX: land the child in its OWN process group (id ==
                 // its pid, set before exec) so `killPublishedChild` can
                 // signal the whole descendant tree. Killing only the
@@ -4574,39 +4972,41 @@ pub fn Effects(comptime Msg: type) type {
                 // cancel's `.cancelled` terminal and any teardown
                 // joining the worker. Windows has no process groups in
                 // this sense; the direct-handle terminate stands alone
-                // there, as before.
+                // there, as before (see `killPublishedChildCtx` for
+                // the descendant story on both platforms).
                 .pgid = if (builtin.os.tag == .windows) null else 0,
             }) catch return;
 
-            slot.child_mutex.lock();
-            slot.child_id = child.id;
-            slot.child_mutex.unlock();
+            ctx.child_mutex.lock();
+            ctx.child_id = child.id;
+            ctx.child_mutex.unlock();
             // A cancel that raced the spawn still lands.
-            if (slot.cancel_requested.load(.acquire)) self.killPublishedChild(slot);
+            if (ctx.kill_requested.load(.acquire)) killPublishedChildCtx(ctx);
 
             // Collect mode drains stderr concurrently so a chatty child
             // can never deadlock against a full stderr pipe while we read
             // stdout. The reader ends at stderr EOF (the child exiting),
             // and the join below runs before the exit is assembled, so
             // the tail ring is complete and single-threaded again by the
-            // time it is read.
+            // time it is read. The reader touches only the context (and
+            // the child's pipe), so it is as abandon-safe as the task.
             var stderr_thread: ?std.Thread = null;
             defer if (stderr_thread) |thread| thread.join();
             if (child.stderr) |stderr_file| {
-                stderr_thread = std.Thread.spawn(.{}, stderrTailMain, .{ slot, io, stderr_file }) catch null;
+                stderr_thread = std.Thread.spawn(.{}, stderrTailMain, .{ ctx, io, stderr_file }) catch null;
             }
 
             if (child.stdin) |stdin_file| {
-                stdin_file.writeStreamingAll(io, slot.stdinBytes()) catch {};
+                stdin_file.writeStreamingAll(io, ctx.stdinBytes()) catch {};
                 stdin_file.close(io);
                 child.stdin = null;
             }
 
             if (child.stdout) |stdout_file| {
-                if (slot.output_mode == .collect) {
-                    collectStdout(slot, io, stdout_file);
+                if (ctx.output_mode == .collect) {
+                    collectStdout(ctx, io, stdout_file);
                 } else {
-                    self.streamLines(slot, slot_index, generation, io, stdout_file);
+                    self.streamLines(ctx, slot_index, generation, io, stdout_file);
                 }
             }
 
@@ -4614,7 +5014,7 @@ pub fn Effects(comptime Msg: type) type {
             // stdout closed (before reaping, so a child blocked on a full
             // stderr pipe still finishes).
             if (stderr_thread == null) {
-                if (child.stderr) |stderr_file| collectStderrTail(slot, io, stderr_file);
+                if (child.stderr) |stderr_file| collectStderrTail(ctx, io, stderr_file);
             }
 
             // Join the stderr reader BEFORE reaping: `child.wait` closes
@@ -4628,30 +5028,31 @@ pub fn Effects(comptime Msg: type) type {
                 stderr_thread = null;
             }
 
-            slot.child_mutex.lock();
-            slot.reaping = true;
-            slot.child_mutex.unlock();
+            ctx.child_mutex.lock();
+            ctx.reaping = true;
+            ctx.child_mutex.unlock();
             const term = child.wait(io) catch {
-                exit.* = .{ .key = slot.key, .code = effect_error_exit_code, .reason = .signaled };
+                ctx.exit = .{ .key = ctx.key, .code = effect_error_exit_code, .reason = .signaled };
+                if (ctx.kill_requested.load(.acquire)) ctx.exit.reason = .cancelled;
                 return;
             };
-            exit.* = switch (term) {
-                .exited => |code| .{ .key = slot.key, .code = code, .reason = .exited },
-                else => .{ .key = slot.key, .code = effect_error_exit_code, .reason = .signaled },
+            ctx.exit = switch (term) {
+                .exited => |code| .{ .key = ctx.key, .code = code, .reason = .exited },
+                else => .{ .key = ctx.key, .code = effect_error_exit_code, .reason = .signaled },
             };
-            if (slot.cancel_requested.load(.acquire)) {
-                exit.reason = .cancelled;
-                exit.code = effect_error_exit_code;
+            if (ctx.kill_requested.load(.acquire)) {
+                ctx.exit.reason = .cancelled;
+                ctx.exit.code = effect_error_exit_code;
             }
         }
 
-        fn streamLines(self: *Self, slot: *Slot, slot_index: u16, generation: u32, io: std.Io, stdout_file: std.Io.File) void {
+        fn streamLines(self: *Self, ctx: *SpawnWorkerContext, slot_index: u16, generation: u32, io: std.Io, stdout_file: std.Io.File) void {
             var read_buffer: [1024]u8 = undefined;
             // Spawns with a raised `max_line_bytes` frame into their
-            // slot's heap buffer; everyone else uses the stack.
+            // context's heap buffer; everyone else uses the stack.
             var stack_buffer: [max_effect_line_bytes]u8 = undefined;
-            const line_buffer: []u8 = slot.line_buffer orelse &stack_buffer;
-            const limit = @min(slot.line_limit, line_buffer.len);
+            const line_buffer: []u8 = ctx.line_buffer orelse &stack_buffer;
+            const limit = @min(ctx.line_limit, line_buffer.len);
             var line_len: usize = 0;
             var truncated = false;
             while (true) {
@@ -4659,7 +5060,7 @@ pub fn Effects(comptime Msg: type) type {
                 const count = stdout_file.readStreaming(io, &read_slices) catch break;
                 for (read_buffer[0..count]) |byte| {
                     if (byte == '\n') {
-                        self.produceLine(slot, slot_index, generation, line_buffer[0..line_len], truncated);
+                        self.produceSpawnLine(ctx, slot_index, generation, line_buffer[0..line_len], truncated);
                         line_len = 0;
                         truncated = false;
                     } else if (line_len < limit) {
@@ -4671,35 +5072,58 @@ pub fn Effects(comptime Msg: type) type {
                 }
             }
             if (line_len > 0 or truncated) {
-                self.produceLine(slot, slot_index, generation, line_buffer[0..line_len], truncated);
+                self.produceSpawnLine(ctx, slot_index, generation, line_buffer[0..line_len], truncated);
             }
         }
 
-        /// Collect-mode stdout: raw bytes into the slot's heap buffer,
-        /// no line framing, bounded by `max_effect_collect_bytes`.
-        fn collectStdout(slot: *Slot, io: std.Io, stdout_file: std.Io.File) void {
+        /// Collect-mode stdout: raw bytes into the context's private
+        /// buffer, no line framing, bounded by
+        /// `max_effect_collect_bytes`. The committed epilogue publishes
+        /// them into the slot's delivery buffer.
+        fn collectStdout(ctx: *SpawnWorkerContext, io: std.Io, stdout_file: std.Io.File) void {
             var read_buffer: [4096]u8 = undefined;
             while (true) {
                 const read_slices: [1][]u8 = .{&read_buffer};
                 const count = stdout_file.readStreaming(io, &read_slices) catch break;
                 if (count == 0) break;
-                appendCollected(slot, read_buffer[0..count]);
+                appendCollectedCtx(ctx, read_buffer[0..count]);
             }
         }
 
-        fn stderrTailMain(slot: *Slot, io: std.Io, stderr_file: std.Io.File) void {
-            collectStderrTail(slot, io, stderr_file);
+        fn stderrTailMain(ctx: *SpawnWorkerContext, io: std.Io, stderr_file: std.Io.File) void {
+            collectStderrTail(ctx, io, stderr_file);
         }
 
         /// Collect-mode stderr: keep the last
-        /// `max_effect_stderr_tail_bytes` bytes in the slot's tail ring.
-        fn collectStderrTail(slot: *Slot, io: std.Io, stderr_file: std.Io.File) void {
+        /// `max_effect_stderr_tail_bytes` bytes in the context's tail
+        /// ring.
+        fn collectStderrTail(ctx: *SpawnWorkerContext, io: std.Io, stderr_file: std.Io.File) void {
             var read_buffer: [1024]u8 = undefined;
             while (true) {
                 const read_slices: [1][]u8 = .{&read_buffer};
                 const count = stderr_file.readStreaming(io, &read_slices) catch break;
                 if (count == 0) break;
-                appendStderrTail(slot, read_buffer[0..count]);
+                appendStderrTailCtx(ctx, read_buffer[0..count]);
+            }
+        }
+
+        /// `appendCollected` against the worker context's private
+        /// buffer (single-writer: the blocking task).
+        fn appendCollectedCtx(ctx: *SpawnWorkerContext, bytes: []const u8) void {
+            const buffer = ctx.collect_buffer orelse return;
+            const remaining = buffer.len - ctx.collect_len;
+            const take = @min(bytes.len, remaining);
+            @memcpy(buffer[ctx.collect_len..][0..take], bytes[0..take]);
+            ctx.collect_len += take;
+            if (take < bytes.len) ctx.collect_truncated = true;
+        }
+
+        /// `appendStderrTail` against the worker context's private ring
+        /// (single-writer: the stderr reader).
+        fn appendStderrTailCtx(ctx: *SpawnWorkerContext, bytes: []const u8) void {
+            for (bytes) |byte| {
+                ctx.stderr_ring[ctx.stderr_total % max_effect_stderr_tail_bytes] = byte;
+                ctx.stderr_total += 1;
             }
         }
 
@@ -4996,16 +5420,7 @@ pub fn Effects(comptime Msg: type) type {
                     fileTask(ctx, io);
                     break :supervise;
                 };
-                const poll_ms: u64 = 5;
-                while (true) {
-                    if (ctx.done.load(.acquire)) break;
-                    if (ctx.interrupt.load(.acquire)) {
-                        future.cancel(io);
-                        break;
-                    }
-                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(poll_ms), .awake) catch {};
-                }
-                future.await(io);
+                superviseWorkerTask(io, &future, &ctx.done, &ctx.interrupt);
             }
             ctx.mutex.lock();
             if (ctx.abandoned) {
@@ -5040,6 +5455,26 @@ pub fn Effects(comptime Msg: type) type {
             self.postFile(slot, @intCast(slot_index), generation, io, outcome, ctx.read_len);
             slot.state.store(.draining, .release);
             self.wakeHost();
+        }
+
+        /// Poll a worker's cancelable blocking task to completion:
+        /// converge when the task records `done`, cancel it
+        /// (best-effort syscall interruption through the threaded io)
+        /// when teardown sets `interrupt`, and always await the future
+        /// so the task's frame retires. Shared by the file and spawn
+        /// supervisors; both flags live in the worker's process-lived
+        /// context, so the poll itself is abandon-safe.
+        fn superviseWorkerTask(io: std.Io, future: *std.Io.Future(void), done: *const std.atomic.Value(bool), interrupt: *const std.atomic.Value(bool)) void {
+            const poll_ms: u64 = 5;
+            while (true) {
+                if (done.load(.acquire)) break;
+                if (interrupt.load(.acquire)) {
+                    future.cancel(io);
+                    break;
+                }
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(poll_ms), .awake) catch {};
+            }
+            future.await(io);
         }
 
         /// The blocking file op as a cancelable task on the executor

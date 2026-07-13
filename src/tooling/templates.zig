@@ -1460,6 +1460,14 @@ fn buildZig(allocator: std.mem.Allocator, names: TemplateNames, framework_path: 
         \\        .name = app_exe_name,
         \\        .root_module = app_mod,
         \\    });
+        \\    // Windows subsystem posture (mirrors the Native SDK build graph):
+        \\    // release-shaped exes are GUI-subsystem so the app never flashes a
+        \\    // console behind its window; Debug keeps the console for dev logs.
+        \\    // Redirected logging still works on GUI exes - only console
+        \\    // AUTO-allocation is subsystem-gated.
+        \\    if (target.result.os.tag == .windows and optimize != .Debug) {
+        \\        exe.subsystem = .windows;
+        \\    }
         \\    linkPlatform(b, target, app_mod, exe, selected_platform, web_engine, web_layer, native_sdk_path, cef_dir, cef_auto_install);
         \\    b.installArtifact(exe);
         \\
@@ -3557,6 +3565,10 @@ test "writeDefaultApp emits Vite project files" {
     // stub define and webkitgtk-6.0 is not linked when native-only.
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "\"-DNATIVE_SDK_ALLOW_WEBKITGTK_STUB\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "if (!web_layer) return;") != null);
+    // Release-shaped Windows exes must be GUI-subsystem (same posture as
+    // the SDK build graph) so packaged scaffold apps never flash a console.
+    try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "if (target.result.os.tag == .windows and optimize != .Debug) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, build_zig_text, "exe.subsystem = .windows;") != null);
     try std.testing.expect(std.mem.indexOf(u8, main_zig_text, "frontend/dist") != null);
     try std.testing.expect(std.mem.indexOf(u8, main_zig_text, "127.0.0.1:5173") != null);
     try std.testing.expect(std.mem.indexOf(u8, runner_zig_text, "@import(\"app_manifest_zon\")") != null);

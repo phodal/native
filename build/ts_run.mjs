@@ -19,9 +19,11 @@
 // requested module with argv respliced so the target sees its usual shape
 // (its own path at argv[1], its arguments from argv[2]).
 //
-// On node builds without module.registerHooks (< 22.15) the hook is
-// skipped: repo checkouts keep working natively and the npm layout fails
-// with node's own teaching error naming the unsupported stripping.
+// On node builds without module.registerHooks (< 22.15) repo checkouts
+// keep working natively — node strips the types itself — but a
+// node_modules-resident target would die inside node with the raw
+// ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING, so the runner fails fast
+// with one teaching line (upgrade to Node.js 22.15+) before importing it.
 
 import module, { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
@@ -38,7 +40,18 @@ const targetPath = resolve(target);
 // exactly as when node runs it directly.
 process.argv.splice(1, 1);
 
-if (typeof module.registerHooks === 'function') {
+if (typeof module.registerHooks !== 'function') {
+  // No load hooks on this node (< 22.15). A repo-checkout target still
+  // runs natively, but a node_modules-resident target — the case the hook
+  // exists for — would fail deep inside node with the raw
+  // ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING. Teach the fix instead.
+  if (targetPath.includes('node_modules')) {
+    console.error(
+      `TypeScript apps need Node.js 22.15+ for the npm-installed SDK (you're running ${process.version}): upgrade node and re-run.`,
+    );
+    process.exit(1);
+  }
+} else {
   let ts = null;
   module.registerHooks({
     load(url, context, nextLoad) {

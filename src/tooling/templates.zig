@@ -499,7 +499,7 @@ fn tsSlimReadme(allocator: std.mem.Allocator, names: TemplateNames) ![]const u8 
         \\
         \\## Requirements
         \\
-        \\Node.js 22+ on PATH (the TypeScript-to-native transpiler runs at build
+        \\Node.js 22.15+ on PATH (the TypeScript-to-native transpiler runs at build
         \\time; your shipped binary carries none of it).
         \\
     );

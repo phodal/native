@@ -162,7 +162,7 @@ fn tsCoreStage(b: *std.Build, dep: *std.Build.Dependency, app_root: []const u8) 
     }
     const node = b.findProgram(&.{"node"}, &.{}) catch {
         @panic("\nbuilding a TypeScript app core needs node on PATH (the @native-sdk/core transpiler runs at" ++
-            " build time; the binary it emits ships no JS runtime).\nInstall Node.js 22+ — https://nodejs.org" ++
+            " build time; the binary it emits ships no JS runtime).\nInstall Node.js 22.15+ — https://nodejs.org" ++
             " or `brew install node` — and re-run.\n");
     };
     if (!tsToolchainResolves(b, dep)) {

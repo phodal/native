@@ -69,7 +69,7 @@ fn nodeMissing() Error {
     std.debug.print(
         \\TypeScript app cores need node on PATH (the @native-sdk/core transpiler and the
         \\core dev-harness run under it; the binary you ship carries no JS runtime).
-        \\Install Node.js 22+ - https://nodejs.org or `brew install node` - and re-run.
+        \\Install Node.js 22.15+ - https://nodejs.org or `brew install node` - and re-run.
         \\
     , .{});
     return error.MissingNode;

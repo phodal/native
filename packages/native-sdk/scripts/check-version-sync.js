@@ -82,6 +82,17 @@ if (coreJson.version !== expectedVersion) {
   console.error(`Version mismatch: packages/core/package.json=${coreJson.version}, expected ${expectedVersion}`);
   errors++;
 }
+// npm validates repository.url against publish provenance for
+// @native-sdk/core exactly as it does for the platform packages — a
+// missing or renamed URL fails the publish, so pin it to the main package.
+if (coreJson.repository?.url !== packageJson.repository?.url) {
+  console.error(`Repository mismatch: packages/core/package.json repository.url is ${coreJson.repository?.url}, expected ${packageJson.repository?.url} from package.json`);
+  errors++;
+}
+if (coreJson.homepage !== packageJson.homepage) {
+  console.error(`Homepage mismatch: packages/core/package.json homepage is ${coreJson.homepage}, expected ${packageJson.homepage} from package.json`);
+  errors++;
+}
 const coreLock = JSON.parse(readFileSync(join(repoRoot, 'packages', 'core', 'package-lock.json'), 'utf-8'));
 if (coreLock.version !== expectedVersion || coreLock.packages?.['']?.version !== expectedVersion) {
   console.error(`Version mismatch: packages/core/package-lock.json=${coreLock.version}/${coreLock.packages?.['']?.version}, expected ${expectedVersion}`);

@@ -29,6 +29,16 @@ test("the manifest names the published package and a real version", () => {
   assert.equal(manifest.type, "module");
 });
 
+test("provenance metadata names the real repository", () => {
+  // npm publish --provenance validates repository.url against the
+  // publishing workflow's repository and rejects the tarball on any
+  // mismatch — a publish-blocking field, not decoration.
+  assert.equal(manifest.repository?.type, "git");
+  assert.equal(manifest.repository?.url, "git+https://github.com/vercel-labs/native.git");
+  assert.equal(manifest.repository?.directory, "packages/core");
+  assert.equal(manifest.homepage, "https://native-sdk.dev");
+});
+
 test("the artifact is exactly package.json + sdk/", () => {
   assert.deepEqual(manifest.files, ["sdk"]);
   // A bin entry would drag its target file into the tarball behind the

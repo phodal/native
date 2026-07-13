@@ -18,6 +18,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The TypeScript core suites transpile at build/test time; without
+      # node they skip silently, so CI must provide it.
+      - run: npm ci --prefix packages/core
       - run: zig build test
       - run: zig build validate
 
@@ -115,6 +121,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The TypeScript core suites transpile at build/test time; without
+      # node they skip silently, so CI must provide it.
+      - run: npm ci --prefix packages/core
       - run: zig build test-tooling
 
   npm-package:
@@ -136,6 +148,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The TypeScript examples transpile at build time; the transpiler
+      # needs its installed dependency.
+      - run: npm ci --prefix packages/core
       - name: Install GTK dependencies
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
       - run: zig build test-examples-native

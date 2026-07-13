@@ -70,6 +70,149 @@ const TsCoreStage = struct {
     main_root: std.Build.LazyPath,
 };
 
+/// Whether the transpiler's TypeScript compiler (@typescript/old, the
+/// exactly pinned npm alias of the real `typescript` package) RESOLVES
+/// from the SDK's packages/core, by node's ancestor node_modules walk —
+/// at the SDK's exactly pinned VERSION. The same semantics the CLI gates
+/// on (src/tooling/ts_core.zig
+/// transpilerResolution, this predicate's deliberate twin: keep the two
+/// in lockstep).
+///
+/// Validation tracks ONLY what runtime loads, from the same origin
+/// runtime resolves from: typed_ast.ts imports "@typescript/old" directly
+/// and build/ts_run.mjs's load hook requires it from the target
+/// packages/core/src module — src/ never carries a node_modules, so
+/// packages/core is the walk origin that mirrors both. Covers every
+/// layout: a repo checkout's packages/core/node_modules (nearest wins),
+/// and the npm-installed CLI whose own `dependencies` carry the alias
+/// (nested under the package on global prefixes, hoisted to the project
+/// root on local ones, pnpm's sibling node_modules).
+///
+/// The @typescript/typescript6 wrapper is deliberately NOT probed:
+/// nothing imports it at run time (typed_ast.ts bypasses its one-line
+/// re-export on purpose), so holding the wrapper's resolution — or the
+/// alias's version as seen FROM the wrapper's origin — against the pin
+/// can only FALSE-REJECT healthy trees: npm's own conflict shape hoists
+/// a consumer's conflicting `@typescript/old` at the project root while
+/// our exact pin lands nested under the CLI, which is precisely the copy
+/// runtime loads from packages/core; a consumer's own shadowing wrapper
+/// must not sway the verdict either. The wrapper stays a DECLARED
+/// dependency in both manifests — it is just not what validation vouches
+/// for (see the twin's doc comment).
+///
+/// Resolvable means the alias's manifest AND its entrypoint are present
+/// (see tsAliasedCompilerVersion for node's error shape and the
+/// mid-extraction slivers) and its installed version equals the pin —
+/// read from the SDK dependency's own packages/core/package.json (the
+/// `npm:typescript@X.Y.Z` alias suffix in devDependencies —
+/// tsParseAliasedCompilerPin, mirroring the twin's
+/// parseAliasedCompilerPin), never hardcoded, so version bumps stay a
+/// one-file change.
+const TsToolchainResolution = union(enum) {
+    resolved,
+    unresolved,
+    /// The aliased compiler resolves, but at a version other than the
+    /// SDK's exact pin (strings allocated on b.allocator, freed never —
+    /// this is configure-time teaching data).
+    version_mismatch: struct { resolved: []const u8, pinned: []const u8 },
+};
+
+fn tsToolchainResolution(b: *std.Build, dep: *std.Build.Dependency) TsToolchainResolution {
+    const sdk_root = tsSdkRoot(b.allocator, b.graph.io, dep);
+    // The pin first: an SDK tree whose packages/core/package.json is
+    // missing or pinless is not one this gate can vouch for (the file
+    // ships in every layout), so it concludes unresolved and the teaching
+    // path acts.
+    const pinned = tsPinnedCompilerVersion(b, sdk_root) orelse return .unresolved;
+    const resolved = tsAliasedCompilerVersion(b, b.pathJoin(&.{ sdk_root, "packages", "core" })) orelse return .unresolved;
+    if (std.mem.eql(u8, resolved, pinned)) return .resolved;
+    return .{ .version_mismatch = .{ .resolved = resolved, .pinned = pinned } };
+}
+
+/// How runtime's `import "@typescript/old"` resolves, by node's walk FROM
+/// `origin_dir` upward: the nearest ancestor
+/// `node_modules/@typescript/old` wins (skipping ancestors that are
+/// themselves a node_modules directory, as node does). Callers pass the
+/// SDK's packages/core — the origin typed_ast.ts and ts_run.mjs resolve
+/// the alias from. The walk must be a real ancestor walk, not a
+/// fixed-sibling probe: npm hoists the alias to the install root on flat
+/// layouts and nests it under the CLI on version conflicts. Resolvable
+/// means the alias's manifest AND its entrypoint — the alias is the real
+/// `typescript` package, whose `"main"` is ./lib/typescript.js (no
+/// `"exports"`): a bare directory (an interrupted install, a pruned
+/// node_modules) is MODULE_NOT_FOUND at run time, and a manifest without
+/// its entrypoint (npm extraction is not atomic; package.json rides
+/// first in the tarball) fails just as opaquely. Hardcoding it is safe
+/// because the alias is exactly pinned (`npm:typescript@X.Y.Z` in both
+/// manifests plus the lockfile) and drift-checked by check-version-sync.
+/// A manifest without its entrypoint THROWS in node rather than
+/// consulting a deeper ancestor, so it concludes unresolvable here too
+/// (this predicate's deliberate twin: src/tooling/ts_core.zig's
+/// aliasedCompilerVersion — keep the two in lockstep).
+///
+/// Returns the resolved alias's installed VERSION so the caller can hold
+/// it against the SDK's pin; a resolvable-looking alias whose manifest
+/// carries no version field returns null (every real npm install writes
+/// one — its absence is a corrupt sliver, not a compiler to vouch for).
+fn tsAliasedCompilerVersion(b: *std.Build, origin_dir: []const u8) ?[]const u8 {
+    const io = b.graph.io;
+    var dir: []const u8 = origin_dir;
+    while (true) {
+        if (!std.mem.eql(u8, std.fs.path.basename(dir), "node_modules")) {
+            found: {
+                const manifest_path = b.pathJoin(&.{ dir, "node_modules", "@typescript", "old", "package.json" });
+                std.Io.Dir.cwd().access(io, manifest_path, .{}) catch break :found;
+                std.Io.Dir.cwd().access(io, b.pathJoin(&.{ dir, "node_modules", "@typescript", "old", "lib", "typescript.js" }), .{}) catch return null;
+                const manifest = std.Io.Dir.cwd().readFileAlloc(io, manifest_path, b.allocator, .limited(64 * 1024)) catch return null;
+                return tsParseQuotedManifestValue(manifest, "\"version\"", "");
+            }
+        }
+        dir = std.fs.path.dirname(dir) orelse return null;
+    }
+}
+
+/// The version the SDK pins its aliased compiler to, read from the SDK
+/// dependency's own packages/core/package.json — the same manifest the
+/// CLI's gate reads, so both surfaces learn a version bump from one file.
+fn tsPinnedCompilerVersion(b: *std.Build, sdk_root: []const u8) ?[]const u8 {
+    const manifest = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.pathJoin(&.{ sdk_root, "packages", "core", "package.json" }), b.allocator, .limited(64 * 1024)) catch return null;
+    const pin = tsParseQuotedManifestValue(manifest, "\"@typescript/old\"", "npm:typescript@") orelse return null;
+    // Exact X.Y.Z only (check-version-sync's pin shape), mirroring the
+    // twin's parseAliasedCompilerPin: a range is not a pin.
+    if (pin.len == 0) return null;
+    for (pin) |c| {
+        if (!std.ascii.isDigit(c) and c != '.') return null;
+    }
+    if (std.mem.count(u8, pin, ".") != 2) return null;
+    return pin;
+}
+
+/// Targeted scan for a manifest key's string value (the twin of
+/// ts_core.zig's parsePackageVersion/parseAliasedCompilerPin scanners):
+/// find `key`, expect `: "<required_prefix><value>"`, return `value`.
+fn tsParseQuotedManifestValue(manifest_json: []const u8, comptime key: []const u8, comptime required_prefix: []const u8) ?[]const u8 {
+    const key_at = std.mem.indexOf(u8, manifest_json, key) orelse return null;
+    var rest = manifest_json[key_at + key.len ..];
+    rest = std.mem.trimStart(u8, rest, " \t\r\n");
+    if (rest.len == 0 or rest[0] != ':') return null;
+    rest = std.mem.trimStart(u8, rest[1..], " \t\r\n");
+    if (rest.len == 0 or rest[0] != '"') return null;
+    rest = rest[1..];
+    const end = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
+    const value = rest[0..end];
+    if (!std.mem.startsWith(u8, value, required_prefix)) return null;
+    const suffix = value[required_prefix.len..];
+    if (suffix.len == 0) return null;
+    return suffix;
+}
+
+/// The SDK dependency's real root, resolved the way both the toolchain
+/// check and its teaching name it.
+fn tsSdkRoot(allocator: std.mem.Allocator, io: std.Io, dep: *std.Build.Dependency) []const u8 {
+    const raw_root = dep.builder.build_root.path orelse ".";
+    return std.Io.Dir.cwd().realPathFileAlloc(io, raw_root, allocator) catch raw_root;
+}
+
 fn tsCoreStage(b: *std.Build, dep: *std.Build.Dependency, app_root: []const u8) TsCoreStage {
     if (!appFileExists(b, app_root, "src/app.native")) {
         @panic("\nthis app has a TypeScript core (src/core.ts) but no view: TS apps render markup," ++
@@ -77,20 +220,50 @@ fn tsCoreStage(b: *std.Build, dep: *std.Build.Dependency, app_root: []const u8) 
     }
     const node = b.findProgram(&.{"node"}, &.{}) catch {
         @panic("\nbuilding a TypeScript app core needs node on PATH (the @native-sdk/core transpiler runs at" ++
-            " build time; the binary it emits ships no JS runtime).\nInstall Node.js 22+ — https://nodejs.org" ++
-            " or `brew install node` — and re-run.\n");
+            " build time; the binary it emits ships no JS runtime).\nInstall Node.js 22.15+ (on the 23 line: 23.5+)" ++
+            " — https://nodejs.org or `brew install node` — and re-run.\n");
     };
-    dep.builder.build_root.handle.access(
-        dep.builder.graph.io,
-        "packages/core/node_modules/@typescript/typescript6",
-        .{},
-    ) catch {
-        // Name the SDK dependency's real location (a checkout or the
-        // npm-installed @native-sdk/cli package — both carry
-        // packages/core with its lockfile, so `npm ci` works in place).
-        std.debug.panic("\nthe SDK's @native-sdk/core transpiler is missing its installed dependency.\nFix with:" ++
-            " cd {s}/packages/core && npm ci\n", .{dep.builder.build_root.path orelse "<sdk>"});
-    };
+    switch (tsToolchainResolution(b, dep)) {
+        .resolved => {},
+        .unresolved => {
+            // Safety net for direct `zig build` users: the `native` CLI
+            // gates this itself, so reaching here means zig was invoked by
+            // hand against an SDK whose toolchain resolves nowhere. Name
+            // the SDK dependency's real location as a RESOLVED path and
+            // fail the configure phase cleanly — a teaching message, never
+            // a panic stack trace.
+            const sdk_root = tsSdkRoot(dep.builder.allocator, dep.builder.graph.io, dep);
+            std.debug.print(
+                \\
+                \\error: the @native-sdk/core transpiler cannot resolve its TypeScript toolchain
+                \\(its compiler, @typescript/old). On a repo checkout, install it once with:
+                \\  cd {s}/packages/core && npm ci --include=dev
+                \\(An npm-installed @native-sdk/cli carries the toolchain automatically; if it
+                \\is missing there, the install is broken - reinstall @native-sdk/cli.)
+                \\
+                \\
+            , .{sdk_root});
+            std.process.exit(1);
+        },
+        .version_mismatch => |mismatch| {
+            // The wrong-VERSION shape gets its own teaching (the CLI's
+            // gate mirrors it): a conflicting consumer-tree
+            // @typescript/old shadows the SDK's exact pin, and no install
+            // command fixes what is already installed — the conflict has
+            // to move.
+            std.debug.print(
+                \\
+                \\error: the @native-sdk/core transpiler's TypeScript compiler resolves at the
+                \\wrong version: @typescript/old resolves to typescript {s}, but the SDK pins
+                \\npm:typescript@{s}. Another package in this tree pins a conflicting
+                \\@typescript/old - align it with the SDK's pin (or remove it) and reinstall,
+                \\so the SDK's exact pin is the copy that resolves.
+                \\
+                \\
+            , .{ mismatch.resolved, mismatch.pinned });
+            std.process.exit(1);
+        },
+    }
 
     // The transpiler runs through build/ts_run.mjs, not as `node cli.ts`:
     // on the npm-installed layout the transpiler's .ts sources live inside

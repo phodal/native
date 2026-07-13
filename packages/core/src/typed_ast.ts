@@ -13,7 +13,17 @@
 //   - Every TYPE question goes through the named queries on `TypedAst` below.
 //     Checker/emitter code never touches `program.getTypeChecker()` directly.
 
-import tsImpl from "@typescript/typescript6";
+// The IMPORT deliberately bypasses the `@typescript/typescript6` wrapper
+// (which stays the declared dependency — it is the provider named above,
+// and its own dependency IS this alias): the wrapper's lib/typescript.js
+// re-exports "@typescript/old" resolved from the WRAPPER's location, so a
+// consumer tree already carrying a conflicting hoisted @typescript/old
+// would win node's nearest-wins walk there while our exactly pinned copy
+// sat nested and unused. Importing the alias directly resolves it from
+// THIS file — inside our package, where our own nested/hoisted exact pin
+// is always the nearest — and the CLI's resolution gate additionally
+// verifies the resolved version against the pin.
+import tsImpl from "@typescript/old";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 

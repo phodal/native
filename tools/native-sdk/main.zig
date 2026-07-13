@@ -473,6 +473,8 @@ fn failVerb(err: anyerror) anyerror!void {
         error.MissingTsCore,
         error.MissingNode,
         error.MissingTranspiler,
+        error.BrokenToolchainInstall,
+        error.ToolchainVersionMismatch,
         error.CoreCheckFailed,
         error.DevHostFailed,
         error.HostCompileFailed,

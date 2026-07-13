@@ -462,6 +462,48 @@ pub fn build(b: *std.Build) void {
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"gpuSurfaces\"" },
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "gpuFirstFrameLatencyNs: number" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-ts-toolchain-twins", "Verify the CLI's toolchain-resolution gate and its direct-`zig build` twin stay in lockstep (both resolve the aliased real compiler @typescript/old from packages/core — the same origin runtime imports it from — hold its resolved version against the manifest-read pin, never probe the unused @typescript/typescript6 wrapper, and teach instead of panicking)", &.{
+        // The resolution twins probe the aliased REAL compiler
+        // (@typescript/old — the package typed_ast.ts and ts_run.mjs
+        // actually load) — manifest AND entrypoint, in lockstep. The
+        // @typescript/typescript6 wrapper is never probed: nothing
+        // imports it at run time, and validating it false-rejects
+        // healthy conflict trees.
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"package.json\"" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"lib\", \"typescript.js\"" },
+        .{ .path = "build/app.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"package.json\"" },
+        .{ .path = "build/app.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"lib\", \"typescript.js\"" },
+        // The doctrine both twins document at their predicates: validate
+        // only what runtime loads, from runtime's own walk origin, and
+        // leave the declared-but-unimported wrapper out of the verdict.
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "Validation tracks ONLY what runtime loads" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "wrapper is deliberately NOT probed" },
+        .{ .path = "build/app.zig", .pattern = "Validation tracks ONLY what runtime loads" },
+        .{ .path = "build/app.zig", .pattern = "wrapper is deliberately NOT probed" },
+        // The reciprocal cross-references that keep the twins findable
+        // from each other.
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "build/app.zig's tsToolchainResolution" },
+        .{ .path = "build/app.zig", .pattern = "transpilerResolution, this predicate's deliberate twin" },
+        // The version pin: both twins read the alias's RESOLVED
+        // package.json version and hold it against the exact
+        // `npm:typescript@X.Y.Z` pin read from the SDK's own
+        // packages/core/package.json (never hardcoded), and both carry
+        // the mismatch outcome plus its teaching naming the two versions.
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "parseAliasedCompilerPin" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "version_mismatch" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "npm:typescript@{s}" },
+        .{ .path = "build/app.zig", .pattern = "tsPinnedCompilerVersion" },
+        .{ .path = "build/app.zig", .pattern = "version_mismatch" },
+        .{ .path = "build/app.zig", .pattern = "npm:typescript@{s}" },
+        // The teachings: the checkout's one production-config-safe npm ci
+        // command in both surfaces, the reinstall for npm layouts, and the
+        // build graph's clean configure-time failure (never a panic).
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "pub const npm_ci_teaching_command = \"npm ci --include=dev\";" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "reinstall @native-sdk/cli" },
+        .{ .path = "build/app.zig", .pattern = "npm ci --include=dev" },
+        .{ .path = "build/app.zig", .pattern = "cannot resolve its TypeScript toolchain" },
+        .{ .path = "build/app.zig", .pattern = "std.process.exit(1);" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-app-test-entry-analysis", "Verify the managed app test step force-analyzes the entry point (UiApp.create's Model-defaults rule must teach at `native test`, not ambush at `native build`)", &.{
         .{ .path = "build/app.zig", .pattern = "app_analysis.zig" },
         .{ .path = "build/app.zig", .pattern = "if (@hasDecl(app, \"main\")) _ = &app.main;" },

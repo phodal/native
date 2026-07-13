@@ -210,7 +210,8 @@ fn writeTsAppSlim(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir,
 
 /// The `--full` twin: the same TS tree plus an owned build.zig/zon pair
 /// (the plain addApp call - the build graph's tree detection does the
-/// rest), for users who want to own the build from day one.
+/// rest) and a CI workflow, for users who want to own the build from day
+/// one — the same full-shape contract as the Zig template.
 fn writeTsApp(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir, names: TemplateNames, framework_path: []const u8, destination: []const u8, sdk_source: []const u8) !void {
     const build_zig = try nativeBuildZig(allocator, names);
     defer allocator.free(build_zig);
@@ -220,7 +221,11 @@ fn writeTsApp(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir, nam
     defer allocator.free(app_zon);
     const readme_md = try tsSlimReadme(allocator, names);
     defer allocator.free(readme_md);
+    const ci_yaml = try nativeCiYaml(allocator, names, framework_path, .ts);
+    defer allocator.free(ci_yaml);
 
+    try app_dir.createDirPath(io, ".github/workflows");
+    try writeFile(app_dir, io, ".github/workflows/ci.yml", ci_yaml);
     try writeFile(app_dir, io, "build.zig", build_zig);
     try writeFile(app_dir, io, "build.zig.zon", build_zon);
     try writeFile(app_dir, io, "src/core.ts", tsCoreStarter());
@@ -241,7 +246,7 @@ fn writeTsApp(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir, nam
 /// from the CLI's cwd (unlike the destination-relative build.zig.zon path).
 fn writeTsEditorSurface(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir, names: TemplateNames, destination: []const u8, sdk_source: []const u8) !void {
     const sdk_version = ts_core.bundledSdkVersion(allocator, io, sdk_source) catch |err| {
-        std.debug.print("the Native SDK at {s} is missing packages/core/package.json - is the checkout complete?\n", .{sdk_source});
+        std.debug.print("the Native SDK at {s} is missing packages/core/package.json - is the checkout (or npm install) complete?\n", .{sdk_source});
         return err;
     };
     defer allocator.free(sdk_version);
@@ -544,7 +549,7 @@ fn writeNativeApp(allocator: std.mem.Allocator, io: std.Io, app_dir: std.Io.Dir,
     defer allocator.free(app_zon);
     const readme_md = try nativeReadme(allocator, names, framework_path);
     defer allocator.free(readme_md);
-    const ci_yaml = try nativeCiYaml(allocator, names, framework_path);
+    const ci_yaml = try nativeCiYaml(allocator, names, framework_path, .zig);
     defer allocator.free(ci_yaml);
 
     try writeFile(app_dir, io, "build.zig", build_zig);
@@ -1132,8 +1137,26 @@ fn nativeReadme(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
 /// GitHub Actions workflow for a native-rendered app: a null-platform
 /// logic-test job plus a Linux Xvfb automation smoke job that launches the
 /// real binary and asserts on the accessibility snapshot. The generated
-/// file belongs to the user, like everything init writes.
-fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_path: []const u8) ![]const u8 {
+/// file belongs to the user, like everything init writes. A TypeScript
+/// core adds the node tier to both jobs: setup-node plus one `npm ci` in
+/// the fetched SDK's packages/core, because the @native-sdk/core
+/// transpiler runs under node at build time and needs its own installed
+/// dependency there — the same install `native build`'s teaching names.
+fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_path: []const u8, core: CoreTemplate) ![]const u8 {
+    const node_setup =
+        \\      - uses: actions/setup-node@v4
+        \\        with:
+        \\          node-version: 22
+        \\
+    ;
+    const transpiler_install =
+        \\      - name: Install the core transpiler dependency
+        \\        # src/core.ts compiles to native code at build time: the
+        \\        # @native-sdk/core transpiler runs under node from the SDK
+        \\        # dependency and needs its dependency installed there once.
+        \\        run: npm ci --prefix "$NATIVE_SDK_PATH/packages/core"
+        \\
+    ;
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator,
@@ -1168,11 +1191,19 @@ fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
         \\      - uses: mlugg/setup-zig@v2
         \\        with:
         \\          version: 0.16.0
+        \\
+    );
+    if (core == .ts) try out.appendSlice(allocator, node_setup);
+    try out.appendSlice(allocator,
         \\      - name: Fetch native-sdk
         \\        run: |
         \\          if [ ! -f "$NATIVE_SDK_PATH/build.zig" ]; then
         \\            git clone --depth 1 https://github.com/vercel-labs/native.git "$NATIVE_SDK_PATH"
         \\          fi
+        \\
+    );
+    if (core == .ts) try out.appendSlice(allocator, transpiler_install);
+    try out.appendSlice(allocator,
         \\      - run: zig build test -Dplatform=null
         \\
         \\  smoke:
@@ -1183,6 +1214,10 @@ fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
         \\      - uses: mlugg/setup-zig@v2
         \\        with:
         \\          version: 0.16.0
+        \\
+    );
+    if (core == .ts) try out.appendSlice(allocator, node_setup);
+    try out.appendSlice(allocator,
         \\      - name: Install GTK and Xvfb
         \\        # No WebKitGTK dev package: this app declares no web use, so its
         \\        # Linux host compiles without the embedded web layer and never
@@ -1194,6 +1229,10 @@ fn nativeCiYaml(allocator: std.mem.Allocator, names: TemplateNames, framework_pa
         \\          if [ ! -f "$NATIVE_SDK_PATH/build.zig" ]; then
         \\            git clone --depth 1 https://github.com/vercel-labs/native.git "$NATIVE_SDK_PATH"
         \\          fi
+        \\
+    );
+    if (core == .ts) try out.appendSlice(allocator, transpiler_install);
+    try out.appendSlice(allocator,
         \\      - name: Build the Native SDK CLI
         \\        run: cd "$NATIVE_SDK_PATH" && zig build
         \\      - name: Build and drive the app headless
@@ -3582,9 +3621,12 @@ test "writeDefaultApp emits the TS-core scaffold by default: three files of trut
     defer std.testing.allocator.free(ts_readme);
 
     // ZERO Zig in the tree, no build files: the build graph detects
-    // src/core.ts and stages the wiring outside the app.
+    // src/core.ts and stages the wiring outside the app. Zero-config
+    // parity with the slim Zig scaffold: no CI workflow either — the
+    // full shape owns that surface.
     try std.testing.expectError(error.FileNotFound, readTestFile(std.testing.allocator, std.testing.io, destination, "src/main.zig"));
     try std.testing.expectError(error.FileNotFound, readTestFile(std.testing.allocator, std.testing.io, destination, "build.zig"));
+    try std.testing.expectError(error.FileNotFound, readTestFile(std.testing.allocator, std.testing.io, destination, ".github/workflows/ci.yml"));
 
     // The starter uses one Cmd and one Sub, declares the lint opt-out, and
     // exports a bindable helper.
@@ -3763,6 +3805,33 @@ test "writeDefaultApp emits native project files" {
     try std.testing.expect(std.mem.indexOf(u8, gitignore_text, "zig-out/") != null);
     try std.testing.expect(std.mem.indexOf(u8, readme_text, "native markup check src/app.native") != null);
     try std.testing.expect(std.mem.indexOf(u8, readme_text, "hot") != null or std.mem.indexOf(u8, readme_text, "Hot") != null);
+}
+
+test "writeDefaultApp --full ts-core emits a CI workflow with the node tier" {
+    const destination = ".zig-cache/test-ts-ci-template";
+    try writeDefaultApp(std.testing.allocator, std.testing.io, destination, .{ .app_name = "My App", .framework_path = ".", .frontend = .native, .shape = .full });
+
+    const ci_yaml_text = try readTestFile(std.testing.allocator, std.testing.io, destination, ".github/workflows/ci.yml");
+    defer std.testing.allocator.free(ci_yaml_text);
+
+    try expectBasicYaml(ci_yaml_text);
+    // The Zig full template's structure: logic tests plus the Linux
+    // automation smoke, no WebKitGTK for a native-rendered app.
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "  test:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "  smoke:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "mlugg/setup-zig@v2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "zig build test -Dplatform=null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "libgtk-4-dev xvfb") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "libwebkitgtk-6.0-dev") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "xvfb-run -a ./zig-out/bin/my-app &") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "git clone --depth 1 https://github.com/vercel-labs/native.git \"$NATIVE_SDK_PATH\"") != null);
+    // Plus the node tier the TS build needs: node on PATH and the
+    // transpiler's own install inside the fetched SDK's packages/core,
+    // in BOTH jobs (each builds the app, so each transpiles the core).
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text, "actions/setup-node@v4") != null);
+    const npm_ci = "npm ci --prefix \"$NATIVE_SDK_PATH/packages/core\"";
+    const first = std.mem.indexOf(u8, ci_yaml_text, npm_ci).?;
+    try std.testing.expect(std.mem.indexOf(u8, ci_yaml_text[first + npm_ci.len ..], npm_ci) != null);
 }
 
 test "writeDefaultApp emits a CI workflow for native apps" {

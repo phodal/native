@@ -3370,6 +3370,74 @@ test "window-control collision scan flags readable content only" {
     try std.testing.expect(!canvas.windowDragContentUnderWindowControls(layout.nodes, cluster));
 }
 
+test "window-control clearance moves a drag header's anchored children too" {
+    // The collision scan counts every content descendant of the drag
+    // header — anchored floaters included — so the remedy must move
+    // them: a drag header's anchored children resolve against the
+    // cleared anchor rect, not the full frame, or the runtime pays its
+    // one retry and the child stays under the caption buttons. Non-drag
+    // widgets' anchored children never move (menus/popovers anchor
+    // everywhere), stamped tokens or not.
+    const cluster = geometry.RectF.init(262, 0, 138, 32);
+    const bounds = geometry.RectF.init(0, 0, 400, 300);
+    const trailing_tokens = DesignTokens{ .window_controls = cluster };
+
+    // A 24pt-tall header (shorter than the 32pt cluster band) whose ONLY
+    // content is an end-aligned floater dropping just below the header —
+    // still inside the cluster band, and under its buttons.
+    const badge = Widget{ .id = 3, .kind = .text, .text = "recording", .layout = .{ .anchor = .{ .placement = .below, .alignment = .end, .offset = 0 } } };
+    const header_children = [_]Widget{badge};
+    var header = Widget{ .id = 2, .kind = .row, .frame = geometry.RectF.init(0, 0, 0, 24), .children = &header_children };
+    header.window_drag = true;
+    const root_children = [_]Widget{header};
+    const root = Widget{ .id = 1, .kind = .column, .children = &root_children };
+
+    // Unstamped: the floater ends at the header's trailing edge, under
+    // the cluster — and the scan fires on it (anchored-only content is
+    // still a collision).
+    var nodes: [6]WidgetLayoutNode = undefined;
+    var layout = try canvas.layoutWidgetTreeWithTokens(root, bounds, DesignTokens{}, &nodes);
+    const naive = layout.findById(3).?.frame;
+    try std.testing.expect(naive.maxX() > cluster.x);
+    try std.testing.expect(!geometry.RectF.intersection(naive.normalized(), cluster).isEmpty());
+    try std.testing.expect(canvas.windowDragContentUnderWindowControls(layout.nodes, cluster));
+
+    // Stamped: the anchor base is trimmed, the floater lands clear of
+    // the cluster, and re-scanning the remedied layout stays quiet —
+    // scan and remedy agree, so the runtime's single retry converges.
+    layout = try canvas.layoutWidgetTreeWithTokens(root, bounds, trailing_tokens, &nodes);
+    try std.testing.expect(layout.findById(3).?.frame.maxX() <= cluster.x + 0.01);
+    try std.testing.expect(!canvas.windowDragContentUnderWindowControls(layout.nodes, cluster));
+
+    // The macOS mirror: a leading cluster pushes a start-aligned floater
+    // past its trailing edge.
+    const leading_cluster = geometry.RectF.init(0, 0, 78, 32);
+    const lead_badge = Widget{ .id = 3, .kind = .text, .text = "recording", .layout = .{ .anchor = .{ .placement = .below, .alignment = .start, .offset = 0 } } };
+    const lead_children = [_]Widget{lead_badge};
+    var lead_header = header;
+    lead_header.children = &lead_children;
+    const lead_root_children = [_]Widget{lead_header};
+    var lead_root = root;
+    lead_root.children = &lead_root_children;
+    layout = try canvas.layoutWidgetTreeWithTokens(lead_root, bounds, DesignTokens{}, &nodes);
+    try std.testing.expect(canvas.windowDragContentUnderWindowControls(layout.nodes, leading_cluster));
+    layout = try canvas.layoutWidgetTreeWithTokens(lead_root, bounds, DesignTokens{ .window_controls = leading_cluster }, &nodes);
+    try std.testing.expect(layout.findById(3).?.frame.x >= leading_cluster.maxX() - 0.01);
+    try std.testing.expect(!canvas.windowDragContentUnderWindowControls(layout.nodes, leading_cluster));
+
+    // A non-drag row's anchored child is byte-identical with the stamp:
+    // anchoring semantics outside declared titlebars never change.
+    var plain_header = header;
+    plain_header.window_drag = false;
+    const plain_root_children = [_]Widget{plain_header};
+    var plain_root = root;
+    plain_root.children = &plain_root_children;
+    layout = try canvas.layoutWidgetTreeWithTokens(plain_root, bounds, DesignTokens{}, &nodes);
+    const unstamped = layout.findById(3).?.frame;
+    layout = try canvas.layoutWidgetTreeWithTokens(plain_root, bounds, trailing_tokens, &nodes);
+    try std.testing.expectEqual(unstamped, layout.findById(3).?.frame);
+}
+
 test "geometry pixel snapping off keeps label-exact intrinsic widths bit-identical" {
     // The ceil-to-grid rule is gated on `pixel_snap.geometry`: themes
     // without geometry snapping have no snap shave to defend against,

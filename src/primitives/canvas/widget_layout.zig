@@ -152,7 +152,12 @@ pub fn layoutWidgetDepth(
     // widget's resolved frame and the window (the layout root's frame).
     // Leaf trigger kinds (select, button, ...) never lay out flow
     // children, but their anchored children float all the same.
-    try layoutAnchoredChildren(widget.children, frame, index, depth, output, len, tokens);
+    // A drag header's anchor base is trimmed clear of the stamped
+    // window-control cluster exactly like its flow content box: the
+    // collision scan counts anchored descendants too, so the remedy must
+    // move them or the one retry is paid for nothing. Non-drag widgets
+    // pass through untouched (menus and popovers anchor everywhere).
+    try layoutAnchoredChildren(widget.children, windowControlsClearedContent(frame, widget, tokens), index, depth, output, len, tokens);
 
     return index;
 }

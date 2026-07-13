@@ -4480,6 +4480,23 @@ static bool windowsAppsUseDarkTheme() {
     return dark;
 }
 
+/* Standard-chrome titlebars follow the OS app color scheme: the
+ * immersive-dark attribute flips the DWM caption to its dark palette,
+ * so an app rendering the dark theme (apps follow the OS scheme through
+ * the appearance channel by default) does not sit under a glaring white
+ * titlebar. Hidden-titlebar windows own their caption fidelity already
+ * (syncHiddenCaptionColor samples the presented header pixels — a
+ * strictly better signal), and chromeless windows have no caption at
+ * all, so both stay out of this. Older builds reject the attribute and
+ * keep the system default. */
+static void applyStandardTitlebarColorScheme(Window &window) {
+    if (!window.hwnd || windowUsesHiddenTitlebar(window) || windowIsChromeless(window)) return;
+    const DwmApi &dwm = dwmApi();
+    if (!dwm.set_window_attribute) return;
+    const BOOL dark = windowsAppsUseDarkTheme() ? TRUE : FALSE;
+    dwm.set_window_attribute(window.hwnd, kDwmwaUseImmersiveDarkMode, &dark, sizeof(dark));
+}
+
 /* Appearance from OS settings: the apps dark preference, disabled
  * client-area animations as the reduce-motion signal, and the high
  * contrast accessibility flag. Emitted once after START and again
@@ -4500,6 +4517,10 @@ static void emitAppearanceIfChanged(Host *host, bool force) {
     host->appearance_color_scheme = dark;
     host->appearance_reduce_motion = reduce_motion;
     host->appearance_high_contrast = high_contrast;
+    /* Standard-chrome captions track the scheme live: flipping the OS
+     * theme flips the titlebar with the appearance event the app
+     * re-themes from. */
+    for (auto &entry : host->windows) applyStandardTitlebarColorScheme(entry.second);
     WindowsEvent event = {};
     event.kind = kAppearance;
     event.color_scheme = dark;
@@ -4967,6 +4988,9 @@ static bool createNativeWindow(Host *host, Window &window) {
     DragAcceptFiles(hwnd, TRUE);
     window.hwnd = hwnd;
     applyMenusToWindow(host, window);
+    /* Before the first show, so a dark-scheme launch never flashes a
+     * light caption. */
+    applyStandardTitlebarColorScheme(window);
     if (windowUsesHiddenTitlebar(window)) {
         applyHiddenTitlebarFrame(window);
         /* The create-time WM_NCCALCSIZE ran before this window was

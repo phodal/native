@@ -433,7 +433,15 @@ fn tsAppMarkup() []const u8 {
     \\    <text grow="1">ticks {tickCount}</text>
     \\    <button size="sm" on-press="stamp">Stamp</button>
     \\  </row>
-    \\  <status-bar>total: {total} | stamped: {stampedMs}ms</status-bar>
+    \\  <!-- The empty state is markup, not model surgery: stampedMs starts
+    \\       at -1 (never stamped), and the view says what Stamp will do
+    \\       instead of printing "-1ms". -->
+    \\  <if test="{stampedMs < 0}">
+    \\    <status-bar>total: {total} | press Stamp for a timestamp</status-bar>
+    \\  </if>
+    \\  <else>
+    \\    <status-bar>total: {total} | stamped: {stampedMs}ms</status-bar>
+    \\  </else>
     \\</column>
     \\
     ;

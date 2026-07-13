@@ -1986,6 +1986,251 @@ test "automation set_text routes through the input path so the elm mirror stays 
     }
 }
 
+// -------------------------------------------- edit-derivation choke point
+
+const search_mirror_canvas_label = "search-mirror-canvas";
+
+const SearchMirrorModel = struct {
+    query: canvas.TextBuffer(64) = .{},
+    edit_count: u32 = 0,
+};
+
+const SearchMirrorMsg = union(enum) {
+    query_edit: canvas.TextInputEvent,
+};
+
+const SearchMirrorApp = ui_app_model.UiApp(SearchMirrorModel, SearchMirrorMsg);
+
+fn searchMirrorUpdate(model: *SearchMirrorModel, msg: SearchMirrorMsg) void {
+    switch (msg) {
+        .query_edit => |edit| {
+            model.query.apply(edit);
+            model.edit_count += 1;
+        },
+    }
+}
+
+fn searchMirrorView(ui: *SearchMirrorApp.Ui, model: *const SearchMirrorModel) SearchMirrorApp.Ui.Node {
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        ui.el(.search_field, .{
+            .text = model.query.text(),
+            .placeholder = "Search",
+            .on_input = SearchMirrorApp.Ui.inputMsg(.query_edit),
+        }, .{}),
+        ui.text(.{}, if (model.query.len == 0) "Unfiltered" else "Filtered"),
+    });
+}
+
+const search_mirror_views = [_]app_manifest.ShellView{
+    .{ .label = search_mirror_canvas_label, .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+};
+const search_mirror_windows = [_]app_manifest.ShellWindow{.{
+    .label = "main",
+    .title = "SearchMirror",
+    .width = 400,
+    .height = 300,
+    .views = &search_mirror_views,
+}};
+const search_mirror_scene: app_manifest.ShellConfig = .{ .windows = &search_mirror_windows };
+
+fn startSearchMirror(harness: *core.TestHarness(), app_state: *SearchMirrorApp) !void {
+    app_state.* = SearchMirrorApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-search-mirror",
+        .scene = search_mirror_scene,
+        .canvas_label = search_mirror_canvas_label,
+        .update = searchMirrorUpdate,
+        .view = searchMirrorView,
+    });
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = search_mirror_canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+}
+
+fn searchMirrorHasText(app_state: *const SearchMirrorApp, text: []const u8) bool {
+    const tree = app_state.tree orelse return false;
+    return widgetTreeHasText(tree.root, text);
+}
+
+fn widgetTreeHasText(widget: canvas.Widget, text: []const u8) bool {
+    if (widget.kind == .text and std.mem.eql(u8, widget.text, text)) return true;
+    for (widget.children) |child| {
+        if (widgetTreeHasText(child, text)) return true;
+    }
+    return false;
+}
+
+test "Escape's search-field clear reaches the model through the edit-derivation seam" {
+    // The post-launch live-GUI bug: Escape made the runtime editor clear
+    // the field VISUALLY while the model's `on_input` mirror never heard
+    // anything — the list stayed filtered against a query the screen no
+    // longer showed, and the next keystroke dispatched against the stale
+    // term. The keyboard derivation now stamps the edit it applies onto
+    // the dispatched event, so every formerly runtime-only edit (the
+    // Escape clear, the composition cancel, the single-line ArrowUp/Down
+    // caret jumps) reaches the model exactly as applied.
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(SearchMirrorApp);
+    defer std.testing.allocator.destroy(app_state);
+    try startSearchMirror(harness, app_state);
+    defer app_state.deinit();
+    const app = app_state.app();
+
+    const field_id = findWidgetIdByKind(app_state.tree.?.root, .search_field).?;
+    const field_frame = (try harness.runtime.canvasWidgetLayout(1, search_mirror_canvas_label)).findById(field_id).?.frame;
+
+    // Click into the (empty) field to focus it and type through the
+    // platform text channel.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = search_mirror_canvas_label,
+        .kind = .pointer_down,
+        .x = field_frame.x + field_frame.width * 0.5,
+        .y = field_frame.y + field_frame.height * 0.5,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = search_mirror_canvas_label,
+        .kind = .text_input,
+        .text = "glass",
+    } });
+    try std.testing.expectEqualStrings("glass", app_state.model.query.text());
+    try std.testing.expect(searchMirrorHasText(app_state, "Filtered"));
+
+    // ArrowUp jumps the caret to the start in a single-line field — a
+    // runtime-only derivation before the stamp; the model's selection
+    // mirror must follow so its next splice lands where the editor's
+    // does.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = search_mirror_canvas_label,
+        .kind = .key_down,
+        .key = "arrowup",
+    } });
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(0), app_state.model.query.selection);
+
+    // THE pin: Escape clears the field AND the model hears it.
+    const edits_before_escape = app_state.model.edit_count;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = search_mirror_canvas_label,
+        .kind = .key_down,
+        .key = "escape",
+    } });
+    try std.testing.expect(app_state.model.edit_count > edits_before_escape);
+    try std.testing.expectEqualStrings("", app_state.model.query.text());
+    try std.testing.expect(searchMirrorHasText(app_state, "Unfiltered"));
+
+    // The visual state agrees with the model: the retained editor and
+    // the automation snapshot both show the cleared field.
+    const cleared_layout = try harness.runtime.canvasWidgetLayout(1, search_mirror_canvas_label);
+    try std.testing.expectEqualStrings("", cleared_layout.findById(field_id).?.widget.text);
+    const snapshot = harness.runtime.automationSnapshot("SearchMirror");
+    for (snapshot.widgets) |widget| {
+        if (widget.id == field_id) try std.testing.expectEqualStrings("", widget.text_value);
+    }
+
+    // Escape during composition cancels the composition FIRST — and the
+    // model hears that too (the second formerly runtime-only arm).
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = search_mirror_canvas_label,
+        .kind = .ime_set_composition,
+        .text = "ne",
+    } });
+    try std.testing.expectEqualStrings("ne", app_state.model.query.text());
+    try std.testing.expect(app_state.model.query.composition != null);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = search_mirror_canvas_label,
+        .kind = .key_down,
+        .key = "escape",
+    } });
+    try std.testing.expectEqualStrings("", app_state.model.query.text());
+    try std.testing.expect(app_state.model.query.composition == null);
+    const canceled_layout = try harness.runtime.canvasWidgetLayout(1, search_mirror_canvas_label);
+    try std.testing.expectEqualStrings("", canceled_layout.findById(field_id).?.widget.text);
+}
+
+test "automation composition and selection verbs keep the model mirror consistent" {
+    // The automation/accessibility text verbs (`widget-action ...
+    // set_composition/commit_composition/cancel_composition`) used to
+    // write the runtime editor directly — on-screen composition the
+    // model never heard, the `set_text` bug's composition twin. They
+    // now ride the SAME ime input events a real IME session produces
+    // (journaled, stamped, dispatched); `set_selection` synthesizes the
+    // stamped keyboard event the clipboard edits use.
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(SearchMirrorApp);
+    defer std.testing.allocator.destroy(app_state);
+    try startSearchMirror(harness, app_state);
+    defer app_state.deinit();
+    const app = app_state.app();
+
+    const field_id = findWidgetIdByKind(app_state.tree.?.root, .search_field).?;
+
+    // Compose marked text: the editor shows it AND the model hears it.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = search_mirror_canvas_label,
+        .id = field_id,
+        .action = .set_composition,
+        .value = "ing",
+    });
+    try std.testing.expectEqualStrings("ing", app_state.model.query.text());
+    try std.testing.expectEqualDeep(@as(?canvas.TextRange, canvas.TextRange.init(0, 3)), app_state.model.query.composition);
+    const composing_layout = try harness.runtime.canvasWidgetLayout(1, search_mirror_canvas_label);
+    try std.testing.expectEqualStrings("ing", composing_layout.findById(field_id).?.widget.text);
+
+    // Commit: composition resolves to plain text in both.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = search_mirror_canvas_label,
+        .id = field_id,
+        .action = .commit_composition,
+    });
+    try std.testing.expectEqualStrings("ing", app_state.model.query.text());
+    try std.testing.expect(app_state.model.query.composition == null);
+
+    // Select a range: the model's selection mirror follows.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = search_mirror_canvas_label,
+        .id = field_id,
+        .action = .set_selection,
+        .value = "0 3",
+    });
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 3 }, app_state.model.query.selection);
+
+    // Cancel a fresh composition: the marked run vanishes from both.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = search_mirror_canvas_label,
+        .id = field_id,
+        .action = .set_composition,
+        .value = "aro",
+    });
+    try std.testing.expectEqualStrings("aro", app_state.model.query.text());
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = search_mirror_canvas_label,
+        .id = field_id,
+        .action = .cancel_composition,
+    });
+    try std.testing.expectEqualStrings("", app_state.model.query.text());
+    try std.testing.expect(app_state.model.query.composition == null);
+    const canceled_layout = try harness.runtime.canvasWidgetLayout(1, search_mirror_canvas_label);
+    try std.testing.expectEqualStrings("", canceled_layout.findById(field_id).?.widget.text);
+}
+
 // ------------------------------------------------- autofocus (notes flow)
 
 const autofocus_canvas_label = "autofocus-canvas"; // shell scene label below

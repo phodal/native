@@ -924,6 +924,42 @@ test "search filters albums and songs through typed dispatch" {
     try testing.expect(findByLabel(tree.root, "No albums match") != null);
 }
 
+test "live: Escape clears the search field and the model hears it" {
+    // The post-launch live-GUI smoke bug: Escape made the runtime's
+    // editor clear the field VISUALLY while the model kept the stale
+    // query — the grid stayed filtered against a term the screen no
+    // longer showed, and the next keystroke spliced into it. The
+    // keyboard derivation now stamps the clear it applies onto the
+    // dispatched event, so the model's on-input mirror hears Escape
+    // exactly like the clear affordance and every keystroke.
+    const live = try LiveApp.start(true);
+    defer live.stop();
+    const app_state = live.app_state;
+
+    // Focus the search field and type a one-album query through the
+    // real platform text channel.
+    try live.focusWidget(try live.widgetIdByLabel(.search_field, "Search library"));
+    try live.harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .gpu_surface_input = .{
+        .label = main.canvas_label,
+        .kind = .text_input,
+        .text = "channel",
+    } });
+    try testing.expectEqualStrings("channel", app_state.model.search());
+    try testing.expectEqual(@as(usize, 1), countListItems(app_state.tree.?.root));
+
+    // Escape through the same raw key path a physical press produces:
+    // the model clears WITH the field, and the grid unfilters.
+    try live.keyDown("escape", "");
+    try testing.expectEqualStrings("", app_state.model.search());
+    try testing.expectEqual(model_mod.albums.len, countListItems(app_state.tree.?.root));
+
+    // The retained editor agrees with the model — no visual/model split.
+    const layout = try live.harness.runtime.canvasWidgetLayout(1, main.canvas_label);
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .search_field) try testing.expectEqualStrings("", node.widget.text);
+    }
+}
+
 test "a full session: open an album, play it, and use the context menus" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

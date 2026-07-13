@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const geometry = @import("geometry");
+const canvas = @import("canvas");
 const app_manifest = @import("app_manifest");
 const core = @import("core.zig");
 const ui_app_mod = @import("ui_app.zig");
@@ -32,9 +33,23 @@ const SessionModel = struct {
     /// pin, without 32 array fields in the equality check.
     spectrum_count: u32 = 0,
     band_checksum: u64 = 0,
+    /// The search query's `on_input` mirror, zero-padded so the deep
+    /// model equality below stays deterministic. The reference session
+    /// types into the field and Escape-clears it: the journal records
+    /// only the RAW click/type/Escape platform events, so replay must
+    /// re-derive the same clear edit the recording's editor applied.
+    query: [32]u8 = [_]u8{0} ** 32,
+    query_len: usize = 0,
+    query_anchor: usize = 0,
+    query_focus: usize = 0,
+    query_edits: u32 = 0,
 
     fn bodyText(self: *const SessionModel) []const u8 {
         return self.body[0..self.body_len];
+    }
+
+    fn queryText(self: *const SessionModel) []const u8 {
+        return self.query[0..self.query_len];
     }
 };
 
@@ -44,6 +59,7 @@ const SessionMsg = union(enum) {
     start_fetch,
     start_spawn,
     start_audio,
+    query_edit: canvas.TextInputEvent,
     fetched: effects_mod.EffectResponse,
     line: effects_mod.EffectLine,
     exited: effects_mod.EffectExit,
@@ -92,6 +108,21 @@ fn sessionUpdate(model: *SessionModel, msg: SessionMsg, fx: *SessionApp.Effects)
             for (event.bands) |band| checksum = checksum *% 31 +% band;
             model.band_checksum = checksum;
         },
+        .query_edit => |edit| {
+            var scratch: [32]u8 = undefined;
+            const next = (canvas.TextEditState{
+                .text = model.queryText(),
+                .selection = .{ .anchor = model.query_anchor, .focus = model.query_focus },
+            }).apply(edit, &scratch) catch return;
+            var out = [_]u8{0} ** 32;
+            const len = @min(next.text.len, out.len);
+            std.mem.copyForwards(u8, out[0..len], next.text[0..len]);
+            model.query = out;
+            model.query_len = len;
+            model.query_anchor = next.selection.anchor;
+            model.query_focus = next.selection.focus;
+            model.query_edits += 1;
+        },
         .line => model.line_count += 1,
         .exited => |exit| model.exit_code = exit.code,
         .tick => |timer| model.tick_timestamp_ns = timer.timestamp_ns,
@@ -103,6 +134,12 @@ fn sessionView(ui: *SessionApp.Ui, model: *const SessionModel) SessionApp.Ui.Nod
         ui.text(.{}, ui.fmt("Count {d}", .{model.count})),
         ui.text(.{}, ui.fmt("Body {s} ({d})", .{ model.bodyText(), model.fetch_status })),
         ui.text(.{}, ui.fmt("Lines {d} Exit {d} Tick {d} Stamp {d}", .{ model.line_count, model.exit_code, model.tick_timestamp_ns, model.stamp_ms })),
+        ui.el(.search_field, .{
+            .text = model.queryText(),
+            .placeholder = "Search",
+            .on_input = SessionApp.Ui.inputMsg(.query_edit),
+        }, .{}),
+        ui.text(.{}, ui.fmt("Query {s} ({d})", .{ model.queryText(), model.query_edits })),
         ui.button(.{ .on_press = .increment }, "Increment"),
     });
 }
@@ -242,6 +279,41 @@ fn recordReferenceSession(gpa: std.mem.Allocator, buffer: *JournalBuffer, web_la
     try harness.runtime.dispatchPlatformEvent(app, .wake);
     try harness.runtime.dispatchPlatformEvent(app, .frame_requested);
 
+    // An Escape-clear in the search field is DERIVED input state: the
+    // journal records only the raw click/type/Escape platform events,
+    // and replay must re-derive the same clear edit the recording's
+    // editor applied — model mirror, retained editor, and fingerprint
+    // all landing identically.
+    const layout = try harness.runtime.canvasWidgetLayout(1, canvas_label);
+    var search_frame: ?geometry.RectF = null;
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .search_field) search_frame = node.frame;
+    }
+    const field_frame = search_frame.?;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pointer_down,
+        .x = field_frame.x + field_frame.width * 0.5,
+        .y = field_frame.y + field_frame.height * 0.5,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .text_input,
+        .text = "glass",
+    } });
+    try std.testing.expectEqualStrings("glass", app_state.model.queryText());
+    try harness.runtime.dispatchPlatformEvent(app, .frame_requested);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .key_down,
+        .key = "escape",
+    } });
+    try std.testing.expectEqualStrings("", app_state.model.queryText());
+    try harness.runtime.dispatchPlatformEvent(app, .frame_requested);
+
     recorder.finish();
     try std.testing.expect(!recorder.failed);
 
@@ -294,6 +366,10 @@ test "a recorded session replays to identical model state and fingerprints" {
     try std.testing.expect(recorded.model.stamp_ms != 0);
     try std.testing.expectEqual(@as(u32, 1), recorded.model.spectrum_count);
     try std.testing.expect(recorded.model.band_checksum != 0);
+    // The typed insert and the DERIVED Escape-clear both reached the
+    // model's `on_input` mirror, and the clear left it empty.
+    try std.testing.expectEqual(@as(u32, 2), recorded.model.query_edits);
+    try std.testing.expectEqualStrings("", recorded.model.queryText());
 
     const replayed = try replayIntoFreshApp(gpa, buffer.journalBytes(), true);
     try std.testing.expect(replayed.report.ok());

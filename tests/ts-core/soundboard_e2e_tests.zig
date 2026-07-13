@@ -559,6 +559,26 @@ test "search drives the full text engine from raw platform input and filters bot
     try std.testing.expect(h.hasText("68 of 68"));
 }
 
+test "Escape clears the search field and the TS core hears it" {
+    // The post-launch live-GUI smoke bug, TS tier: Escape's clear was a
+    // runtime-local editor operation — the field emptied on screen while
+    // the core's search mirror kept the stale term and the list stayed
+    // filtered. The keyboard derivation now stamps the clear it applies
+    // onto the dispatched event, so the transpiled core hears it through
+    // the same on-input channel every keystroke uses.
+    const h = try Harness.create();
+    defer h.destroy();
+
+    try h.click(h.findId(.search_field, "").?);
+    try h.textInput("night");
+    try std.testing.expectEqualStrings("night", Bridge.model().search.bytes);
+    try std.testing.expect(h.hasText("1 of 8"));
+
+    try h.keyDown("escape");
+    try std.testing.expectEqualStrings("", Bridge.model().search.bytes);
+    try std.testing.expect(h.hasText("8 of 8"));
+}
+
 test "automation set_text replaces the search term: the select-all sentinel translates into the core's i64 mirror" {
     const h = try Harness.create();
     defer h.destroy();

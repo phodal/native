@@ -85,11 +85,20 @@ fn tsCoreStage(b: *std.Build, dep: *std.Build.Dependency, app_root: []const u8) 
         "packages/core/node_modules/@typescript/typescript6",
         .{},
     ) catch {
-        @panic("\nthe SDK's @native-sdk/core transpiler is missing its installed dependency.\nFix with:" ++
-            " cd <sdk>/packages/core && npm ci\n");
+        // Name the SDK dependency's real location (a checkout or the
+        // npm-installed @native-sdk/cli package — both carry
+        // packages/core with its lockfile, so `npm ci` works in place).
+        std.debug.panic("\nthe SDK's @native-sdk/core transpiler is missing its installed dependency.\nFix with:" ++
+            " cd {s}/packages/core && npm ci\n", .{dep.builder.build_root.path orelse "<sdk>"});
     };
 
+    // The transpiler runs through build/ts_run.mjs, not as `node cli.ts`:
+    // on the npm-installed layout the transpiler's .ts sources live inside
+    // node_modules, where node refuses its builtin type stripping — the
+    // runner strips those modules with the transpiler's own installed
+    // TypeScript and is a pass-through on a repo checkout.
     const transpile = b.addSystemCommand(&.{node});
+    transpile.addFileArg(dep.path("build/ts_run.mjs"));
     transpile.addFileArg(dep.path("packages/core/src/cli.ts"));
     transpile.addFileArg(b.path(appPath(b, app_root, "src/core.ts")));
     transpile.addArg("-o");

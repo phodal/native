@@ -78,7 +78,22 @@ fn transpilerPath(allocator: std.mem.Allocator, io: std.Io, framework_root: []co
     const path = try std.fs.path.join(allocator, &.{ framework_root, "packages", "core", sub });
     errdefer allocator.free(path);
     if (!buildgraph.fileExists(io, path)) {
-        std.debug.print("the Native SDK at {s} is missing packages/core/{s} - is the checkout complete?\n", .{ framework_root, sub });
+        std.debug.print("the Native SDK at {s} is missing packages/core/{s} - is the checkout (or npm install) complete?\n", .{ framework_root, sub });
+        return error.MissingTranspiler;
+    }
+    return path;
+}
+
+/// The layout-neutral runner for the transpiler tier's .ts modules
+/// (build/ts_run.mjs): a pass-through on a repo checkout, and the type
+/// stripper for the npm-installed layout, where the same modules sit
+/// inside node_modules and node refuses its builtin stripping. Every
+/// node invocation of a packages/core .ts module goes through it.
+fn tsRunnerPath(allocator: std.mem.Allocator, io: std.Io, framework_root: []const u8) ![]const u8 {
+    const path = try std.fs.path.join(allocator, &.{ framework_root, "build", "ts_run.mjs" });
+    errdefer allocator.free(path);
+    if (!buildgraph.fileExists(io, path)) {
+        std.debug.print("the Native SDK at {s} is missing build/ts_run.mjs - is the checkout (or npm install) complete?\n", .{framework_root});
         return error.MissingTranspiler;
     }
     return path;
@@ -108,11 +123,13 @@ fn requireInstalledTranspiler(allocator: std.mem.Allocator, io: std.Io, framewor
 pub fn checkCore(allocator: std.mem.Allocator, io: std.Io, base_env: *std.process.Environ.Map, framework_root: []const u8) !void {
     const cli_path = try transpilerPath(allocator, io, framework_root, "src/cli.ts");
     defer allocator.free(cli_path);
+    const runner_path = try tsRunnerPath(allocator, io, framework_root);
+    defer allocator.free(runner_path);
     try requireInstalledTranspiler(allocator, io, framework_root);
     try std.Io.Dir.cwd().createDirPath(io, ".native/check");
 
     var child = std.process.spawn(io, .{
-        .argv = &.{ "node", cli_path, "src/core.ts", "-o", ".native/check/core.zig" },
+        .argv = &.{ "node", runner_path, cli_path, "src/core.ts", "-o", ".native/check/core.zig" },
         .stdin = .ignore,
         .stdout = .inherit,
         .stderr = .inherit,
@@ -148,6 +165,8 @@ pub fn runDevHost(allocator: std.mem.Allocator, io: std.Io, framework_root: []co
     }
     const devhost_path = try transpilerPath(allocator, io, framework_root, "src/devhost.ts");
     defer allocator.free(devhost_path);
+    const runner_path = try tsRunnerPath(allocator, io, framework_root);
+    defer allocator.free(runner_path);
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
@@ -159,6 +178,7 @@ pub fn runDevHost(allocator: std.mem.Allocator, io: std.Io, framework_root: []co
         }
         try argv.append(allocator, "--watch");
     }
+    try argv.append(allocator, runner_path);
     try argv.append(allocator, devhost_path);
     try argv.append(allocator, "src/core.ts");
     if (options.script) |script| {

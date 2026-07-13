@@ -462,7 +462,7 @@ pub fn build(b: *std.Build) void {
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"gpuSurfaces\"" },
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "gpuFirstFrameLatencyNs: number" },
     });
-    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-ts-toolchain-twins", "Verify the CLI's toolchain-resolution gate and its direct-`zig build` twin stay in lockstep (both walk to the aliased real compiler behind the @typescript/typescript6 wrapper, and both teach instead of panicking)", &.{
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-ts-toolchain-twins", "Verify the CLI's toolchain-resolution gate and its direct-`zig build` twin stay in lockstep (both walk to the aliased real compiler behind the @typescript/typescript6 wrapper, both hold its resolved version against the manifest-read pin, and both teach instead of panicking)", &.{
         // The resolution twins require the aliased REAL compiler behind
         // the @typescript/typescript6 wrapper (its lib/typescript.js is a
         // one-line re-export of "@typescript/old") — both predicates must
@@ -473,8 +473,19 @@ pub fn build(b: *std.Build) void {
         .{ .path = "build/app.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"lib\", \"typescript.js\"" },
         // The reciprocal cross-references that keep the twins findable
         // from each other.
-        .{ .path = "src/tooling/ts_core.zig", .pattern = "build/app.zig's tsToolchainResolves" },
-        .{ .path = "build/app.zig", .pattern = "transpilerResolves, this predicate's deliberate twin" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "build/app.zig's tsToolchainResolution" },
+        .{ .path = "build/app.zig", .pattern = "transpilerResolution, this predicate's deliberate twin" },
+        // The version pin: both twins read the alias's RESOLVED
+        // package.json version and hold it against the exact
+        // `npm:typescript@X.Y.Z` pin read from the SDK's own
+        // packages/core/package.json (never hardcoded), and both carry
+        // the mismatch outcome plus its teaching naming the two versions.
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "parseAliasedCompilerPin" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "version_mismatch" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "npm:typescript@{s}" },
+        .{ .path = "build/app.zig", .pattern = "tsPinnedCompilerVersion" },
+        .{ .path = "build/app.zig", .pattern = "version_mismatch" },
+        .{ .path = "build/app.zig", .pattern = "npm:typescript@{s}" },
         // The teachings: the checkout's one production-config-safe npm ci
         // command in both surfaces, the reinstall for npm layouts, and the
         // build graph's clean configure-time failure (never a panic).

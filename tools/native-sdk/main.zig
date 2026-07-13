@@ -474,6 +474,7 @@ fn failVerb(err: anyerror) anyerror!void {
         error.MissingNode,
         error.MissingTranspiler,
         error.BrokenToolchainInstall,
+        error.ToolchainVersionMismatch,
         error.CoreCheckFailed,
         error.DevHostFailed,
         error.HostCompileFailed,

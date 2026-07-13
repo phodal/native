@@ -73,7 +73,7 @@ const TsCoreStage = struct {
 /// Whether the transpiler's TypeScript toolchain (@typescript/typescript6)
 /// RESOLVES from the SDK's packages/core, by node's ancestor node_modules
 /// walk — the same semantics the CLI gates on (src/tooling/ts_core.zig
-/// transpilerResolves, this predicate's deliberate twin: keep the two in
+/// transpilerResolution, this predicate's deliberate twin: keep the two in
 /// lockstep) and the same walk node itself performs when the transpiler
 /// imports the toolchain at run time. Covers every layout: a repo
 /// checkout's packages/core/node_modules (nearest wins), and the
@@ -102,18 +102,43 @@ const TsCoreStage = struct {
 /// alias of the real `typescript` package), so a tree where only the
 /// wrapper landed still dies at run time on the wrapper's own require. A
 /// resolvable toolchain therefore also needs that aliased compiler to
-/// resolve FROM THE WRAPPER (see tsAliasedCompilerResolves).
-fn tsToolchainResolves(b: *std.Build, dep: *std.Build.Dependency) bool {
+/// resolve FROM THE WRAPPER (see tsAliasedCompilerVersion) — and to
+/// resolve at the SDK's exactly pinned VERSION: a consumer tree carrying
+/// its own conflicting `@typescript/old` hoisted above ours wins node's
+/// nearest-wins walk from the wrapper while our exact pin sits nested and
+/// unused, so resolvability alone would bless a compiler the SDK never
+/// pinned. The pin is read from the SDK dependency's own
+/// packages/core/package.json (the `npm:typescript@X.Y.Z` alias suffix in
+/// devDependencies — tsParseAliasedCompilerPin, mirroring the twin's
+/// parseAliasedCompilerPin), never hardcoded, so version bumps stay a
+/// one-file change.
+const TsToolchainResolution = union(enum) {
+    resolved,
+    unresolved,
+    /// The aliased compiler resolves, but at a version other than the
+    /// SDK's exact pin (strings allocated on b.allocator, freed never —
+    /// this is configure-time teaching data).
+    version_mismatch: struct { resolved: []const u8, pinned: []const u8 },
+};
+
+fn tsToolchainResolution(b: *std.Build, dep: *std.Build.Dependency) TsToolchainResolution {
     const io = b.graph.io;
     const sdk_root = tsSdkRoot(b.allocator, io, dep);
+    // The pin first: an SDK tree whose packages/core/package.json is
+    // missing or pinless is not one this gate can vouch for (the file
+    // ships in every layout), so it concludes unresolved and the teaching
+    // path acts.
+    const pinned = tsPinnedCompilerVersion(b, sdk_root) orelse return .unresolved;
     var dir: []const u8 = b.pathJoin(&.{ sdk_root, "packages", "core" });
     while (true) {
         found: {
             std.Io.Dir.cwd().access(io, b.pathJoin(&.{ dir, "node_modules", "@typescript", "typescript6", "package.json" }), .{}) catch break :found;
-            std.Io.Dir.cwd().access(io, b.pathJoin(&.{ dir, "node_modules", "@typescript", "typescript6", "lib", "typescript.js" }), .{}) catch return false;
-            return tsAliasedCompilerResolves(b, b.pathJoin(&.{ dir, "node_modules", "@typescript", "typescript6" }));
+            std.Io.Dir.cwd().access(io, b.pathJoin(&.{ dir, "node_modules", "@typescript", "typescript6", "lib", "typescript.js" }), .{}) catch return .unresolved;
+            const resolved = tsAliasedCompilerVersion(b, b.pathJoin(&.{ dir, "node_modules", "@typescript", "typescript6" })) orelse return .unresolved;
+            if (std.mem.eql(u8, resolved, pinned)) return .resolved;
+            return .{ .version_mismatch = .{ .resolved = resolved, .pinned = pinned } };
         }
-        dir = std.fs.path.dirname(dir) orelse return false;
+        dir = std.fs.path.dirname(dir) orelse return .unresolved;
     }
 }
 
@@ -132,20 +157,62 @@ fn tsToolchainResolves(b: *std.Build, dep: *std.Build.Dependency) bool {
 /// check-version-sync. A manifest without its entrypoint THROWS in node
 /// rather than consulting a deeper ancestor, so it concludes unresolvable
 /// here too (this predicate's deliberate twin: src/tooling/ts_core.zig's
-/// aliasedCompilerResolves — keep the two in lockstep).
-fn tsAliasedCompilerResolves(b: *std.Build, wrapper_dir: []const u8) bool {
+/// aliasedCompilerVersion — keep the two in lockstep).
+///
+/// Returns the resolved alias's installed VERSION so the caller can hold
+/// it against the SDK's pin; a resolvable-looking alias whose manifest
+/// carries no version field returns null (every real npm install writes
+/// one — its absence is a corrupt sliver, not a compiler to vouch for).
+fn tsAliasedCompilerVersion(b: *std.Build, wrapper_dir: []const u8) ?[]const u8 {
     const io = b.graph.io;
     var dir: []const u8 = wrapper_dir;
     while (true) {
         if (!std.mem.eql(u8, std.fs.path.basename(dir), "node_modules")) {
             found: {
-                std.Io.Dir.cwd().access(io, b.pathJoin(&.{ dir, "node_modules", "@typescript", "old", "package.json" }), .{}) catch break :found;
-                std.Io.Dir.cwd().access(io, b.pathJoin(&.{ dir, "node_modules", "@typescript", "old", "lib", "typescript.js" }), .{}) catch return false;
-                return true;
+                const manifest_path = b.pathJoin(&.{ dir, "node_modules", "@typescript", "old", "package.json" });
+                std.Io.Dir.cwd().access(io, manifest_path, .{}) catch break :found;
+                std.Io.Dir.cwd().access(io, b.pathJoin(&.{ dir, "node_modules", "@typescript", "old", "lib", "typescript.js" }), .{}) catch return null;
+                const manifest = std.Io.Dir.cwd().readFileAlloc(io, manifest_path, b.allocator, .limited(64 * 1024)) catch return null;
+                return tsParseQuotedManifestValue(manifest, "\"version\"", "");
             }
         }
-        dir = std.fs.path.dirname(dir) orelse return false;
+        dir = std.fs.path.dirname(dir) orelse return null;
     }
+}
+
+/// The version the SDK pins its aliased compiler to, read from the SDK
+/// dependency's own packages/core/package.json — the same manifest the
+/// CLI's gate reads, so both surfaces learn a version bump from one file.
+fn tsPinnedCompilerVersion(b: *std.Build, sdk_root: []const u8) ?[]const u8 {
+    const manifest = std.Io.Dir.cwd().readFileAlloc(b.graph.io, b.pathJoin(&.{ sdk_root, "packages", "core", "package.json" }), b.allocator, .limited(64 * 1024)) catch return null;
+    const pin = tsParseQuotedManifestValue(manifest, "\"@typescript/old\"", "npm:typescript@") orelse return null;
+    // Exact X.Y.Z only (check-version-sync's pin shape), mirroring the
+    // twin's parseAliasedCompilerPin: a range is not a pin.
+    if (pin.len == 0) return null;
+    for (pin) |c| {
+        if (!std.ascii.isDigit(c) and c != '.') return null;
+    }
+    if (std.mem.count(u8, pin, ".") != 2) return null;
+    return pin;
+}
+
+/// Targeted scan for a manifest key's string value (the twin of
+/// ts_core.zig's parsePackageVersion/parseAliasedCompilerPin scanners):
+/// find `key`, expect `: "<required_prefix><value>"`, return `value`.
+fn tsParseQuotedManifestValue(manifest_json: []const u8, comptime key: []const u8, comptime required_prefix: []const u8) ?[]const u8 {
+    const key_at = std.mem.indexOf(u8, manifest_json, key) orelse return null;
+    var rest = manifest_json[key_at + key.len ..];
+    rest = std.mem.trimStart(u8, rest, " \t\r\n");
+    if (rest.len == 0 or rest[0] != ':') return null;
+    rest = std.mem.trimStart(u8, rest[1..], " \t\r\n");
+    if (rest.len == 0 or rest[0] != '"') return null;
+    rest = rest[1..];
+    const end = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
+    const value = rest[0..end];
+    if (!std.mem.startsWith(u8, value, required_prefix)) return null;
+    const suffix = value[required_prefix.len..];
+    if (suffix.len == 0) return null;
+    return suffix;
 }
 
 /// The SDK dependency's real root, resolved the way both the toolchain
@@ -165,25 +232,46 @@ fn tsCoreStage(b: *std.Build, dep: *std.Build.Dependency, app_root: []const u8) 
             " build time; the binary it emits ships no JS runtime).\nInstall Node.js 22.15+ — https://nodejs.org" ++
             " or `brew install node` — and re-run.\n");
     };
-    if (!tsToolchainResolves(b, dep)) {
-        // Safety net for direct `zig build` users: the `native` CLI gates
-        // this itself, so reaching here means zig was invoked by hand
-        // against an SDK whose toolchain resolves nowhere. Name the SDK
-        // dependency's real location as a RESOLVED path and fail the
-        // configure phase cleanly — a teaching message, never a panic
-        // stack trace.
-        const sdk_root = tsSdkRoot(dep.builder.allocator, dep.builder.graph.io, dep);
-        std.debug.print(
-            \\
-            \\error: the @native-sdk/core transpiler cannot resolve its TypeScript toolchain
-            \\(@typescript/typescript6). On a repo checkout, install it once with:
-            \\  cd {s}/packages/core && npm ci --include=dev
-            \\(An npm-installed @native-sdk/cli carries the toolchain automatically; if it
-            \\is missing there, the install is broken - reinstall @native-sdk/cli.)
-            \\
-            \\
-        , .{sdk_root});
-        std.process.exit(1);
+    switch (tsToolchainResolution(b, dep)) {
+        .resolved => {},
+        .unresolved => {
+            // Safety net for direct `zig build` users: the `native` CLI
+            // gates this itself, so reaching here means zig was invoked by
+            // hand against an SDK whose toolchain resolves nowhere. Name
+            // the SDK dependency's real location as a RESOLVED path and
+            // fail the configure phase cleanly — a teaching message, never
+            // a panic stack trace.
+            const sdk_root = tsSdkRoot(dep.builder.allocator, dep.builder.graph.io, dep);
+            std.debug.print(
+                \\
+                \\error: the @native-sdk/core transpiler cannot resolve its TypeScript toolchain
+                \\(@typescript/typescript6). On a repo checkout, install it once with:
+                \\  cd {s}/packages/core && npm ci --include=dev
+                \\(An npm-installed @native-sdk/cli carries the toolchain automatically; if it
+                \\is missing there, the install is broken - reinstall @native-sdk/cli.)
+                \\
+                \\
+            , .{sdk_root});
+            std.process.exit(1);
+        },
+        .version_mismatch => |mismatch| {
+            // The wrong-VERSION shape gets its own teaching (the CLI's
+            // gate mirrors it): a conflicting consumer-tree
+            // @typescript/old shadows the SDK's exact pin, and no install
+            // command fixes what is already installed — the conflict has
+            // to move.
+            std.debug.print(
+                \\
+                \\error: the @native-sdk/core transpiler's TypeScript compiler resolves at the
+                \\wrong version: @typescript/old resolves to typescript {s}, but the SDK pins
+                \\npm:typescript@{s}. Another package in this tree pins a conflicting
+                \\@typescript/old - align it with the SDK's pin (or remove it) and reinstall,
+                \\so the SDK's exact pin is the copy that resolves.
+                \\
+                \\
+            , .{ mismatch.resolved, mismatch.pinned });
+            std.process.exit(1);
+        },
     }
 
     // The transpiler runs through build/ts_run.mjs, not as `node cli.ts`:

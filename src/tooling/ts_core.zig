@@ -23,6 +23,7 @@ pub const Error = error{
     MissingNode,
     MissingTranspiler,
     BrokenToolchainInstall,
+    ToolchainVersionMismatch,
     CoreCheckFailed,
     DevHostFailed,
 };
@@ -142,25 +143,99 @@ pub const npm_ci_teaching_command = "npm ci --include=dev";
 /// alias of the real `typescript` package), so a tree where only the
 /// wrapper landed still dies at run time on the wrapper's own require. A
 /// resolvable toolchain therefore also needs that aliased compiler to
-/// resolve FROM THE WRAPPER — see `aliasedCompilerResolves`. Kept in
-/// lockstep with its deliberate twin for direct `zig build` runs,
-/// build/app.zig's tsToolchainResolves.
-fn transpilerResolves(allocator: std.mem.Allocator, io: std.Io, framework_root: []const u8) bool {
-    const core_dir = std.fs.path.join(allocator, &.{ framework_root, "packages", "core" }) catch return false;
+/// resolve FROM THE WRAPPER — see `aliasedCompilerVersion` — AND to
+/// resolve at the SDK's exactly pinned VERSION: resolvability alone would
+/// pass a consumer tree whose own conflicting `@typescript/old` is hoisted
+/// above ours, where nearest-wins hands the wrapper a compiler the SDK
+/// never pinned while our exact copy sits nested and unused. The pin is
+/// read from the framework's own packages/core/package.json (the
+/// `npm:typescript@X.Y.Z` alias suffix in devDependencies —
+/// `parseAliasedCompilerPin`), never hardcoded, so a version bump stays a
+/// one-file change; check-version-sync keeps that manifest and the CLI's
+/// dependencies in lockstep. Kept in lockstep with its deliberate twin for
+/// direct `zig build` runs, build/app.zig's tsToolchainResolution.
+pub const ToolchainResolution = union(enum) {
+    resolved,
+    unresolved,
+    /// The aliased compiler resolves, but at a version other than the
+    /// SDK's exact pin (a conflicting consumer-tree `@typescript/old`
+    /// shadowing ours). Both strings are allocator-owned.
+    version_mismatch: Mismatch,
+
+    pub const Mismatch = struct {
+        resolved: []const u8,
+        pinned: []const u8,
+
+        pub fn deinit(self: Mismatch, allocator: std.mem.Allocator) void {
+            allocator.free(self.resolved);
+            allocator.free(self.pinned);
+        }
+    };
+};
+
+fn transpilerResolution(allocator: std.mem.Allocator, io: std.Io, framework_root: []const u8) ToolchainResolution {
+    // The pin first: a framework tree whose packages/core/package.json is
+    // missing or pinless is not a tree this gate can vouch for (the file
+    // ships in every layout), so it concludes unresolved and the layout
+    // teachings act.
+    const pinned = pinnedCompilerVersion(allocator, io, framework_root) orelse return .unresolved;
+    const core_dir = std.fs.path.join(allocator, &.{ framework_root, "packages", "core" }) catch {
+        allocator.free(pinned);
+        return .unresolved;
+    };
     defer allocator.free(core_dir);
     var dir: []const u8 = core_dir;
     while (true) {
-        const manifest = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "typescript6", "package.json" }) catch return false;
-        defer allocator.free(manifest);
-        if (std.Io.Dir.cwd().statFile(io, manifest, .{})) |_| {
-            const entrypoint = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "typescript6", "lib", "typescript.js" }) catch return false;
-            defer allocator.free(entrypoint);
-            _ = std.Io.Dir.cwd().statFile(io, entrypoint, .{}) catch return false;
-            const wrapper_dir = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "typescript6" }) catch return false;
+        const found: bool = probe: {
+            const manifest = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "typescript6", "package.json" }) catch break :probe false;
+            defer allocator.free(manifest);
+            _ = std.Io.Dir.cwd().statFile(io, manifest, .{}) catch break :probe false;
+            break :probe true;
+        };
+        if (found) {
+            const complete: bool = probe: {
+                const entrypoint = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "typescript6", "lib", "typescript.js" }) catch break :probe false;
+                defer allocator.free(entrypoint);
+                _ = std.Io.Dir.cwd().statFile(io, entrypoint, .{}) catch break :probe false;
+                break :probe true;
+            };
+            if (!complete) {
+                allocator.free(pinned);
+                return .unresolved;
+            }
+            const wrapper_dir = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "typescript6" }) catch {
+                allocator.free(pinned);
+                return .unresolved;
+            };
             defer allocator.free(wrapper_dir);
-            return aliasedCompilerResolves(allocator, io, wrapper_dir);
-        } else |_| {}
-        dir = std.fs.path.dirname(dir) orelse return false;
+            const resolved = aliasedCompilerVersion(allocator, io, wrapper_dir) orelse {
+                allocator.free(pinned);
+                return .unresolved;
+            };
+            if (std.mem.eql(u8, resolved, pinned)) {
+                allocator.free(resolved);
+                allocator.free(pinned);
+                return .resolved;
+            }
+            return .{ .version_mismatch = .{ .resolved = resolved, .pinned = pinned } };
+        }
+        dir = std.fs.path.dirname(dir) orelse {
+            allocator.free(pinned);
+            return .unresolved;
+        };
+    }
+}
+
+/// `transpilerResolution` folded to the yes/no most callers (and the
+/// layout tests) want: a version mismatch is NOT a resolvable toolchain.
+fn transpilerResolves(allocator: std.mem.Allocator, io: std.Io, framework_root: []const u8) bool {
+    switch (transpilerResolution(allocator, io, framework_root)) {
+        .resolved => return true,
+        .unresolved => return false,
+        .version_mismatch => |mismatch| {
+            mismatch.deinit(allocator);
+            return false;
+        },
     }
 }
 
@@ -180,21 +255,74 @@ fn transpilerResolves(allocator: std.mem.Allocator, io: std.Io, framework_root: 
 /// lockfile) and drift-checked by check-version-sync. A manifest without
 /// its entrypoint THROWS in node rather than consulting a deeper ancestor,
 /// so it concludes unresolvable here too.
-fn aliasedCompilerResolves(allocator: std.mem.Allocator, io: std.Io, wrapper_dir: []const u8) bool {
+///
+/// Returns the resolved alias's installed VERSION (allocator-owned) so the
+/// caller can hold it against the SDK's pin — resolving is no longer the
+/// whole bar (see `transpilerResolution`). A resolvable-looking alias
+/// whose manifest carries no version field returns null: every real npm
+/// install writes one, so its absence is a hand-rolled or corrupt sliver,
+/// not a compiler to vouch for.
+fn aliasedCompilerVersion(allocator: std.mem.Allocator, io: std.Io, wrapper_dir: []const u8) ?[]const u8 {
     var dir: []const u8 = wrapper_dir;
     while (true) {
         if (!std.mem.eql(u8, std.fs.path.basename(dir), "node_modules")) {
-            const manifest = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "old", "package.json" }) catch return false;
-            defer allocator.free(manifest);
-            if (std.Io.Dir.cwd().statFile(io, manifest, .{})) |_| {
-                const entrypoint = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "old", "lib", "typescript.js" }) catch return false;
+            const manifest_path = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "old", "package.json" }) catch return null;
+            defer allocator.free(manifest_path);
+            if (std.Io.Dir.cwd().statFile(io, manifest_path, .{})) |_| {
+                const entrypoint = std.fs.path.join(allocator, &.{ dir, "node_modules", "@typescript", "old", "lib", "typescript.js" }) catch return null;
                 defer allocator.free(entrypoint);
-                _ = std.Io.Dir.cwd().statFile(io, entrypoint, .{}) catch return false;
-                return true;
+                _ = std.Io.Dir.cwd().statFile(io, entrypoint, .{}) catch return null;
+                const manifest = std.Io.Dir.cwd().readFileAlloc(io, manifest_path, allocator, .limited(64 * 1024)) catch return null;
+                defer allocator.free(manifest);
+                const version = parsePackageVersion(manifest) orelse return null;
+                return allocator.dupe(u8, version) catch null;
             } else |_| {}
         }
-        dir = std.fs.path.dirname(dir) orelse return false;
+        dir = std.fs.path.dirname(dir) orelse return null;
     }
+}
+
+/// Extract the exactly pinned compiler version from a packages/core
+/// manifest: the `"@typescript/old": "npm:typescript@X.Y.Z"` devDependency
+/// entry's version suffix. A targeted scan like `parsePackageVersion`, and
+/// deliberately strict about the alias shape: anything but the exact
+/// `npm:typescript@X.Y.Z` form is a manifest check-version-sync would
+/// reject, so this parser vouches for nothing else.
+pub fn parseAliasedCompilerPin(manifest_json: []const u8) ?[]const u8 {
+    const key = "\"@typescript/old\"";
+    const value_prefix = "npm:typescript@";
+    const key_at = std.mem.indexOf(u8, manifest_json, key) orelse return null;
+    var rest = manifest_json[key_at + key.len ..];
+    rest = std.mem.trimStart(u8, rest, " \t\r\n");
+    if (rest.len == 0 or rest[0] != ':') return null;
+    rest = std.mem.trimStart(u8, rest[1..], " \t\r\n");
+    if (rest.len == 0 or rest[0] != '"') return null;
+    rest = rest[1..];
+    const end = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
+    const value = rest[0..end];
+    if (!std.mem.startsWith(u8, value, value_prefix)) return null;
+    const pin = value[value_prefix.len..];
+    // Exact X.Y.Z only, mirroring check-version-sync's pin-shape check: a
+    // range after the @ is not a pin, and comparing an installed version
+    // against one would "mismatch" every tree.
+    if (pin.len == 0) return null;
+    for (pin) |c| {
+        if (!std.ascii.isDigit(c) and c != '.') return null;
+    }
+    if (std.mem.count(u8, pin, ".") != 2) return null;
+    return pin;
+}
+
+/// The version the framework pins its aliased compiler to, read from its
+/// own packages/core/package.json (allocator-owned), or null when the
+/// manifest is missing or carries no exact alias pin.
+fn pinnedCompilerVersion(allocator: std.mem.Allocator, io: std.Io, framework_root: []const u8) ?[]const u8 {
+    const path = std.fs.path.join(allocator, &.{ framework_root, "packages", "core", "package.json" }) catch return null;
+    defer allocator.free(path);
+    const manifest = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024)) catch return null;
+    defer allocator.free(manifest);
+    const pin = parseAliasedCompilerPin(manifest) orelse return null;
+    return allocator.dupe(u8, pin) catch null;
 }
 
 /// The teaching for a REPO CHECKOUT whose toolchain resolves nowhere (a
@@ -233,6 +361,25 @@ fn toolchainInstallBroken(framework_root: []const u8) Error {
     return error.BrokenToolchainInstall;
 }
 
+/// The teaching for a toolchain whose aliased compiler RESOLVES at the
+/// wrong version: the wrapper's require walk found an `@typescript/old`
+/// that is not the SDK's exact pin — a consumer tree carrying its own
+/// conflicting `@typescript/old`, hoisted where nearest-wins shadows ours.
+/// Neither layout teaching fits (our pinned copy IS installed, just
+/// shadowed), so this one names both versions and the conflict instead of
+/// prescribing an install that would change nothing.
+fn compilerVersionMismatch(resolved: []const u8, pinned: []const u8) Error {
+    std.debug.print(
+        \\the transpiler's TypeScript compiler resolves at the wrong version:
+        \\@typescript/old resolves to typescript {s}, but the SDK pins npm:typescript@{s}.
+        \\Another package in this tree pins a conflicting @typescript/old - align it with
+        \\the SDK's pin (or remove it) and reinstall, so the SDK's exact pin is the copy
+        \\that resolves.
+        \\
+    , .{ resolved, pinned });
+    return error.ToolchainVersionMismatch;
+}
+
 fn dirExists(io: std.Io, path: []const u8) bool {
     var cwd = std.Io.Dir.cwd();
     var dir = cwd.openDir(io, path, .{}) catch return false;
@@ -242,7 +389,8 @@ fn dirExists(io: std.Io, path: []const u8) bool {
 
 /// The one gate every verb that reaches the transpiler runs (`native
 /// check`, `native dev --core`, and the build-graph verbs before they
-/// spawn `zig build`): the toolchain must RESOLVE from packages/core. The
+/// spawn `zig build`): the toolchain must RESOLVE from packages/core — at
+/// the exactly pinned compiler version (see `transpilerResolution`). The
 /// npm-installed CLI always resolves — @typescript/typescript6 is a
 /// regular dependency installed in the same transaction — and a repo
 /// checkout resolves after its one `npm ci --include=dev`. The gate NEVER
@@ -256,7 +404,17 @@ fn dirExists(io: std.Io, path: []const u8) bool {
 /// non-checkout layouts are taught the reinstall — running `npm ci` there
 /// would mutate an npm-owned tree.
 pub fn ensureResolvedTranspiler(allocator: std.mem.Allocator, io: std.Io, framework_root: []const u8) !void {
-    if (transpilerResolves(allocator, io, framework_root)) return;
+    switch (transpilerResolution(allocator, io, framework_root)) {
+        .resolved => return,
+        // The wrong-VERSION shape gets its own teaching on every layout:
+        // the layout split below prescribes installs, and no install fixes
+        // a conflicting consumer pin shadowing ours.
+        .version_mismatch => |mismatch| {
+            defer mismatch.deinit(allocator);
+            return compilerVersionMismatch(mismatch.resolved, mismatch.pinned);
+        },
+        .unresolved => {},
+    }
     const test_dir = try std.fs.path.join(allocator, &.{ framework_root, "packages", "core", "test" });
     defer allocator.free(test_dir);
     if (!dirExists(io, test_dir)) return toolchainInstallBroken(framework_root);
@@ -637,8 +795,9 @@ test "the checkout teaching's npm command survives production npm config" {
     try std.testing.expect(std.mem.indexOf(u8, npm_ci_teaching_command, "--include=dev") != null);
 }
 
-/// The minimal manifest a fake COMPLETED install writes.
-const fake_toolchain_manifest = "{ \"name\": \"@typescript/typescript6\", \"main\": \"./lib/typescript.js\" }";
+/// The minimal manifest a fake COMPLETED install writes (npm always writes
+/// a version field; the wrapper's own version is not what the pin checks).
+const fake_toolchain_manifest = "{ \"name\": \"@typescript/typescript6\", \"version\": \"0.0.2\", \"main\": \"./lib/typescript.js\" }";
 
 /// The entrypoint the manifest's "main" names: the resolvability predicate
 /// (like node) requires BOTH files, so a fake toolchain is only resolvable
@@ -650,11 +809,34 @@ const fake_toolchain_entrypoint = "// fake typescript.js";
 /// The minimal manifest of the aliased REAL compiler (@typescript/old is
 /// `npm:typescript@X.Y.Z`, so the installed manifest names `typescript`):
 /// a completed install carries it next to the wrapper — the wrapper's
-/// lib/typescript.js is only a re-export of it.
-const fake_compiler_manifest = "{ \"name\": \"typescript\", \"main\": \"./lib/typescript.js\" }";
+/// lib/typescript.js is only a re-export of it. Its version matches
+/// `fake_pin_manifest`'s exact pin, so a fully staged fake toolchain
+/// passes the version check too.
+const fake_compiler_manifest = "{ \"name\": \"typescript\", \"version\": \"9.9.9\", \"main\": \"./lib/typescript.js\" }";
+
+/// The same compiler at a version the fake SDK never pinned: the
+/// conflicting-consumer-tree shape the version check exists to refuse.
+const fake_conflicting_compiler_manifest = "{ \"name\": \"typescript\", \"version\": \"1.2.3\", \"main\": \"./lib/typescript.js\" }";
 
 /// The aliased compiler's entrypoint bytes.
 const fake_compiler_entrypoint = "// fake real typescript.js";
+
+/// A fake framework's packages/core/package.json: the file the resolution
+/// gate reads its exact compiler pin from (the `npm:typescript@X.Y.Z`
+/// alias suffix), matching `fake_compiler_manifest`'s version.
+const fake_pin_manifest = "{ \"name\": \"@native-sdk/core\", \"version\": \"0.0.9\", \"devDependencies\": { \"@typescript/old\": \"npm:typescript@9.9.9\" } }";
+
+/// Land a fake framework root's own pin manifest (packages/core/package.json).
+fn landFakePinManifest(io: std.Io, framework_root: []const u8) bool {
+    var buffer: [512]u8 = undefined;
+    const dir = std.fmt.bufPrint(&buffer, "{s}/packages/core", .{framework_root}) catch return false;
+    var cwd = std.Io.Dir.cwd();
+    cwd.createDirPath(io, dir) catch return false;
+    var manifest_buffer: [512]u8 = undefined;
+    const manifest = std.fmt.bufPrint(&manifest_buffer, "{s}/package.json", .{dir}) catch return false;
+    cwd.writeFile(io, .{ .sub_path = manifest, .data = fake_pin_manifest }) catch return false;
+    return true;
+}
 
 /// Land one fake-but-complete package (lib/ directory, manifest,
 /// lib/typescript.js entrypoint) at `dir`'s
@@ -696,6 +878,10 @@ test "toolchain resolution: the nested install (repo checkout) resolves, partial
 
     try cwd.createDirPath(io, sdk ++ "/packages/core");
     try std.testing.expect(!transpilerResolves(allocator, io, sdk));
+    // The gate reads its exact compiler pin from the framework's own
+    // packages/core/package.json; every real layout ships it.
+    try std.testing.expect(landFakePinManifest(io, sdk));
+    try std.testing.expect(!transpilerResolves(allocator, io, sdk));
     // A bare toolchain DIRECTORY (an interrupted extraction, a pruned
     // install) is not resolvable: node needs the package's manifest.
     try cwd.createDirPath(io, sdk ++ "/packages/core/node_modules/@typescript/typescript6");
@@ -734,6 +920,7 @@ test "toolchain resolution: the hoisted install (npm project layout) resolves by
     defer cwd.deleteTree(io, root) catch {};
 
     try cwd.createDirPath(io, sdk ++ "/packages/core");
+    try std.testing.expect(landFakePinManifest(io, sdk));
     try std.testing.expect(!transpilerResolves(allocator, io, sdk));
     // A bare directory on the hoisted layout is a broken install, not a
     // resolvable toolchain — the manifest is the bar here too.
@@ -777,6 +964,7 @@ test "toolchain gate: a resolvable tree passes silently, a checkout teaches the 
     // test/ marks the layout a repo checkout (the published payload
     // deliberately omits it): the teaching names `npm ci --include=dev`.
     try cwd.createDirPath(io, sdk ++ "/packages/core/test");
+    try std.testing.expect(landFakePinManifest(io, sdk));
 
     // An uninstalled checkout: the teaching error — and NOTHING was
     // spawned, structurally: the gate has no installer to call, and the
@@ -809,6 +997,7 @@ test "toolchain gate: an npm-payload layout teaches the reinstall, never npm ci"
     cwd.deleteTree(io, root) catch {};
     defer cwd.deleteTree(io, root) catch {};
     try cwd.createDirPath(io, sdk ++ "/packages/core");
+    try std.testing.expect(landFakePinManifest(io, sdk));
     try cwd.writeFile(io, .{ .sub_path = sdk ++ "/packages/core/package-lock.json", .data = "{ \"lockfileVersion\": 3 }" });
 
     // A missing toolchain here is a broken install: the reinstall
@@ -828,6 +1017,67 @@ test "toolchain gate: an npm-payload layout teaches the reinstall, never npm ci"
     // A complete hoisted install passes silently.
     try std.testing.expect(landFakeToolchain(io, root ++ "/proj"));
     try ensureResolvedTranspiler(allocator, io, sdk);
+}
+
+test "aliased compiler pin extraction is strict about the npm:typescript@X.Y.Z shape" {
+    try std.testing.expectEqualStrings("9.9.9", parseAliasedCompilerPin(fake_pin_manifest).?);
+    try std.testing.expectEqualStrings("6.0.3", parseAliasedCompilerPin(
+        \\{
+        \\  "devDependencies": {
+        \\    "@typescript/old": "npm:typescript@6.0.3",
+        \\    "@typescript/typescript6": "6.0.2"
+        \\  }
+        \\}
+    ).?);
+    // Ranges, bare versions, and empty pins are shapes check-version-sync
+    // rejects; the gate must not vouch for them either.
+    try std.testing.expect(parseAliasedCompilerPin("{ \"@typescript/old\": \"npm:typescript@^6\" }") == null);
+    try std.testing.expect(parseAliasedCompilerPin("{ \"@typescript/old\": \"npm:typescript@6.0\" }") == null);
+    try std.testing.expect(parseAliasedCompilerPin("{ \"@typescript/old\": \"6.0.3\" }") == null);
+    try std.testing.expect(parseAliasedCompilerPin("{ \"@typescript/old\": \"npm:typescript@\" }") == null);
+    try std.testing.expect(parseAliasedCompilerPin("{}") == null);
+}
+
+test "toolchain version pin: a compiler resolved at the wrong version teaches the mismatch, on both layouts" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var cwd = std.Io.Dir.cwd();
+    const root = ".zig-cache/test-ts-toolchain-version";
+    cwd.deleteTree(io, root) catch {};
+    defer cwd.deleteTree(io, root) catch {};
+
+    // Checkout layout: a complete nested install whose aliased compiler is
+    // NOT the pinned version (pin 9.9.9, installed 1.2.3). Resolvability
+    // alone would pass this tree; the version check must refuse it with
+    // the mismatch teaching, not the npm-ci teaching — no install command
+    // fixes a resolved-but-wrong compiler.
+    const checkout = root ++ "/sdk-checkout";
+    try cwd.createDirPath(io, checkout ++ "/packages/core/test");
+    try std.testing.expect(landFakePinManifest(io, checkout));
+    try std.testing.expect(landFakePackage(io, checkout ++ "/packages/core", "typescript6", fake_toolchain_manifest, fake_toolchain_entrypoint));
+    try std.testing.expect(landFakePackage(io, checkout ++ "/packages/core", "old", fake_conflicting_compiler_manifest, fake_compiler_entrypoint));
+    try std.testing.expect(!transpilerResolves(allocator, io, checkout));
+    try std.testing.expectError(error.ToolchainVersionMismatch, ensureResolvedTranspiler(allocator, io, checkout));
+
+    // npm layout, the conflict shape npm itself produces: the consumer's
+    // own conflicting @typescript/old hoisted at the project root (where
+    // the hoisted wrapper's require walk finds it FIRST), while the SDK's
+    // exact pin sits nested under the CLI, present but shadowed. The gate
+    // teaches the mismatch — the silent-wrong-compiler outcome must be
+    // impossible.
+    const cli = root ++ "/proj/node_modules/@native-sdk/cli";
+    try cwd.createDirPath(io, cli ++ "/packages/core");
+    try std.testing.expect(landFakePinManifest(io, cli));
+    try cwd.writeFile(io, .{ .sub_path = cli ++ "/packages/core/package-lock.json", .data = "{ \"lockfileVersion\": 3 }" });
+    try std.testing.expect(landFakePackage(io, root ++ "/proj", "typescript6", fake_toolchain_manifest, fake_toolchain_entrypoint));
+    try std.testing.expect(landFakePackage(io, root ++ "/proj", "old", fake_conflicting_compiler_manifest, fake_compiler_entrypoint));
+    try std.testing.expect(landFakePackage(io, cli, "old", fake_compiler_manifest, fake_compiler_entrypoint));
+    try std.testing.expect(!transpilerResolves(allocator, io, cli));
+    try std.testing.expectError(error.ToolchainVersionMismatch, ensureResolvedTranspiler(allocator, io, cli));
+
+    // Align the hoisted copy with the pin and the same tree passes.
+    try cwd.writeFile(io, .{ .sub_path = root ++ "/proj/node_modules/@typescript/old/package.json", .data = fake_compiler_manifest });
+    try ensureResolvedTranspiler(allocator, io, cli);
 }
 
 // The copy the CLI materializes IS the future published artifact: the

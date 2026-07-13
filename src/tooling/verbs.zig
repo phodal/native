@@ -263,8 +263,11 @@ test "toolchain preflight: ejected TS apps skip the CLI-SDK gate, generated ones
 
     // A CLI framework root whose toolchain is ABSENT: packages/core/test
     // marks the checkout layout, and no node_modules ever lands — the gate
-    // teaches `npm ci --include=dev` whenever it actually runs.
+    // teaches `npm ci --include=dev` whenever it actually runs. The pin
+    // manifest rides along: the gate reads its exact compiler pin from
+    // packages/core/package.json, which every real layout carries.
     try cwd.createDirPath(io, sdk ++ "/packages/core/test");
+    try cwd.writeFile(io, .{ .sub_path = sdk ++ "/packages/core/package.json", .data = "{ \"name\": \"@native-sdk/core\", \"version\": \"0.0.9\", \"devDependencies\": { \"@typescript/old\": \"npm:typescript@9.9.9\" } }" });
 
     // The ejected-shaped TS layout: an app-owned build.zig (+ build.zig.zon)
     // at the root, src/core.ts present. Its zon may pin a DIFFERENT SDK
@@ -288,9 +291,10 @@ test "toolchain preflight: ejected TS apps skip the CLI-SDK gate, generated ones
     try std.testing.expectError(error.MissingTranspiler, tsToolchainPreflight(allocator, io, generated_app, sdk));
 
     // And a resolvable CLI SDK passes the generated gate silently: land the
-    // wrapper AND the aliased real compiler it re-exports, as npm does.
-    const toolchain_manifest = "{ \"name\": \"@typescript/typescript6\", \"main\": \"./lib/typescript.js\" }";
-    const compiler_manifest = "{ \"name\": \"typescript\", \"main\": \"./lib/typescript.js\" }";
+    // wrapper AND the aliased real compiler it re-exports, as npm does —
+    // the compiler at the version the staged pin manifest names.
+    const toolchain_manifest = "{ \"name\": \"@typescript/typescript6\", \"version\": \"0.0.2\", \"main\": \"./lib/typescript.js\" }";
+    const compiler_manifest = "{ \"name\": \"typescript\", \"version\": \"9.9.9\", \"main\": \"./lib/typescript.js\" }";
     try cwd.createDirPath(io, sdk ++ "/packages/core/node_modules/@typescript/typescript6/lib");
     try cwd.writeFile(io, .{ .sub_path = sdk ++ "/packages/core/node_modules/@typescript/typescript6/package.json", .data = toolchain_manifest });
     try cwd.writeFile(io, .{ .sub_path = sdk ++ "/packages/core/node_modules/@typescript/typescript6/lib/typescript.js", .data = "// fake wrapper" });

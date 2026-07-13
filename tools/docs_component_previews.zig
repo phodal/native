@@ -214,6 +214,10 @@ fn writeVocabJson(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !void {
     try writeDocList(&js, &markup_docs.reactions_attr_docs);
     try js.objectField("dropdown-menu");
     try writeDocList(&js, &markup_docs.anchor_attr_docs);
+    // Tooltip shares the anchor attribute family (the second anchorable
+    // element), so its page resolves the same scoped rows.
+    try js.objectField("tooltip");
+    try writeDocList(&js, &markup_docs.anchor_attr_docs);
     try js.objectField("template");
     try writeDocList(&js, &markup_docs.template_attr_docs);
     try js.objectField("for");

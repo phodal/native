@@ -190,7 +190,7 @@
     },
     {
       "name": "tooltip",
-      "doc": "Tooltip text leaf; content supports {} interpolation."
+      "doc": "Tooltip text leaf; content supports {} interpolation. anchor=\"above|below\" floats it against its parent (put it beside its trigger in a stack) and hands visibility to the RUNTIME: it shows after the trigger has been hovered tooltip-delay milliseconds (default 700; a shared 300ms warm window after any tooltip hides shows the next one instantly) and hides when the pointer leaves - the model never hears hover. Without anchor it stays a static leaf that paints whenever the view renders it."
     },
     {
       "name": "input",
@@ -435,6 +435,10 @@
     {
       "name": "quiet-hover",
       "doc": "Pressable (hit-target) elements only: the quiet-surface knob for image-forward content tiles - the pointer resting on the element paints NO hover wash (the wash belongs to acting controls like rows, menu items, and buttons). Only the hover fill goes quiet: press and selection fills, the focus ring, cursor intent, and hit testing keep their own channels."
+    },
+    {
+      "name": "tooltip-delay",
+      "doc": "tooltip only, beside anchor: hover-intent show delay in milliseconds (a plain number or one {binding}) - the runtime shows the anchored tooltip after its trigger has been hovered this long on the recorded frame clock. 0 shows the instant the trigger is hovered; absent follows the 700ms token default. A shared 300ms warm window after any tooltip hides skips the delay on the next trigger. A delay without an anchor is a teaching error (it would be silently inert)."
     },
     {
       "name": "background",
@@ -785,15 +789,29 @@
     "dropdown-menu": [
       {
         "name": "anchor",
-        "doc": "dropdown-menu: floats the surface against its PARENT's frame instead of the flow (literal below or above; either side auto-flips at the window edges). Late z-pass above the whole tree, window-clipped — never cropped by a scroll pane, never reflows siblings. Put the dropdown beside its trigger inside a stack."
+        "doc": "dropdown-menu and tooltip: floats the surface against its PARENT's frame instead of the flow (literal below or above; either side auto-flips at the window edges). Late z-pass above the whole tree, window-clipped — never cropped by a scroll pane, never reflows siblings. Put the surface beside its trigger inside a stack. An anchored tooltip's visibility is runtime-owned (hover intent on the trigger; see tooltip-delay), unlike the model-owned dropdown."
       },
       {
         "name": "anchor-alignment",
-        "doc": "dropdown-menu (with anchor): horizontal alignment against the anchor - start, end, or stretch (stretch also widens the surface to at least the anchor's width, the select-menu look)."
+        "doc": "dropdown-menu and tooltip (with anchor): horizontal alignment against the anchor - start, end, or stretch (stretch also widens the surface to at least the anchor's width, the select-menu look)."
       },
       {
         "name": "anchor-offset",
-        "doc": "dropdown-menu (with anchor): literal gap in points between the anchor edge and the surface (default 4)."
+        "doc": "dropdown-menu and tooltip (with anchor): literal gap in points between the anchor edge and the surface (default 4)."
+      }
+    ],
+    "tooltip": [
+      {
+        "name": "anchor",
+        "doc": "dropdown-menu and tooltip: floats the surface against its PARENT's frame instead of the flow (literal below or above; either side auto-flips at the window edges). Late z-pass above the whole tree, window-clipped — never cropped by a scroll pane, never reflows siblings. Put the surface beside its trigger inside a stack. An anchored tooltip's visibility is runtime-owned (hover intent on the trigger; see tooltip-delay), unlike the model-owned dropdown."
+      },
+      {
+        "name": "anchor-alignment",
+        "doc": "dropdown-menu and tooltip (with anchor): horizontal alignment against the anchor - start, end, or stretch (stretch also widens the surface to at least the anchor's width, the select-menu look)."
+      },
+      {
+        "name": "anchor-offset",
+        "doc": "dropdown-menu and tooltip (with anchor): literal gap in points between the anchor edge and the surface (default 4)."
       }
     ],
     "template": [

@@ -693,3 +693,276 @@ test "runtime clears canvas widget interaction state when layout replacement dis
     try std.testing.expect(!snapshot.widgets[0].hovered);
     try std.testing.expect(!snapshot.widgets[0].pressed);
 }
+
+// -------------------------------------------- anchored-tooltip hover intent
+//
+// Anchored tooltips are RUNTIME-owned presentation chrome: the model never
+// hears hover, and visibility steps only on journaled input timestamps and
+// presented-frame timestamps (never a wall clock), so every scenario below
+// is also a replay-determinism statement.
+
+const TooltipMsg = union(enum) { pressed };
+const TooltipUi = canvas.Ui(TooltipMsg);
+
+/// Three toolbar triggers, each owning an anchored tooltip through the
+/// stack-wraps-trigger-plus-surface pattern the dropdown uses. The third
+/// declares `tooltip_delay = 0` (markup `tooltip-delay="0"`), the
+/// instant-show escape hatch.
+fn buildTooltipToolbar(ui: *TooltipUi) TooltipUi.Node {
+    return ui.row(.{ .gap = 12, .padding = 16 }, .{
+        ui.el(.stack, .{}, .{
+            ui.button(.{}, "Bold"),
+            ui.el(.tooltip, .{ .text = "Bold the selection", .anchor = .above }, .{}),
+        }),
+        ui.el(.stack, .{}, .{
+            ui.button(.{}, "Italic"),
+            ui.el(.tooltip, .{ .text = "Italicize the selection", .anchor = .above }, .{}),
+        }),
+        ui.el(.stack, .{}, .{
+            ui.button(.{}, "Link"),
+            ui.el(.tooltip, .{ .text = "Insert a link", .anchor = .above, .tooltip_delay = 0 }, .{}),
+        }),
+    });
+}
+
+const TooltipToolbar = struct {
+    button_ids: [3]canvas.ObjectId,
+    button_centers: [3]geometry.PointF,
+    tooltip_ids: [3]canvas.ObjectId,
+};
+
+fn installTooltipToolbar(harness: anytype, app: App, arena: std.mem.Allocator) !TooltipToolbar {
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 420, 160),
+    });
+    var ui = TooltipUi.init(arena);
+    const tree = try ui.finalize(buildTooltipToolbar(&ui));
+    var nodes: [16]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(tree.root, geometry.RectF.init(0, 0, 420, 160), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    var toolbar: TooltipToolbar = .{ .button_ids = @splat(0), .button_centers = @splat(geometry.PointF.zero()), .tooltip_ids = @splat(0) };
+    var button_count: usize = 0;
+    var tooltip_count: usize = 0;
+    const view = &harness.runtime.views[0];
+    for (view.widget_layout_nodes[0..view.widget_layout_node_count]) |node| {
+        switch (node.widget.kind) {
+            .button => {
+                toolbar.button_ids[button_count] = node.widget.id;
+                toolbar.button_centers[button_count] = node.frame.center();
+                button_count += 1;
+            },
+            .tooltip => {
+                toolbar.tooltip_ids[tooltip_count] = node.widget.id;
+                tooltip_count += 1;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), button_count);
+    try std.testing.expectEqual(@as(usize, 3), tooltip_count);
+    return toolbar;
+}
+
+fn tooltipHover(harness: anytype, app: App, point: geometry.PointF, timestamp_ns: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_move,
+        .x = point.x,
+        .y = point.y,
+        .timestamp_ns = timestamp_ns,
+    } });
+}
+
+fn tooltipFrame(harness: anytype, app: App, timestamp_ns: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = 1,
+        .label = "canvas",
+        .size = geometry.SizeF.init(420, 160),
+        .timestamp_ns = timestamp_ns,
+    } });
+}
+
+fn tooltipHidden(harness: anytype, tooltip_id: canvas.ObjectId) !bool {
+    const view = &harness.runtime.views[0];
+    const node_index = view.canvasWidgetNodeIndexById(tooltip_id) orelse return error.TestUnexpectedResult;
+    return view.widget_layout_nodes[node_index].widget.semantics.hidden;
+}
+
+const tooltip_t0: u64 = 10_000_000_000;
+const tooltip_ms: u64 = std.time.ns_per_ms;
+
+test "sweeping across tooltip triggers shows nothing" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-sweep", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Anchored tooltips adopt hidden: nothing is shown before any hover.
+    for (toolbar.tooltip_ids[0..2]) |tooltip_id| {
+        try std.testing.expect(try tooltipHidden(harness, tooltip_id));
+    }
+
+    // The pointer crosses Bold and Italic 80ms apart — well under the
+    // 700ms intent delay — with a presented frame after each move. No
+    // tooltip frame paints anywhere along the sweep.
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
+    try tooltipFrame(harness, app, tooltip_t0 + 16 * tooltip_ms);
+    try tooltipHover(harness, app, toolbar.button_centers[1], tooltip_t0 + 80 * tooltip_ms);
+    try tooltipFrame(harness, app, tooltip_t0 + 96 * tooltip_ms);
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 160 * tooltip_ms);
+    try tooltipFrame(harness, app, tooltip_t0 + 176 * tooltip_ms);
+
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    for (toolbar.tooltip_ids[0..2]) |tooltip_id| {
+        try std.testing.expect(try tooltipHidden(harness, tooltip_id));
+    }
+}
+
+test "hover dwell past the delay shows the anchored tooltip on the frame clock" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-dwell", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Hover arms the delay; frames keep painting while it runs (the
+    // pump), but the tooltip stays hidden short of the deadline.
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_armed_id);
+    try tooltipFrame(harness, app, tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+
+    // An armed delay keeps the frame channel alive so the deadline can
+    // fire without any further input.
+    try std.testing.expect(harness.runtime.invalidated);
+
+    // The first presented frame at/past the deadline shows the tooltip —
+    // a deterministic frame on the recorded clock.
+    try tooltipFrame(harness, app, tooltip_t0 + 700 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[1]));
+
+    // Leaving the trigger hides it again.
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 900 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+}
+
+test "leaving the trigger before the delay disarms the tooltip" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-disarm", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
+    try tooltipFrame(harness, app, tooltip_t0 + 300 * tooltip_ms);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+
+    // Off the trigger before the deadline: disarmed for good — frames
+    // past the would-be deadline change nothing.
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 400 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try tooltipFrame(harness, app, tooltip_t0 + 800 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+}
+
+test "the warm window transfers instantly between triggers and expires" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-warm", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Earn the first tooltip with a full dwell.
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
+    try tooltipFrame(harness, app, tooltip_t0 + 700 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // Move to the sibling inside the warm window: Bold's tooltip hides
+    // and Italic's shows IMMEDIATELY — no delay, no frame needed.
+    try tooltipHover(harness, app, toolbar.button_centers[1], tooltip_t0 + 900 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[1]));
+
+    // Leaving re-warms; a return WITHIN the window is instant again.
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 1000 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0 + 1200 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // Leave and let the warm window LAPSE: the next trigger waits the
+    // full delay again.
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 1300 * tooltip_ms);
+    try tooltipHover(harness, app, toolbar.button_centers[1], tooltip_t0 + 2000 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_armed_id);
+    try tooltipFrame(harness, app, tooltip_t0 + 2700 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_shown_id);
+}
+
+test "tooltip-delay zero restores the instant hover show" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-instant", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Link declares tooltip_delay = 0: the hover event itself shows the
+    // tooltip, no dwell, no warm window, no frame in between.
+    try tooltipHover(harness, app, toolbar.button_centers[2], tooltip_t0);
+    try std.testing.expectEqual(toolbar.tooltip_ids[2], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[2]));
+
+    // And leaving hides it just as immediately.
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 50 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[2]));
+}

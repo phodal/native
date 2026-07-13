@@ -743,6 +743,7 @@ pub const Runtime = struct {
     const refreshCanvasWidgetDisplayList = CanvasWidgetDisplayMethods.refreshCanvasWidgetDisplayList;
 
     const CanvasWidgetEventMethods = runtime_canvas_widget_events.RuntimeCanvasWidgetEvents(Runtime);
+    pub const advanceCanvasTooltipIntentForFrame = CanvasWidgetEventMethods.advanceCanvasTooltipIntentForFrame;
     pub const routeCanvasWidgetPointerInput = CanvasWidgetEventMethods.routeCanvasWidgetPointerInput;
     pub const routeCanvasWidgetKeyboardInput = CanvasWidgetEventMethods.routeCanvasWidgetKeyboardInput;
     pub const routeCanvasWidgetTextInput = CanvasWidgetEventMethods.routeCanvasWidgetTextInput;

@@ -8,7 +8,10 @@ const canvas_frame_helpers = @import("canvas_frame.zig");
 const canvas_limits = @import("canvas_limits.zig");
 const runtime_canvas_widget_display = @import("canvas_widget_display.zig");
 const canvas_widget_runtime = @import("canvas_widget_runtime.zig");
+const runtime_view = @import("view.zig");
 const widget_bridge = @import("widget_bridge.zig");
+
+const canvasRenderAnimationStartNsForView = runtime_view.canvasRenderAnimationStartNsForView;
 
 const GpuSurfaceInputEvent = runtime_api.GpuSurfaceInputEvent;
 const CanvasWidgetPointerEvent = runtime_api.CanvasWidgetPointerEvent;
@@ -401,6 +404,14 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 canvasChartHoverKey(self, index, next_hovered_id, next_hover_point),
             );
 
+            // Anchored-tooltip hover intent steps on hover-target
+            // transitions only (a pointer gliding within one trigger is
+            // free); the armed delay itself fires on presented-frame
+            // timestamps in advanceCanvasTooltipIntentForFrame.
+            if (self.views[index].canvas_widget_hovered_id != next_hovered_id) {
+                try updateCanvasTooltipIntentForHoverChange(self, index, next_hovered_id);
+            }
+
             const interaction_changed = self.views[index].canvas_widget_hovered_id != next_hovered_id or
                 self.views[index].canvas_widget_pressed_id != next_pressed_id or
                 hover_detail_changed;
@@ -429,6 +440,107 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const hover_point = point orelse return null;
             const sample = canvasChartHoverIndexForId(self, view_index, hovered_id, hover_point) orelse return null;
             return .{ .id = hovered_id, .index = sample };
+        }
+
+        /// The anchored-tooltip hover-intent state machine, stepped on
+        /// every hover-target transition. Anchored tooltips are
+        /// runtime-owned presentation chrome — the model never hears
+        /// hover:
+        ///   - the pointer reaches a tooltip's trigger: arm the show
+        ///     delay (`tooltip-delay`, default the
+        ///     `tooltip_show_delay_ms` token) on the recorded clock —
+        ///     unless the shared warm window is open or the delay is 0,
+        ///     which show immediately;
+        ///   - the pointer leaves before the delay fires: disarm, show
+        ///     nothing (sweeping a toolbar flashes no tooltips);
+        ///   - a SHOWN tooltip's trigger loses the pointer: hide it and
+        ///     open the warm window (`tooltip_warm_window_ms`), so the
+        ///     neighboring trigger explains itself instantly.
+        /// `now` is `canvasRenderAnimationStartNsForView` — the freshest
+        /// journaled input/frame timestamp, never a wall clock — so a
+        /// recorded sweep replays every show/hide frame byte-identically.
+        fn updateCanvasTooltipIntentForHoverChange(self: *Runtime, view_index: usize, next_hovered_id: canvas.ObjectId) anyerror!void {
+            const view = &self.views[view_index];
+            const now_ns = canvasRenderAnimationStartNsForView(view);
+            const tooltip_index: ?usize = blk: {
+                if (next_hovered_id == 0) break :blk null;
+                const hovered_index = view.canvasWidgetNodeIndexById(next_hovered_id) orelse break :blk null;
+                break :blk view.canvasWidgetOwnedTooltipIndex(hovered_index);
+            };
+            const tooltip_id: canvas.ObjectId = if (tooltip_index) |node_index| view.widget_layout_nodes[node_index].widget.id else 0;
+
+            var shown_changed = false;
+            if (view.canvas_tooltip_shown_id != 0 and view.canvas_tooltip_shown_id != tooltip_id) {
+                view.canvas_tooltip_shown_id = 0;
+                view.canvas_tooltip_warm_until_ns = now_ns + canvasTooltipWarmWindowNs(view.widget_tokens);
+                shown_changed = true;
+            }
+            if (view.canvas_tooltip_armed_id != 0 and view.canvas_tooltip_armed_id != tooltip_id) {
+                view.canvas_tooltip_armed_id = 0;
+                view.canvas_tooltip_deadline_ns = 0;
+            }
+            if (tooltip_index) |node_index| {
+                if (view.canvas_tooltip_shown_id != tooltip_id and tooltip_id != 0) {
+                    const delay_ns = canvasTooltipShowDelayNs(view.widget_layout_nodes[node_index].widget, view.widget_tokens);
+                    if (delay_ns == 0 or now_ns < view.canvas_tooltip_warm_until_ns) {
+                        view.canvas_tooltip_shown_id = tooltip_id;
+                        view.canvas_tooltip_armed_id = 0;
+                        view.canvas_tooltip_deadline_ns = 0;
+                        shown_changed = true;
+                    } else if (view.canvas_tooltip_armed_id != tooltip_id) {
+                        view.canvas_tooltip_armed_id = tooltip_id;
+                        view.canvas_tooltip_deadline_ns = now_ns + delay_ns;
+                    }
+                }
+            }
+            if (shown_changed) try commitCanvasTooltipVisibility(self, view_index);
+        }
+
+        /// The armed show delay fires on the presented frame's RECORDED
+        /// timestamp (never a wall clock) — the layout-tween discipline —
+        /// so session replay reproduces the exact frame a dwell's tooltip
+        /// appears on. The frame pump in planCanvasFrameForView keeps
+        /// frames coming while a delay is armed.
+        pub fn advanceCanvasTooltipIntentForFrame(self: *Runtime, view_index: usize, timestamp_ns: u64) anyerror!void {
+            const view = &self.views[view_index];
+            if (view.canvas_tooltip_armed_id == 0) return;
+            if (timestamp_ns < view.canvas_tooltip_deadline_ns) return;
+            view.canvas_tooltip_shown_id = view.canvas_tooltip_armed_id;
+            view.canvas_tooltip_armed_id = 0;
+            view.canvas_tooltip_deadline_ns = 0;
+            try commitCanvasTooltipVisibility(self, view_index);
+        }
+
+        /// Re-stamp anchored-tooltip visibility after an intent
+        /// transition and repaint the affected tooltip frames — the
+        /// dismissal echo's invalidation shape.
+        fn commitCanvasTooltipVisibility(self: *Runtime, view_index: usize) anyerror!void {
+            const view = &self.views[view_index];
+            var dirty: ?geometry.RectF = null;
+            for (view.widget_layout_nodes[0..view.widget_layout_node_count], 0..) |node, node_index| {
+                if (node.widget.kind != .tooltip) continue;
+                if (!canvas.widgetIsAnchored(node.widget)) continue;
+                const hidden = node.widget.id == 0 or node.widget.id != view.canvas_tooltip_shown_id;
+                if (node.widget.semantics.hidden == hidden) continue;
+                const bounds = view.canvasWidgetDirtyBounds(node_index, node.frame) orelse node.frame;
+                dirty = if (dirty) |current| current.unionWith(bounds) else bounds;
+            }
+            view.applyCanvasTooltipVisibility();
+            try view.refreshCanvasWidgetSemantics();
+            view.widget_revision += 1;
+            try invalidateForCanvasWidgetDirty(self, view_index, dirty orelse view.frame);
+        }
+
+        fn canvasTooltipShowDelayNs(widget: canvas.Widget, tokens: canvas.DesignTokens) u64 {
+            const delay_ms: u64 = if (widget.tooltip_delay_ms >= 0)
+                @intCast(widget.tooltip_delay_ms)
+            else
+                tokens.metrics.tooltip_show_delay_ms;
+            return delay_ms * std.time.ns_per_ms;
+        }
+
+        fn canvasTooltipWarmWindowNs(tokens: canvas.DesignTokens) u64 {
+            return @as(u64, tokens.metrics.tooltip_warm_window_ms) * std.time.ns_per_ms;
         }
 
         fn canvasChartHoverIndexForId(self: *Runtime, view_index: usize, hovered_id: canvas.ObjectId, point: geometry.PointF) ?usize {

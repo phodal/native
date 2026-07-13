@@ -427,6 +427,21 @@ pub const RuntimeView = struct {
     canvas_widget_focus_visible_id: canvas.ObjectId = 0,
     canvas_widget_hovered_id: canvas.ObjectId = 0,
     canvas_widget_pressed_id: canvas.ObjectId = 0,
+    /// Hover-intent state for ANCHORED tooltips — runtime-owned
+    /// presentation chrome; the model never hears hover. `armed` is
+    /// the tooltip whose trigger is hovered while its show delay runs;
+    /// `shown` is the tooltip currently painted; `warm_until` is the
+    /// shared warm window after ANY tooltip hides (reaching another
+    /// trigger before it passes shows that tooltip immediately, the
+    /// dense-toolbar polish). Every timestamp lives on the RECORDED
+    /// input/frame clock (`canvasRenderAnimationStartNsForView` at
+    /// pointer dispatch, `GpuSurfaceFrameEvent.timestamp_ns` at frame
+    /// advance — never a wall clock), so a recorded hover-dwell
+    /// session replays its tooltip show/hide frames byte-identically.
+    canvas_tooltip_armed_id: canvas.ObjectId = 0,
+    canvas_tooltip_deadline_ns: u64 = 0,
+    canvas_tooltip_shown_id: canvas.ObjectId = 0,
+    canvas_tooltip_warm_until_ns: u64 = 0,
     /// Pointer position while the hovered widget draws hover-detail
     /// chrome (a `.chart` with hover details opted in); null everywhere
     /// else. Feeds `WidgetRenderState.hover_point`, so the display list
@@ -612,6 +627,10 @@ pub const RuntimeView = struct {
     pub const canvasWidgetDismissibleSurfaceIndexForTarget = CanvasWidgetTreeMethods.canvasWidgetDismissibleSurfaceIndexForTarget;
     pub const canvasWidgetAnchoredDismissibleChildIndex = CanvasWidgetTreeMethods.canvasWidgetAnchoredDismissibleChildIndex;
     pub const canvasWidgetOwnedMenuSurfaceIndex = CanvasWidgetTreeMethods.canvasWidgetOwnedMenuSurfaceIndex;
+    pub const canvasWidgetOwnedTooltipIndex = CanvasWidgetTreeMethods.canvasWidgetOwnedTooltipIndex;
+    pub const applyCanvasTooltipVisibility = CanvasWidgetTreeMethods.applyCanvasTooltipVisibility;
+    pub const pruneCanvasTooltipIntent = CanvasWidgetTreeMethods.pruneCanvasTooltipIntent;
+    pub const canvasTooltipIntentArmed = CanvasWidgetTreeMethods.canvasTooltipIntentArmed;
     pub const canvasWidgetMenuSurfaceEntryId = CanvasWidgetTreeMethods.canvasWidgetMenuSurfaceEntryId;
     pub const canvasWidgetAnchorTriggerFocusId = CanvasWidgetTreeMethods.canvasWidgetAnchorTriggerFocusId;
     pub const canvasWidgetTopmostAnchoredDismissibleIndex = CanvasWidgetTreeMethods.canvasWidgetTopmostAnchoredDismissibleIndex;

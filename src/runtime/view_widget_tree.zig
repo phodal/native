@@ -295,6 +295,14 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 self.widget_tokens,
             );
 
+            // Anchored-tooltip hover intent survives the rebuild the way
+            // hover/press ids do: drop state whose tooltip unmounted,
+            // then re-stamp runtime-owned visibility BEFORE semantics
+            // collect, so the a11y snapshot (and the replay fingerprint
+            // riding it) always reflects the intent machine.
+            self.pruneCanvasTooltipIntent();
+            self.applyCanvasTooltipVisibility();
+
             const semantics = try self.widgetLayoutTree().collectSemantics(&self.widget_semantics_nodes);
             applyCanvasWidgetSourceScrollSemantics(self.widget_semantics_nodes[0..semantics.len], &index_scratch.semantics);
             self.widget_semantics_node_count = semantics.len;
@@ -466,6 +474,17 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             if (surface.semantics.hidden) return null;
             const dirty = self.canvasWidgetDirtyBounds(surface_index, surface.frame) orelse surface.frame;
             self.widget_layout_nodes[surface_index].widget.semantics.hidden = true;
+            // A dismissed anchored tooltip leaves the intent machine too,
+            // or the next visibility stamp would undo the dismissal. No
+            // warm window: Escape is a deliberate dismissal, not the
+            // pointer moving on to the next trigger.
+            if (surface.kind == .tooltip) {
+                if (self.canvas_tooltip_shown_id == surface.id) self.canvas_tooltip_shown_id = 0;
+                if (self.canvas_tooltip_armed_id == surface.id) {
+                    self.canvas_tooltip_armed_id = 0;
+                    self.canvas_tooltip_deadline_ns = 0;
+                }
+            }
             if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_focused_id, surface_index)) {
                 // A dismissal that swallows the focus returns it to the
                 // surface's own trigger when the surface is anchored (the
@@ -537,6 +556,73 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             const kind = self.widget_layout_nodes[surface_index].widget.kind;
             if (kind != .menu_surface and kind != .dropdown_menu) return null;
             return surface_index;
+        }
+
+        /// The anchored tooltip a trigger owns: the last-mounted anchored
+        /// `.tooltip` child of the trigger itself or of its parent — the
+        /// stack wrapping trigger + tooltip, mirroring the anchored-menu
+        /// ownership shape. Deliberately IGNORES the hidden flag: the
+        /// runtime itself stamps non-shown anchored tooltips hidden, and
+        /// arming must find them to show them.
+        pub fn canvasWidgetOwnedTooltipIndex(self: *const RuntimeView, trigger_index: usize) ?usize {
+            if (trigger_index >= self.widget_layout_node_count) return null;
+            if (canvasWidgetAnchoredTooltipChildIndex(self, trigger_index)) |tooltip_index| return tooltip_index;
+            const parent_index = self.widget_layout_nodes[trigger_index].parent_index orelse return null;
+            return canvasWidgetAnchoredTooltipChildIndex(self, parent_index);
+        }
+
+        fn canvasWidgetAnchoredTooltipChildIndex(self: *const RuntimeView, anchor_index: usize) ?usize {
+            var found: ?usize = null;
+            for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, index| {
+                if (node.parent_index != anchor_index) continue;
+                if (node.widget.kind != .tooltip) continue;
+                if (!canvas.widgetIsAnchored(node.widget)) continue;
+                found = index;
+            }
+            return found;
+        }
+
+        /// Stamp hover-intent visibility onto every ANCHORED tooltip
+        /// node: hidden unless it is the intent machine's shown tooltip.
+        /// Anchored tooltips are runtime-owned chrome, so the stamp
+        /// overrides authored visibility; static (non-anchored) tooltips
+        /// are never touched. Runs at tree adoption (each rebuild) and
+        /// after every intent transition.
+        pub fn applyCanvasTooltipVisibility(self: *RuntimeView) void {
+            for (self.widget_layout_nodes[0..self.widget_layout_node_count]) |*node| {
+                if (node.widget.kind != .tooltip) continue;
+                if (!canvas.widgetIsAnchored(node.widget)) continue;
+                node.widget.semantics.hidden = node.widget.id == 0 or node.widget.id != self.canvas_tooltip_shown_id;
+            }
+        }
+
+        /// Drop intent state whose tooltip left the tree (or lost its
+        /// anchor) on a rebuild — the interaction-id pruning policy
+        /// hovered/pressed ids follow. The warm window deliberately
+        /// survives rebuilds: warmth belongs to the pointer, not to any
+        /// one widget.
+        pub fn pruneCanvasTooltipIntent(self: *RuntimeView) void {
+            if (self.canvas_tooltip_armed_id != 0 and !canvasTooltipIntentTargetExists(self, self.canvas_tooltip_armed_id)) {
+                self.canvas_tooltip_armed_id = 0;
+                self.canvas_tooltip_deadline_ns = 0;
+            }
+            if (self.canvas_tooltip_shown_id != 0 and !canvasTooltipIntentTargetExists(self, self.canvas_tooltip_shown_id)) {
+                self.canvas_tooltip_shown_id = 0;
+            }
+        }
+
+        fn canvasTooltipIntentTargetExists(self: *const RuntimeView, id: canvas.ObjectId) bool {
+            const node_index = self.canvasWidgetNodeIndexById(id) orelse return false;
+            const widget = self.widget_layout_nodes[node_index].widget;
+            return widget.kind == .tooltip and canvas.widgetIsAnchored(widget);
+        }
+
+        /// True while the intent machine needs presented frames to keep
+        /// coming: an armed show delay only fires on a frame timestamp,
+        /// so the frame pump re-invalidates until it fires or disarms
+        /// (the render-animation pump's policy exactly).
+        pub fn canvasTooltipIntentArmed(self: *const RuntimeView) bool {
+            return self.canvas_tooltip_armed_id != 0;
         }
 
         /// Keyboard entry point into an anchored menu surface: the marked

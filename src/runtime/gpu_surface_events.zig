@@ -61,6 +61,10 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 // so accordion reveals replay frame for frame exactly
                 // like split fractions do.
                 try self.advanceCanvasWidgetDisclosureTweenForFrame(index, frame_event.timestamp_ns);
+                // The anchored-tooltip hover-intent delay fires on the
+                // same recorded clock: a dwell past the delay shows its
+                // tooltip on a deterministic frame, replayed exactly.
+                try self.advanceCanvasTooltipIntentForFrame(index, frame_event.timestamp_ns);
                 try dispatchPendingCanvasWidgetScrollEvents(self, app, index);
                 // A settling tween notes its ONE split-resize event with
                 // no input in flight; drain it here so the controlled

@@ -462,15 +462,24 @@ pub fn build(b: *std.Build) void {
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "\"gpuSurfaces\"" },
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "gpuFirstFrameLatencyNs: number" },
     });
-    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-ts-toolchain-twins", "Verify the CLI's toolchain-resolution gate and its direct-`zig build` twin stay in lockstep (both walk to the aliased real compiler behind the @typescript/typescript6 wrapper, both hold its resolved version against the manifest-read pin, and both teach instead of panicking)", &.{
-        // The resolution twins require the aliased REAL compiler behind
-        // the @typescript/typescript6 wrapper (its lib/typescript.js is a
-        // one-line re-export of "@typescript/old") — both predicates must
-        // probe the alias's manifest AND entrypoint, in lockstep.
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-ts-toolchain-twins", "Verify the CLI's toolchain-resolution gate and its direct-`zig build` twin stay in lockstep (both resolve the aliased real compiler @typescript/old from packages/core — the same origin runtime imports it from — hold its resolved version against the manifest-read pin, never probe the unused @typescript/typescript6 wrapper, and teach instead of panicking)", &.{
+        // The resolution twins probe the aliased REAL compiler
+        // (@typescript/old — the package typed_ast.ts and ts_run.mjs
+        // actually load) — manifest AND entrypoint, in lockstep. The
+        // @typescript/typescript6 wrapper is never probed: nothing
+        // imports it at run time, and validating it false-rejects
+        // healthy conflict trees.
         .{ .path = "src/tooling/ts_core.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"package.json\"" },
         .{ .path = "src/tooling/ts_core.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"lib\", \"typescript.js\"" },
         .{ .path = "build/app.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"package.json\"" },
         .{ .path = "build/app.zig", .pattern = "\"node_modules\", \"@typescript\", \"old\", \"lib\", \"typescript.js\"" },
+        // The doctrine both twins document at their predicates: validate
+        // only what runtime loads, from runtime's own walk origin, and
+        // leave the declared-but-unimported wrapper out of the verdict.
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "Validation tracks ONLY what runtime loads" },
+        .{ .path = "src/tooling/ts_core.zig", .pattern = "wrapper is deliberately NOT probed" },
+        .{ .path = "build/app.zig", .pattern = "Validation tracks ONLY what runtime loads" },
+        .{ .path = "build/app.zig", .pattern = "wrapper is deliberately NOT probed" },
         // The reciprocal cross-references that keep the twins findable
         // from each other.
         .{ .path = "src/tooling/ts_core.zig", .pattern = "build/app.zig's tsToolchainResolution" },

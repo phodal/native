@@ -1,14 +1,14 @@
 // The layout-neutral runner (build/ts_run.mjs) under both node capability
-// tiers. On node >= 22.15 module.registerHooks exists and the runner strips
-// EVERY .ts target with the transpiler's own toolchain — node's native
-// stripping is never relied on (it refuses node_modules by design and is
-// only DEFAULT outside node_modules from 22.18, above this tier's floor).
-// On older node the hook cannot be registered, so ANY .ts target must fail
-// fast with the one-line 22.15+ teaching instead of node's raw
+// tiers. Where module.registerHooks exists (22.15+; on the 23 line 23.5+)
+// the runner strips EVERY .ts target with the transpiler's own toolchain
+// — node's native stripping is never relied on (it refuses node_modules
+// by design and is only DEFAULT outside node_modules from 22.18, above
+// this tier's floor). On a hooks-less node ANY .ts target must fail fast
+// with the one-line branch-aware teaching instead of node's raw
 // extension/stripping error — checkout-resident targets included, because
 // 22.15-22.17 has no default stripping for them either.
 //
-// The under-22.15 tier is simulated by deleting module.registerHooks in a
+// The hooks-less tier is simulated by deleting module.registerHooks in a
 // --import preload before the runner loads — the spawned node then presents
 // exactly the capability surface the runner's check reads, with no
 // test-only seam inside ts_run.mjs itself.
@@ -24,10 +24,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const pkg = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const runner = path.join(path.dirname(path.dirname(pkg)), "build", "ts_run.mjs");
 
-// Pins the teaching verbatim: the string the runner prints on an old node.
-// Layout-neutral on purpose — with the hook required for every .ts target,
-// checkouts hit this teaching on <22.15 exactly like npm installs do.
-const teaching = "TypeScript apps need Node.js 22.15+";
+// Pins the teaching verbatim: the string the runner prints on a node
+// without registerHooks. Layout-neutral on purpose — with the hook
+// required for every .ts target, checkouts hit this teaching exactly like
+// npm installs do — and branch-aware: the hook landed in 22.15 and 23.5,
+// so a bare ">=22.15" would wrongly admit 23.0-23.4.
+const teaching = "TypeScript apps need Node.js 22.15+ (on the 23 line: 23.5+)";
 
 // A module whose types only stripping (the runner's hook) can remove.
 const typedModule = 'const answer: number = 42;\nconsole.log("RAN", answer);\n';

@@ -19,12 +19,14 @@
 // respliced so the target sees its usual shape (its own path at argv[1],
 // its arguments from argv[2]).
 //
-// On node builds without module.registerHooks (< 22.15) NO .ts target can
-// run — node_modules-resident stripping is refused by design and default
-// stripping outside node_modules only landed in 22.18, which is above this
-// tier anyway — so the runner fails fast with one teaching line (upgrade
-// to Node.js 22.15+) before importing it, instead of surfacing node's raw
-// extension/stripping error.
+// On node builds without module.registerHooks (pre-22.15, or 23.0-23.4 —
+// the hook landed in 22.15 and 23.5, so ">=22.15" alone is not the
+// capability line) NO .ts target can run — node_modules-resident
+// stripping is refused by design and default stripping outside
+// node_modules only landed in 22.18, which is above this tier anyway —
+// so the runner fails fast with one teaching line (upgrade to Node.js
+// 22.15+, on the 23 line 23.5+) before importing it, instead of
+// surfacing node's raw extension/stripping error.
 
 import module, { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
@@ -42,14 +44,14 @@ const targetPath = resolve(target);
 process.argv.splice(1, 1);
 
 if (typeof module.registerHooks !== 'function') {
-  // No load hooks on this node (< 22.15). Every .ts target needs the hook
-  // — node_modules-resident stripping is refused by design, and native
-  // default stripping outside node_modules is 22.18+ — so any .ts target
-  // would fail deep inside node with a raw extension/stripping error.
-  // Teach the fix instead.
+  // No load hooks on this node (pre-22.15, or a 23.0-23.4 build). Every
+  // .ts target needs the hook — node_modules-resident stripping is
+  // refused by design, and native default stripping outside node_modules
+  // is 22.18+ — so any .ts target would fail deep inside node with a raw
+  // extension/stripping error. Teach the fix instead.
   if (targetPath.endsWith('.ts')) {
     console.error(
-      `TypeScript apps need Node.js 22.15+ (you're running ${process.version}): upgrade node and re-run.`,
+      `TypeScript apps need Node.js 22.15+ (on the 23 line: 23.5+); you're running ${process.version} - upgrade node and re-run.`,
     );
     process.exit(1);
   }

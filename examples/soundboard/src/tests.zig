@@ -1021,16 +1021,23 @@ test "the system appearance drives the custom tokens live" {
     // palettes, so these assertions follow the one source of truth).
     try testing.expectEqualDeep(theme.light_colors, main.tokensFromModel(&app_state.model).colors);
 
-    // The accent override actually landed: the filled-primary pair, the
-    // focus ring, and the slider's filled range all carry the same pink
-    // step in BOTH schemes — the scrubber is the one slot the pack
-    // states its own hue for, so it is pinned separately from `accent`.
+    // The accent override actually landed: the filled-primary pair and
+    // the slider's filled range carry the same pink step in BOTH
+    // schemes — the scrubber is the one slot the pack states its own
+    // hue for, so it is pinned separately from `accent`.
     const pink = canvas.Color.rgb8(223, 38, 112);
     for ([_]canvas.ColorTokens{ theme.light_colors, theme.dark_colors }) |colors| {
         try testing.expectEqualDeep(pink, colors.accent);
         try testing.expectEqualDeep(canvas.Color.rgb8(255, 255, 255), colors.accent_text);
-        try testing.expectEqualDeep(pink, colors.focus_ring);
     }
+    // The focus ring is stated per scheme: raw pink in light, the
+    // desaturated dark step in dark (canvas.accentFocusRing — the same
+    // derivation the manifest theme_accent channel applies, so the TS
+    // port's ring matches). Full-chroma pink would glare neon on the
+    // dark palette.
+    try testing.expectEqualDeep(pink, theme.light_colors.focus_ring);
+    try testing.expectEqualDeep(canvas.accentFocusRing(pink, .dark), theme.dark_colors.focus_ring);
+    try testing.expect(!std.meta.eql(pink, theme.dark_colors.focus_ring));
     for ([_]native_sdk.ColorScheme{ .light, .dark }) |scheme| {
         try testing.expectEqualDeep(pink, theme.tokens(scheme, false, false).controls.slider.active_background.?);
     }

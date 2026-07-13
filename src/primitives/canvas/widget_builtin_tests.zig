@@ -1415,6 +1415,36 @@ test "design tokens provide theme and contrast palettes" {
     try std.testing.expectEqual(Easing.linear, reduced_motion.motion.easing);
 }
 
+test "the accent override desaturates its dark-scheme focus ring" {
+    const accent = Color.rgb8(223, 38, 112);
+
+    // Light keeps the raw accent on every identity slot, ring included.
+    const light = canvas.accentOverrides(accent, .light);
+    try std.testing.expectEqualDeep(accent, light.colors.accent.?);
+    try std.testing.expectEqualDeep(accent, light.colors.focus_ring.?);
+
+    // Dark keeps the accent identity but derives the ring at half the
+    // accent's HSL saturation — a quiet outline instead of a neon glare
+    // — through the exported derivation, so hand-authored token sets
+    // can state the same value.
+    const dark = canvas.accentOverrides(accent, .dark);
+    try std.testing.expectEqualDeep(accent, dark.colors.accent.?);
+    const ring = dark.colors.focus_ring.?;
+    try std.testing.expectEqualDeep(canvas.accentFocusRing(accent, .dark), ring);
+    try std.testing.expect(!std.meta.eql(accent, ring));
+    // Same lightness (HSL max+min preserved), lower chroma: the channel
+    // spread shrinks to half while the hue's ordering holds.
+    const accent_spread = @max(accent.r, @max(accent.g, accent.b)) - @min(accent.r, @min(accent.g, accent.b));
+    const ring_spread = @max(ring.r, @max(ring.g, ring.b)) - @min(ring.r, @min(ring.g, ring.b));
+    try std.testing.expect(ring_spread < accent_spread);
+    try std.testing.expect(ring.r > ring.b and ring.b > ring.g);
+
+    // An achromatic accent has no saturation to halve: the ring passes
+    // through untouched.
+    const gray = Color.rgb8(115, 115, 115);
+    try std.testing.expectEqualDeep(gray, canvas.accentFocusRing(gray, .dark));
+}
+
 test "built-in component catalog covers house component set" {
     const expected_names = [_][]const u8{
         "Accordion",

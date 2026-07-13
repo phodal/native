@@ -1190,8 +1190,13 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // The manifest accent layers over the resolved pack —
                 // except under high contrast, where the pack's own loud
                 // register wins untouched (accessibility beats brand).
+                // The bundle takes the resolved scheme: the dark ring
+                // derives desaturated (canvas.accentFocusRing).
                 if (!self.system_appearance.high_contrast) {
-                    tokens = tokens.withOverrides(canvas.accentOverrides(accent));
+                    tokens = tokens.withOverrides(canvas.accentOverrides(accent, switch (self.system_appearance.color_scheme) {
+                        .light => .light,
+                        .dark => .dark,
+                    }));
                 }
             }
             tokens.pixel_snap.scale = self.pixel_snap_scale;

@@ -1104,6 +1104,19 @@ test "the manifest accent layers the original's pink over the pack (high contras
     try std.testing.expectEqual(pink, tokens.colors.focus_ring);
     try std.testing.expectEqual(pink, tokens.controls.slider.active_background);
 
+    // Dark appearance keeps the accent identity but derives the focus
+    // ring desaturated (canvas.accentFocusRing): full-chroma pink would
+    // glare neon on the dark palette — the same per-scheme rule the Zig
+    // original's theme.zig states, so both tiers land the identical
+    // ring.
+    try h.harness.runtime.dispatchPlatformEvent(h.app, .{ .appearance_changed = .{
+        .color_scheme = .dark,
+    } });
+    const dark = h.app_state.effectiveTokens();
+    try std.testing.expectEqual(pink, dark.colors.accent);
+    try std.testing.expectEqual(canvas.accentFocusRing(pink, .dark), dark.colors.focus_ring);
+    try std.testing.expect(!std.meta.eql(pink, dark.colors.focus_ring));
+
     // High contrast takes the pack's own loud register with no brand
     // layer (accessibility beats brand — the original's rule).
     try h.harness.runtime.dispatchPlatformEvent(h.app, .{ .appearance_changed = .{

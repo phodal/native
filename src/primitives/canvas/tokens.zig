@@ -1437,7 +1437,10 @@ pub const ControlTokenOverrides = struct {
 ///   both schemes without a second manifest knob.
 /// - `colors.focus_ring`: packs spend their identity hue on focus; with
 ///   the identity moved, the ring follows so focus and accent chrome
-///   read as one system.
+///   read as one system. The ring is stated PER SCHEME
+///   (`accentFocusRing`): the accent itself in light, a desaturated
+///   step of it in dark — a full-chroma brand hue glares neon against
+///   a dark palette, so the bundle takes the scheme it layers over.
 /// - `controls.slider.active_background`: the slider table states its
 ///   own hue for the filled range rather than deriving from the accent
 ///   channel, so the same move is stated once more or a seek scrubber
@@ -1446,17 +1449,62 @@ pub const ControlTokenOverrides = struct {
 /// High-contrast composition is the CALLER's rule (accessibility beats
 /// brand): the runtime skips this bundle when the system asks for high
 /// contrast, taking the pack's own loud register untouched.
-pub fn accentOverrides(accent: Color) DesignTokenOverrides {
+pub fn accentOverrides(accent: Color, color_scheme: ColorScheme) DesignTokenOverrides {
     return .{
         .colors = .{
             .accent = accent,
             .accent_text = accentKnockoutInk(accent),
-            .focus_ring = accent,
+            .focus_ring = accentFocusRing(accent, color_scheme),
         },
         .controls = .{
             .slider = .{ .active_background = accent },
         },
     };
+}
+
+/// The focus ring an accent identity carries, per scheme: the accent
+/// itself in light, and the accent at HALF its HSL saturation in dark —
+/// dark surfaces amplify chroma, so the raw brand hue reads neon where
+/// the ring should stay a quiet outline. Halving keeps the hue
+/// recognizably the brand's while settling it into the dark palette
+/// (the built-in packs make the same per-scheme move with their own
+/// ring steps). Exported so hand-authored token sets can state the
+/// identical derivation and stay in step with the manifest channel.
+pub fn accentFocusRing(accent: Color, color_scheme: ColorScheme) Color {
+    return switch (color_scheme) {
+        .light => accent,
+        .dark => scaleSaturation(accent, 0.5),
+    };
+}
+
+/// Scale a color's HSL saturation, keeping hue, lightness, and alpha.
+fn scaleSaturation(color: Color, factor: f32) Color {
+    const max = @max(color.r, @max(color.g, color.b));
+    const min = @min(color.r, @min(color.g, color.b));
+    const lightness = (max + min) / 2;
+    const delta = max - min;
+    if (delta <= 0.0001) return color;
+    const saturation = delta / (1 - @abs(2 * lightness - 1));
+    const hue: f32 = if (max == color.r)
+        60 * @mod((color.g - color.b) / delta, 6)
+    else if (max == color.g)
+        60 * ((color.b - color.r) / delta + 2)
+    else
+        60 * ((color.r - color.g) / delta + 4);
+    const scaled = std.math.clamp(saturation * factor, 0, 1);
+    const chroma = (1 - @abs(2 * lightness - 1)) * scaled;
+    const x = chroma * (1 - @abs(@mod(hue / 60, 2) - 1));
+    const base = lightness - chroma / 2;
+    const sector: u3 = @intFromFloat(@min(5, @floor(hue / 60)));
+    const rgb: [3]f32 = switch (sector) {
+        0 => .{ chroma, x, 0 },
+        1 => .{ x, chroma, 0 },
+        2 => .{ 0, chroma, x },
+        3 => .{ 0, x, chroma },
+        4 => .{ x, 0, chroma },
+        else => .{ chroma, 0, x },
+    };
+    return .{ .r = rgb[0] + base, .g = rgb[1] + base, .b = rgb[2] + base, .a = color.a };
 }
 
 /// The readable knockout ink over one accent fill: WHITE whenever it

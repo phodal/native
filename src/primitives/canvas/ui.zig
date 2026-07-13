@@ -1143,11 +1143,21 @@ pub fn Ui(comptime Msg: type) type {
                     if (self.msgFor(target_id, .submit)) |msg| return msg;
                 }
                 if (isTextEntryWidget(widget) and !widget.state.disabled) {
-                    // The textarea newline mapping resolves BEFORE the
-                    // generic key mapping (which has no Enter case), so
-                    // the model's `on_input` hears the same newline the
-                    // runtime applied to the retained text.
-                    const edit = canvas.widgetKeyboardNewlineTextEditEvent(widget.kind, keyboard) orelse keyboard.textEditEvent();
+                    // Events routed through the runtime arrive with the
+                    // edit the retained editor actually applied STAMPED
+                    // onto `keyboard.edit` (the runtime's one derivation
+                    // seam — Escape's search-field clear, composition
+                    // cancels, and clipboard edits all ride it), and
+                    // `textEditEvent()` returns the stamp first. The
+                    // local derivation below is the fallback for events
+                    // that never crossed the runtime (direct Tree
+                    // consumers, tests); the textarea newline mapping
+                    // resolves BEFORE it because the generic key mapping
+                    // has no Enter case.
+                    const edit = if (keyboard.edit != null)
+                        keyboard.edit
+                    else
+                        canvas.widgetKeyboardNewlineTextEditEvent(widget.kind, keyboard) orelse keyboard.textEditEvent();
                     if (edit) |text_edit| {
                         if (self.msgForTextEdit(target_id, text_edit)) |msg| return msg;
                     }

@@ -297,11 +297,14 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                     &clipboard_paste_buffer,
                 );
             }
-            if (widget_keyboard_event) |keyboard_event| {
-                try CanvasWidgetEventMethods().updateCanvasWidgetControlFromKeyboard(self, keyboard_event);
+            // The text pass stamps the edit it derived and applied onto
+            // the event (Escape's clear included), so the app dispatch
+            // below hears exactly the edit the retained editor performed.
+            if (widget_keyboard_event) |*keyboard_event| {
+                try CanvasWidgetEventMethods().updateCanvasWidgetControlFromKeyboard(self, keyboard_event.*);
                 try CanvasWidgetEventMethods().updateCanvasWidgetTextFromKeyboard(self, keyboard_event);
             }
-            const widget_text_input_event = if (widget_surface_dismissed)
+            var widget_text_input_event = if (widget_surface_dismissed)
                 null
             else
                 CanvasWidgetEventMethods().routeCanvasWidgetTextInput(self, input_event, &self.widget_event_route_entries) catch |err| switch (err) {
@@ -311,7 +314,7 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                     => null,
                     else => return err,
                 };
-            if (widget_text_input_event) |text_input_event| {
+            if (widget_text_input_event) |*text_input_event| {
                 try CanvasWidgetEventMethods().updateCanvasWidgetTextFromKeyboard(self, text_input_event);
             }
             // The refresh batch stays open across the app dispatches

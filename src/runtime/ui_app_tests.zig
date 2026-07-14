@@ -2231,6 +2231,221 @@ test "automation composition and selection verbs keep the model mirror consisten
     try std.testing.expectEqualStrings("", canceled_layout.findById(field_id).?.widget.text);
 }
 
+// --------------------------------- combobox open-arrow (mirror invariant)
+
+const combo_mirror_canvas_label = "combo-mirror-canvas";
+
+const ComboMirrorModel = struct {
+    query: canvas.TextBuffer(64) = .{},
+    note: canvas.TextBuffer(64) = .{},
+    open: bool = false,
+    opens: u32 = 0,
+    query_edits: u32 = 0,
+};
+
+const ComboMirrorMsg = union(enum) {
+    open_picker,
+    close_picker,
+    query_edit: canvas.TextInputEvent,
+    note_edit: canvas.TextInputEvent,
+};
+
+const ComboMirrorApp = ui_app_model.UiApp(ComboMirrorModel, ComboMirrorMsg);
+
+fn comboMirrorUpdate(model: *ComboMirrorModel, msg: ComboMirrorMsg) void {
+    switch (msg) {
+        .open_picker => {
+            model.open = true;
+            model.opens += 1;
+        },
+        .close_picker => model.open = false,
+        .query_edit => |edit| {
+            model.query.apply(edit);
+            model.query_edits += 1;
+        },
+        .note_edit => |edit| model.note.apply(edit),
+    }
+}
+
+fn comboMirrorView(ui: *ComboMirrorApp.Ui, model: *const ComboMirrorModel) ComboMirrorApp.Ui.Node {
+    const trigger = ui.el(.combobox, .{
+        .text = model.query.text(),
+        .placeholder = "Filter",
+        .width = 200,
+        .expanded = model.open,
+        .on_press = .open_picker,
+        .on_input = ComboMirrorApp.Ui.inputMsg(.query_edit),
+    }, .{});
+    const picker = if (model.open) ui.stack(.{ .height = 28 }, .{
+        trigger,
+        ui.el(.dropdown_menu, .{
+            .anchor = .below,
+            .anchor_alignment = .stretch,
+            .width = 200,
+            .height = 60,
+            .on_dismiss = .close_picker,
+        }, .{
+            ui.el(.menu_item, .{ .key = .{ .int = 0 }, .text = "glass bead", .height = 26, .on_press = .close_picker }, .{}),
+            ui.el(.menu_item, .{ .key = .{ .int = 1 }, .text = "glass jar", .height = 26, .on_press = .close_picker }, .{}),
+        }),
+    }) else ui.stack(.{ .height = 28 }, .{trigger});
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        picker,
+        ui.el(.text_field, .{
+            .text = model.note.text(),
+            .placeholder = "Note",
+            .width = 200,
+            .on_input = ComboMirrorApp.Ui.inputMsg(.note_edit),
+        }, .{}),
+    });
+}
+
+const combo_mirror_views = [_]app_manifest.ShellView{
+    .{ .label = combo_mirror_canvas_label, .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+};
+const combo_mirror_windows = [_]app_manifest.ShellWindow{.{
+    .label = "main",
+    .title = "ComboMirror",
+    .width = 400,
+    .height = 300,
+    .views = &combo_mirror_views,
+}};
+const combo_mirror_scene: app_manifest.ShellConfig = .{ .windows = &combo_mirror_windows };
+
+fn comboMirrorKey(harness: *core.TestHarness(), app: core.App, key: []const u8) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = combo_mirror_canvas_label,
+        .kind = .key_down,
+        .key = key,
+    } });
+}
+
+fn comboMirrorRetainedSelection(harness: *core.TestHarness(), id: canvas.ObjectId) !?canvas.TextSelection {
+    const layout = try harness.runtime.canvasWidgetLayout(1, combo_mirror_canvas_label);
+    return layout.findById(id).?.widget.text_selection;
+}
+
+test "a closed combobox's open arrows move neither the retained caret nor the model mirror" {
+    // The split-brain escapee: a CLOSED combobox maps ArrowUp/Down to
+    // BOTH its open press (`widgetKeyboardControlIntent`'s menu-open
+    // keys) and — through the single-line caret derivation — a stamped
+    // caret jump. The app dispatch resolves the press FIRST, so the
+    // runtime editor moved its caret while the model's mirror heard
+    // nothing, and the next insert landed at two different offsets.
+    // Opening wins (the platform convention): the derivation yields no
+    // edit, and BOTH sides agree the arrow moved no caret.
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(ComboMirrorApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = ComboMirrorApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-combo-mirror",
+        .scene = combo_mirror_scene,
+        .canvas_label = combo_mirror_canvas_label,
+        .update = comboMirrorUpdate,
+        .view = comboMirrorView,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = combo_mirror_canvas_label,
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    const combo_id = findWidgetIdByKind(app_state.tree.?.root, .combobox).?;
+
+    // Focus WITHOUT pressing (a click on a combobox IS its open press),
+    // type, and walk the caret off the end so a divergence would show.
+    try core.testing.dispatchAutomationWidgetAction(&harness.runtime, app, .{
+        .view_label = combo_mirror_canvas_label,
+        .id = combo_id,
+        .action = .focus,
+    });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = combo_mirror_canvas_label,
+        .kind = .text_input,
+        .text = "glass",
+    } });
+    try comboMirrorKey(harness, app, "arrowleft");
+    try comboMirrorKey(harness, app, "arrowleft");
+    try std.testing.expectEqualStrings("glass", app_state.model.query.text());
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(3), app_state.model.query.selection);
+
+    // THE pin: ArrowDown on the closed trigger opens the picker and
+    // both carets stay at 3 — no query edit is heard or applied.
+    const edits_before_open = app_state.model.query_edits;
+    try comboMirrorKey(harness, app, "arrowdown");
+    try std.testing.expect(app_state.model.open);
+    try std.testing.expectEqual(@as(u32, 1), app_state.model.opens);
+    try std.testing.expectEqual(edits_before_open, app_state.model.query_edits);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(3), app_state.model.query.selection);
+    try std.testing.expectEqualDeep(@as(?canvas.TextSelection, canvas.TextSelection.collapsed(3)), try comboMirrorRetainedSelection(harness, combo_id));
+
+    // The OPEN-picker truth, pinned as-is: the next arrow walks the
+    // keyboard INTO the mounted menu (the focus step consumes it before
+    // routing reaches the trigger), so it is no caret edit either.
+    const first_item_id = findWidgetIdByText(app_state.tree.?, .menu_item, "glass bead").?;
+    try comboMirrorKey(harness, app, "arrowdown");
+    try std.testing.expectEqual(first_item_id, harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(edits_before_open, app_state.model.query_edits);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(3), app_state.model.query.selection);
+    try std.testing.expectEqualDeep(@as(?canvas.TextSelection, canvas.TextSelection.collapsed(3)), try comboMirrorRetainedSelection(harness, combo_id));
+
+    // Escape is consumed by the DISMISSAL pass while the menu floats:
+    // the picker closes through `on_dismiss` and the combobox's
+    // Escape-clear never runs — the query survives.
+    try comboMirrorKey(harness, app, "escape");
+    try std.testing.expect(!app_state.model.open);
+    try std.testing.expectEqualStrings("glass", app_state.model.query.text());
+    try std.testing.expectEqual(combo_id, harness.runtime.views[0].canvas_widget_focused_id);
+
+    // ArrowUp on the closed trigger is the same open key: opens, and
+    // both carets stay put again.
+    try comboMirrorKey(harness, app, "arrowup");
+    try std.testing.expect(app_state.model.open);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.opens);
+    try std.testing.expectEqual(edits_before_open, app_state.model.query_edits);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(3), app_state.model.query.selection);
+    try std.testing.expectEqualDeep(@as(?canvas.TextSelection, canvas.TextSelection.collapsed(3)), try comboMirrorRetainedSelection(harness, combo_id));
+    try comboMirrorKey(harness, app, "escape");
+    try std.testing.expect(!app_state.model.open);
+
+    // The suppression is combobox-only: a plain text field keeps the
+    // single-line ArrowUp/Down caret jumps, and the model mirror hears
+    // them through the stamped edit (the #129 seam, unregressed).
+    const note_id = findWidgetIdByKind(app_state.tree.?.root, .text_field).?;
+    const note_frame = (try harness.runtime.canvasWidgetLayout(1, combo_mirror_canvas_label)).findById(note_id).?.frame;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = combo_mirror_canvas_label,
+        .kind = .pointer_down,
+        .x = note_frame.x + note_frame.width * 0.5,
+        .y = note_frame.y + note_frame.height * 0.5,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = combo_mirror_canvas_label,
+        .kind = .text_input,
+        .text = "abc",
+    } });
+    try comboMirrorKey(harness, app, "arrowup");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(0), app_state.model.note.selection);
+    try std.testing.expectEqualDeep(@as(?canvas.TextSelection, canvas.TextSelection.collapsed(0)), try comboMirrorRetainedSelection(harness, note_id));
+    try comboMirrorKey(harness, app, "arrowdown");
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(3), app_state.model.note.selection);
+    try std.testing.expectEqualDeep(@as(?canvas.TextSelection, canvas.TextSelection.collapsed(3)), try comboMirrorRetainedSelection(harness, note_id));
+}
+
 // ------------------------------------------------- autofocus (notes flow)
 
 const autofocus_canvas_label = "autofocus-canvas"; // shell scene label below

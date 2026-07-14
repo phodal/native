@@ -44,16 +44,17 @@
 //! reordering any journaled enum is a format break: bump
 //! `format_version` when one moves.
 //!
-//! Coverage note: automation driving that synthesizes PLATFORM events is
-//! fully journaled (widget-click/hold/context-press/drag/wheel/key,
-//! widget-action press/toggle/increment/decrement/set_text, resize,
-//! menu-command, shortcut, tray-action). The few automation verbs that
-//! mutate runtime widget state directly (widget-action
-//! focus/select/set_selection and the composition edits) bypass the
-//! platform boundary and do not journal in v1 — a recorded session using
-//! them replays without those mutations, and the next fingerprint
-//! checkpoint says so loudly. Drive text through `widget-key` and
-//! selection through pointer/key input when recording.
+//! Coverage note: automation driving is fully journaled. Verbs that
+//! synthesize PLATFORM events (widget-click/hold/context-press/drag/
+//! wheel/key, resize, menu-command, shortcut, tray-action) journal
+//! those events; every widget-action verb — including the direct-
+//! surface ones (focus, select, set_selection, set_text, and the
+//! composition edits) — journals as the outer-wins
+//! `widget_accessibility_action` record its dispatch stages, with the
+//! events it synthesizes inside suppressed as that record's children.
+//! Replaying the action record re-runs the verb through the same
+//! dispatch, so recorded sessions may drive text and selection through
+//! any verb.
 
 const std = @import("std");
 const geometry = @import("geometry");
@@ -70,8 +71,12 @@ pub const magic = "NSDKSJNL";
 /// enum orders bumps this; readers refuse other versions loudly rather
 /// than misreading yesterday's shape. v2 added the stream `buffering`
 /// flag to audio event and audio effect records; v3 added the spectrum
-/// band bytes to both (and the `.spectrum` audio kind).
-pub const format_version: u32 = 3;
+/// band bytes to both (and the `.spectrum` audio kind); v4 added the
+/// composition verbs (`set_composition`/`commit_composition`/
+/// `cancel_composition`, codes 11-13) to the accessibility-action
+/// record's verb enum — a v3 reader hitting one of those codes would
+/// have reported the file corrupt instead of refusing the skew.
+pub const format_version: u32 = 4;
 
 // ------------------------------------------------------------- budgets
 //
@@ -1067,7 +1072,7 @@ pub const Reader = struct {
 pub fn describeError(err: JournalError) []const u8 {
     return switch (err) {
         error.JournalBadMagic => "not a session journal (bad magic) - record one with NATIVE_SDK_SESSION_RECORD=<path>",
-        error.JournalUnsupportedVersion => "journal format version differs from this build - re-record the session with the same build that replays it",
+        error.JournalUnsupportedVersion => std.fmt.comptimePrint("journal format version differs from the v{d} this build reads and writes - re-record the session with the same build that replays it", .{format_version}),
         error.JournalTruncated => "journal ends mid-record (the recording was cut off) - re-record, and keep the app running until it exits cleanly",
         error.JournalCorrupt => "journal payload does not decode (damaged or hand-edited bytes)",
         error.JournalRecordOverBudget => "journal claims a record beyond max_session_record_bytes - the file is damaged or hostile",
@@ -1434,6 +1439,13 @@ test "reader refuses bad magic and version skew" {
     var skewed: [16384]u8 = undefined;
     @memcpy(skewed[0..len], buffer[0..len]);
     std.mem.writeInt(u32, skewed[magic.len..][0..4], format_version + 1, .little);
+    try testing.expectError(error.JournalUnsupportedVersion, Reader.init(skewed[0..len]));
+    // Older journals are refused the same way — and, symmetrically, a
+    // reader built before a version bump refuses a NEWER journal at the
+    // preamble instead of reporting an unknown payload code as
+    // corruption (the v4 bump's reason: v3 readers would have called a
+    // journaled composition verb code corrupt).
+    std.mem.writeInt(u32, skewed[magic.len..][0..4], format_version - 1, .little);
     try testing.expectError(error.JournalUnsupportedVersion, Reader.init(skewed[0..len]));
 }
 

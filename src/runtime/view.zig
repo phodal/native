@@ -442,6 +442,23 @@ pub const RuntimeView = struct {
     canvas_tooltip_deadline_ns: u64 = 0,
     canvas_tooltip_shown_id: canvas.ObjectId = 0,
     canvas_tooltip_warm_until_ns: u64 = 0,
+    /// The TRIGGER each intent slot was earned through (the hover
+    /// target that armed the delay / the widget whose hover or
+    /// focus-visible showed the tooltip). Ownership is a live claim,
+    /// not a memento: a rebuild that removes, rekeys, disables, or
+    /// re-parents the owner invalidates the slot in
+    /// `pruneCanvasTooltipIntent` — the tooltip node alone surviving
+    /// is not enough to keep explaining a control that no longer
+    /// exists.
+    canvas_tooltip_armed_owner_id: canvas.ObjectId = 0,
+    canvas_tooltip_shown_owner_id: canvas.ObjectId = 0,
+    /// True when the shown tooltip was revealed by keyboard
+    /// focus-visible rather than pointer hover. Focus-shown tooltips
+    /// follow shadcn's Base UI-backed defaults: they open instantly on
+    /// focus-visible, hide on blur, ignore pointer hover leaving OTHER
+    /// triggers, and never open the pointer's warm window when they
+    /// hide (deliberate keyboard motion is not a pointer sweep).
+    canvas_tooltip_shown_from_focus: bool = false,
     /// Pointer position while the hovered widget draws hover-detail
     /// chrome (a `.chart` with hover details opted in); null everywhere
     /// else. Feeds `WidgetRenderState.hover_point`, so the display list

@@ -305,6 +305,11 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
             // the event (Escape's clear included), so the app dispatch
             // below hears exactly the edit the retained editor performed.
             if (widget_keyboard_event) |*keyboard_event| {
+                // Keyboard activation counts as a press for tooltips:
+                // Space/Enter on the focused trigger dismisses its
+                // armed/shown tooltip before the control mutation and
+                // app dispatch observe the input.
+                try CanvasWidgetEventMethods().updateCanvasTooltipIntentForKeyboardActivation(self, keyboard_event.*);
                 try CanvasWidgetEventMethods().updateCanvasWidgetControlFromKeyboard(self, keyboard_event.*);
                 try CanvasWidgetEventMethods().updateCanvasWidgetTextFromKeyboard(self, keyboard_event);
             }

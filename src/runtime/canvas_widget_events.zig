@@ -411,6 +411,13 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             if (self.views[index].canvas_widget_hovered_id != next_hovered_id) {
                 try updateCanvasTooltipIntentForHoverChange(self, index, next_hovered_id);
             }
+            // A press ends the tooltip conversation outright — pending
+            // reveal, shown tooltip, and warm window alike (after the
+            // hover step above, so a down that also moved the hover
+            // cannot re-arm or warm past the press).
+            if (pointer_event.pointer.phase == .down) {
+                try updateCanvasTooltipIntentForPress(self, index);
+            }
 
             const interaction_changed = self.views[index].canvas_widget_hovered_id != next_hovered_id or
                 self.views[index].canvas_widget_pressed_id != next_pressed_id or
@@ -470,13 +477,21 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const tooltip_id: canvas.ObjectId = if (tooltip_index) |node_index| view.widget_layout_nodes[node_index].widget.id else 0;
 
             var shown_changed = false;
-            if (view.canvas_tooltip_shown_id != 0 and view.canvas_tooltip_shown_id != tooltip_id) {
+            // A FOCUS-shown tooltip is held by the keyboard, not the
+            // pointer: hover leaving some other widget must not tear it
+            // down (the shadcn/Base UI focus-open holds through pointer
+            // traffic). Only the focus path — or a completed pointer
+            // intent below, which takes over the single shown slot —
+            // moves it.
+            if (view.canvas_tooltip_shown_id != 0 and view.canvas_tooltip_shown_id != tooltip_id and !view.canvas_tooltip_shown_from_focus) {
                 view.canvas_tooltip_shown_id = 0;
+                view.canvas_tooltip_shown_owner_id = 0;
                 view.canvas_tooltip_warm_until_ns = now_ns + canvasTooltipWarmWindowNs(view.widget_tokens);
                 shown_changed = true;
             }
             if (view.canvas_tooltip_armed_id != 0 and view.canvas_tooltip_armed_id != tooltip_id) {
                 view.canvas_tooltip_armed_id = 0;
+                view.canvas_tooltip_armed_owner_id = 0;
                 view.canvas_tooltip_deadline_ns = 0;
             }
             if (tooltip_index) |node_index| {
@@ -484,11 +499,15 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                     const delay_ns = canvasTooltipShowDelayNs(view.widget_layout_nodes[node_index].widget, view.widget_tokens);
                     if (delay_ns == 0 or now_ns < view.canvas_tooltip_warm_until_ns) {
                         view.canvas_tooltip_shown_id = tooltip_id;
+                        view.canvas_tooltip_shown_owner_id = next_hovered_id;
+                        view.canvas_tooltip_shown_from_focus = false;
                         view.canvas_tooltip_armed_id = 0;
+                        view.canvas_tooltip_armed_owner_id = 0;
                         view.canvas_tooltip_deadline_ns = 0;
                         shown_changed = true;
                     } else if (view.canvas_tooltip_armed_id != tooltip_id) {
                         view.canvas_tooltip_armed_id = tooltip_id;
+                        view.canvas_tooltip_armed_owner_id = next_hovered_id;
                         view.canvas_tooltip_deadline_ns = now_ns + delay_ns;
                     }
                 }
@@ -506,9 +525,131 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             if (view.canvas_tooltip_armed_id == 0) return;
             if (timestamp_ns < view.canvas_tooltip_deadline_ns) return;
             view.canvas_tooltip_shown_id = view.canvas_tooltip_armed_id;
+            view.canvas_tooltip_shown_owner_id = view.canvas_tooltip_armed_owner_id;
+            view.canvas_tooltip_shown_from_focus = false;
             view.canvas_tooltip_armed_id = 0;
+            view.canvas_tooltip_armed_owner_id = 0;
             view.canvas_tooltip_deadline_ns = 0;
             try commitCanvasTooltipVisibility(self, view_index);
+        }
+
+        /// Pointer-down resets the WHOLE intent machine: a press on the
+        /// armed trigger cancels the pending reveal (no tooltip mid- or
+        /// post-activation), a press on a shown tooltip's trigger
+        /// dismisses it, and the warm window closes with it — an
+        /// activated control has explained itself, so the post-click
+        /// hover must earn the full delay again instead of instantly
+        /// re-showing. This is shadcn's Base UI-backed default (a
+        /// trigger press closes its tooltip) and the platform norm —
+        /// macOS help tags vanish on any click. Any-press semantics are
+        /// deliberate: a down elsewhere has already moved hover or is
+        /// moving focus off the trigger, so the broad reset never fights
+        /// the narrower paths, and it keeps window-drag and capture
+        /// corners honest.
+        fn updateCanvasTooltipIntentForPress(self: *Runtime, view_index: usize) anyerror!void {
+            const view = &self.views[view_index];
+            view.canvas_tooltip_armed_id = 0;
+            view.canvas_tooltip_armed_owner_id = 0;
+            view.canvas_tooltip_deadline_ns = 0;
+            view.canvas_tooltip_warm_until_ns = 0;
+            if (view.canvas_tooltip_shown_id == 0) return;
+            view.canvas_tooltip_shown_id = 0;
+            view.canvas_tooltip_shown_owner_id = 0;
+            view.canvas_tooltip_shown_from_focus = false;
+            try commitCanvasTooltipVisibility(self, view_index);
+        }
+
+        /// Keyboard FOCUS-VISIBLE reaching a tooltip-owning trigger
+        /// reveals its tooltip IMMEDIATELY — keyboard navigation is
+        /// deliberate, so there is no dwell to prove intent (shadcn's
+        /// Base UI-backed default: tooltips open instantly on keyboard
+        /// focus, and WCAG 1.4.13 wants hover/focus-revealed content
+        /// reachable without pointer timing). Focus moving on (or
+        /// clearing) hides a focus-shown tooltip just as immediately,
+        /// and deliberately WITHOUT opening the pointer's warm window:
+        /// warmth is a pointer-sweep courtesy, and tabbing through a
+        /// toolbar should not make later hovers instant. Only the
+        /// keyboard focus path calls this — pointer-established
+        /// focus-visible (an editable's caret contract) keeps tooltips
+        /// on the hover-intent path, mirroring Base UI's focus-visible
+        /// guard against click-focus opens.
+        fn updateCanvasTooltipIntentForFocusVisibleChange(self: *Runtime, view_index: usize, focus_visible_id: canvas.ObjectId) anyerror!void {
+            const view = &self.views[view_index];
+            const tooltip_index: ?usize = blk: {
+                if (focus_visible_id == 0) break :blk null;
+                const focused_index = view.canvasWidgetNodeIndexById(focus_visible_id) orelse break :blk null;
+                break :blk view.canvasWidgetOwnedTooltipIndex(focused_index);
+            };
+            const tooltip_id: canvas.ObjectId = if (tooltip_index) |node_index| view.widget_layout_nodes[node_index].widget.id else 0;
+
+            var shown_changed = false;
+            if (view.canvas_tooltip_shown_id != 0 and view.canvas_tooltip_shown_from_focus and view.canvas_tooltip_shown_id != tooltip_id) {
+                view.canvas_tooltip_shown_id = 0;
+                view.canvas_tooltip_shown_owner_id = 0;
+                view.canvas_tooltip_shown_from_focus = false;
+                shown_changed = true;
+            }
+            if (tooltip_id != 0) {
+                if (view.canvas_tooltip_shown_id != tooltip_id) {
+                    view.canvas_tooltip_shown_id = tooltip_id;
+                    shown_changed = true;
+                }
+                // Focus re-affirms an already pointer-shown tooltip too:
+                // the keyboard now holds it, so pointer leave (which
+                // opens the warm window) no longer hides it — blur will.
+                view.canvas_tooltip_shown_owner_id = focus_visible_id;
+                view.canvas_tooltip_shown_from_focus = true;
+                // A pending pointer dwell for the SAME tooltip is
+                // redundant now; a dwell on another trigger keeps
+                // running (the pointer's own intent may still complete
+                // and take over the shown slot — last intent wins).
+                if (view.canvas_tooltip_armed_id == tooltip_id) {
+                    view.canvas_tooltip_armed_id = 0;
+                    view.canvas_tooltip_armed_owner_id = 0;
+                    view.canvas_tooltip_deadline_ns = 0;
+                }
+            }
+            if (shown_changed) try commitCanvasTooltipVisibility(self, view_index);
+        }
+
+        /// Keyboard activation (Space/Enter on the focused trigger)
+        /// dismisses that trigger's armed or shown tooltip and closes
+        /// the warm window — the keyboard mirror of the pointer-down
+        /// reset above, per shadcn's Base UI-backed default that
+        /// keyboard activation counts as a press for close-on-click.
+        /// Scoped to the activated trigger's OWN tooltip, and skipped
+        /// for editable text targets, where Space/Enter type instead of
+        /// activating.
+        pub fn updateCanvasTooltipIntentForKeyboardActivation(self: *Runtime, keyboard_event: CanvasWidgetKeyboardEvent) anyerror!void {
+            if (keyboard_event.keyboard.phase != .key_down or keyboard_event.keyboard.modifiers.hasNavigationModifier()) return;
+            if (!canvas.isWidgetActivationKey(keyboard_event.keyboard.key)) return;
+            const target = keyboard_event.target orelse return;
+            if (canvas_widget_runtime.canvasWidgetEditableTextKind(target.kind)) return;
+            const index = runtimeFindViewIndex(self, keyboard_event.window_id, keyboard_event.view_label) orelse return;
+            if (self.views[index].kind != .gpu_surface) return;
+            const view = &self.views[index];
+            const tooltip_id: canvas.ObjectId = blk: {
+                const target_index = view.canvasWidgetNodeIndexById(target.id) orelse break :blk 0;
+                const tooltip_index = view.canvasWidgetOwnedTooltipIndex(target_index) orelse break :blk 0;
+                break :blk view.widget_layout_nodes[tooltip_index].widget.id;
+            };
+            if (tooltip_id == 0) return;
+            var matched = false;
+            if (view.canvas_tooltip_armed_id == tooltip_id) {
+                view.canvas_tooltip_armed_id = 0;
+                view.canvas_tooltip_armed_owner_id = 0;
+                view.canvas_tooltip_deadline_ns = 0;
+                matched = true;
+            }
+            const dismissed_shown = view.canvas_tooltip_shown_id == tooltip_id;
+            if (dismissed_shown) {
+                view.canvas_tooltip_shown_id = 0;
+                view.canvas_tooltip_shown_owner_id = 0;
+                view.canvas_tooltip_shown_from_focus = false;
+                matched = true;
+            }
+            if (matched) view.canvas_tooltip_warm_until_ns = 0;
+            if (dismissed_shown) try commitCanvasTooltipVisibility(self, index);
         }
 
         /// Re-stamp anchored-tooltip visibility after an intent
@@ -1095,6 +1236,11 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const previous_state = self.views[view_index].canvasWidgetRenderState();
             self.views[view_index].canvas_widget_focused_id = target_id;
             self.views[view_index].canvas_widget_focus_visible_id = target_id;
+            // Keyboard focus-visible is the tooltip's second reveal
+            // path: landing on a tooltip-owning trigger shows it
+            // immediately, moving on hides the previous one (see
+            // updateCanvasTooltipIntentForFocusVisibleChange).
+            try updateCanvasTooltipIntentForFocusVisibleChange(self, view_index, target_id);
             // Keyboard focus landing on an editable establishes a caret:
             // without a selection the emitters draw no caret line, so a
             // tabbed-into field would render its ring but no insertion

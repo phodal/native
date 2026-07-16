@@ -557,15 +557,16 @@ pub const ControlMetricTokens = struct {
     /// it; 0 shows the instant the trigger is hovered. Kept with the
     /// behavior metrics (like `spinner_period_ms`) because hover intent
     /// is part of the tooltip register's identity, not the motion
-    /// ladder.
-    tooltip_show_delay_ms: u32 = 700,
+    /// ladder. 600ms is shadcn's Base UI-backed default trigger delay.
+    tooltip_show_delay_ms: u32 = 600,
     /// The shared warm window after ANY anchored tooltip hides: moving
     /// to another tooltip trigger within this many milliseconds shows
     /// its tooltip immediately (no delay) and re-warms on the next
     /// hide — the skip-delay polish that makes sweeping a toolbar of
     /// already-explained controls feel right. View-wide by design, not
     /// per-tooltip: the warmth belongs to the pointer, not the widget.
-    tooltip_warm_window_ms: u32 = 300,
+    /// 400ms is shadcn's Base UI-backed default provider timeout.
+    tooltip_warm_window_ms: u32 = 400,
 };
 
 pub const ShadowToken = struct {

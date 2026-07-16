@@ -479,9 +479,19 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             // warm window: Escape is a deliberate dismissal, not the
             // pointer moving on to the next trigger.
             if (surface.kind == .tooltip) {
-                if (self.canvas_tooltip_shown_id == surface.id) self.canvas_tooltip_shown_id = 0;
+                if (self.canvas_tooltip_shown_id == surface.id) {
+                    self.canvas_tooltip_shown_id = 0;
+                    self.canvas_tooltip_shown_owner_id = 0;
+                    // Covers the focus-shown path too: Escape on the
+                    // focused trigger clears the reason flag with the
+                    // slot, and focus (still on the trigger) does not
+                    // re-reveal — reveals fire only on focus-visible
+                    // TRANSITIONS, so tabbing away and back re-earns it.
+                    self.canvas_tooltip_shown_from_focus = false;
+                }
                 if (self.canvas_tooltip_armed_id == surface.id) {
                     self.canvas_tooltip_armed_id = 0;
+                    self.canvas_tooltip_armed_owner_id = 0;
                     self.canvas_tooltip_deadline_ns = 0;
                 }
             }
@@ -596,25 +606,55 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             }
         }
 
-        /// Drop intent state whose tooltip left the tree (or lost its
-        /// anchor) on a rebuild — the interaction-id pruning policy
-        /// hovered/pressed ids follow. The warm window deliberately
-        /// survives rebuilds: warmth belongs to the pointer, not to any
-        /// one widget.
+        /// Drop intent state whose tooltip OR owning trigger left the
+        /// tree on a rebuild — the interaction-id pruning policy
+        /// hovered/pressed ids follow, applied to both ends of the
+        /// tooltip binding. The tooltip node surviving is not enough:
+        /// a trigger that vanished, was rekeyed (a new id is a new
+        /// widget), re-parented away from its tooltip, or disabled
+        /// (disabled widgets leave both hover and focus routing, so
+        /// nothing could ever hide the tooltip again) invalidates the
+        /// slot, and the pruned slot re-stamps hidden through the
+        /// `applyCanvasTooltipVisibility` call that follows adoption.
+        /// The warm window survives rebuilds that keep the bindings
+        /// alive (warmth belongs to the pointer, not to any one
+        /// widget), but a pruned binding closes it: instant re-shows
+        /// earned against widgets the rebuild replaced are not earned
+        /// at all.
         pub fn pruneCanvasTooltipIntent(self: *RuntimeView) void {
-            if (self.canvas_tooltip_armed_id != 0 and !canvasTooltipIntentTargetExists(self, self.canvas_tooltip_armed_id)) {
+            if (self.canvas_tooltip_armed_id != 0 and !canvasTooltipIntentBindingAlive(self, self.canvas_tooltip_armed_id, self.canvas_tooltip_armed_owner_id, false)) {
                 self.canvas_tooltip_armed_id = 0;
+                self.canvas_tooltip_armed_owner_id = 0;
                 self.canvas_tooltip_deadline_ns = 0;
+                self.canvas_tooltip_warm_until_ns = 0;
             }
-            if (self.canvas_tooltip_shown_id != 0 and !canvasTooltipIntentTargetExists(self, self.canvas_tooltip_shown_id)) {
+            if (self.canvas_tooltip_shown_id != 0 and !canvasTooltipIntentBindingAlive(self, self.canvas_tooltip_shown_id, self.canvas_tooltip_shown_owner_id, self.canvas_tooltip_shown_from_focus)) {
                 self.canvas_tooltip_shown_id = 0;
+                self.canvas_tooltip_shown_owner_id = 0;
+                self.canvas_tooltip_shown_from_focus = false;
+                self.canvas_tooltip_warm_until_ns = 0;
             }
         }
 
-        fn canvasTooltipIntentTargetExists(self: *const RuntimeView, id: canvas.ObjectId) bool {
-            const node_index = self.canvasWidgetNodeIndexById(id) orelse return false;
-            const widget = self.widget_layout_nodes[node_index].widget;
-            return widget.kind == .tooltip and canvas.widgetIsAnchored(widget);
+        /// Both ends of a tooltip intent slot are still live: the
+        /// tooltip node exists and is anchored, its recorded owner
+        /// still exists AND still resolves to this very tooltip
+        /// (`canvasWidgetOwnedTooltipIndex`, the inverse of the arming
+        /// walk), and the owner remains reachable by the routing that
+        /// earned the slot — focus targeting for focus-shown tooltips,
+        /// hover/interaction targeting for pointer ones. Both
+        /// predicates already reject disabled and hidden widgets, so
+        /// "the trigger can no longer be left" implies "the tooltip
+        /// must not stay".
+        fn canvasTooltipIntentBindingAlive(self: *const RuntimeView, tooltip_id: canvas.ObjectId, owner_id: canvas.ObjectId, from_focus: bool) bool {
+            const tooltip_index = self.canvasWidgetNodeIndexById(tooltip_id) orelse return false;
+            const tooltip_widget = self.widget_layout_nodes[tooltip_index].widget;
+            if (tooltip_widget.kind != .tooltip or !canvas.widgetIsAnchored(tooltip_widget)) return false;
+            const owner_index = self.canvasWidgetNodeIndexById(owner_id) orelse return false;
+            const owned_index = self.canvasWidgetOwnedTooltipIndex(owner_index) orelse return false;
+            if (owned_index != tooltip_index) return false;
+            if (from_focus) return self.widgetLayoutTree().focusTargetById(owner_id) != null;
+            return canvasWidgetInteractionTargetExists(self.widgetLayoutTree(), owner_id);
         }
 
         /// True while the intent machine needs presented frames to keep

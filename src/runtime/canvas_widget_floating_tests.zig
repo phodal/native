@@ -818,7 +818,7 @@ test "sweeping across tooltip triggers shows nothing" {
     }
 
     // The pointer crosses Bold and Italic 80ms apart — well under the
-    // 700ms intent delay — with a presented frame after each move. No
+    // 600ms intent delay — with a presented frame after each move. No
     // tooltip frame paints anywhere along the sweep.
     try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
     try tooltipFrame(harness, app, tooltip_t0 + 16 * tooltip_ms);
@@ -861,7 +861,7 @@ test "hover dwell past the delay shows the anchored tooltip on the frame clock" 
 
     // The first presented frame at/past the deadline shows the tooltip —
     // a deterministic frame on the recorded clock.
-    try tooltipFrame(harness, app, tooltip_t0 + 700 * tooltip_ms);
+    try tooltipFrame(harness, app, tooltip_t0 + 600 * tooltip_ms);
     try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
     try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[0]));
     try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[1]));
@@ -915,7 +915,7 @@ test "the warm window transfers instantly between triggers and expires" {
 
     // Earn the first tooltip with a full dwell.
     try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
-    try tooltipFrame(harness, app, tooltip_t0 + 700 * tooltip_ms);
+    try tooltipFrame(harness, app, tooltip_t0 + 600 * tooltip_ms);
     try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
 
     // Move to the sibling inside the warm window: Bold's tooltip hides
@@ -965,4 +965,276 @@ test "tooltip-delay zero restores the instant hover show" {
     try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 50 * tooltip_ms);
     try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
     try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[2]));
+}
+
+fn tooltipKey(harness: anytype, app: App, key: []const u8, timestamp_ns: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = key,
+        .timestamp_ns = timestamp_ns,
+    } });
+}
+
+fn tooltipPointer(harness: anytype, app: App, kind: platform.GpuSurfaceInputKind, point: geometry.PointF, timestamp_ns: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = kind,
+        .x = point.x,
+        .y = point.y,
+        .timestamp_ns = timestamp_ns,
+    } });
+}
+
+test "keyboard focus-visible shows the tooltip immediately, blur hides it, escape dismisses it" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-focus", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Tab reaches Bold with the visible ring: its tooltip shows on the
+    // key itself — keyboard navigation is deliberate, no dwell, no
+    // frame in between (shadcn's Base UI-backed instant focus open).
+    try tooltipKey(harness, app, "tab", tooltip_t0);
+    try std.testing.expectEqual(toolbar.button_ids[0], harness.runtime.views[0].canvas_widget_focus_visible_id);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+
+    // Focus moving on hides Bold's tooltip and shows Italic's, both
+    // immediately.
+    try tooltipKey(harness, app, "tab", tooltip_t0 + 50 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[1]));
+
+    // A focus hide never warms the pointer's skip window: hovering Bold
+    // now ARMS the full delay instead of showing instantly — and the
+    // pointer arming (or later leaving) another trigger leaves the
+    // focus-shown tooltip alone.
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 150 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[1]));
+
+    // Escape dismisses the focus-shown tooltip and keeps the keyboard
+    // on the trigger; nothing re-reveals without a new focus arrival.
+    try tooltipKey(harness, app, "escape", tooltip_t0 + 200 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[1]));
+    try std.testing.expectEqual(toolbar.button_ids[1], harness.runtime.views[0].canvas_widget_focused_id);
+    try tooltipFrame(harness, app, tooltip_t0 + 900 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // Tabbing away and back re-earns the reveal.
+    try tooltipKey(harness, app, "tab", tooltip_t0 + 1000 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[2], harness.runtime.views[0].canvas_tooltip_shown_id);
+}
+
+test "a press cancels the armed tooltip and dismisses the shown one without leaving warmth" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-press", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Press mid-dwell: the armed intent cancels on the down, and the
+    // would-be deadline passing changes nothing (no reveal mid- or
+    // post-activation).
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_armed_id);
+    try tooltipPointer(harness, app, .pointer_down, toolbar.button_centers[0], tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try tooltipPointer(harness, app, .pointer_up, toolbar.button_centers[0], tooltip_t0 + 150 * tooltip_ms);
+    try tooltipFrame(harness, app, tooltip_t0 + 800 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+
+    // Earn the tooltip, then press its trigger: dismissed immediately,
+    // and the press closes the warm window — the SAME unbroken hover
+    // never re-shows, and a leave-and-return must re-earn the delay
+    // instead of showing instantly.
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 900 * tooltip_ms);
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0 + 2000 * tooltip_ms);
+    try tooltipFrame(harness, app, tooltip_t0 + 2600 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try tooltipPointer(harness, app, .pointer_down, toolbar.button_centers[0], tooltip_t0 + 2700 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+    try tooltipPointer(harness, app, .pointer_up, toolbar.button_centers[0], tooltip_t0 + 2750 * tooltip_ms);
+    try tooltipFrame(harness, app, tooltip_t0 + 3400 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try tooltipHover(harness, app, .{ .x = 5, .y = 150 }, tooltip_t0 + 3500 * tooltip_ms);
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0 + 3550 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_armed_id);
+}
+
+test "keyboard activation dismisses the focus-shown tooltip like a press" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-activate", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    try tooltipKey(harness, app, "tab", tooltip_t0);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // Enter on the focused trigger counts as a press: the tooltip
+    // dismisses and stays down while focus rests on the trigger.
+    try tooltipKey(harness, app, "enter", tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+    try std.testing.expectEqual(toolbar.button_ids[0], harness.runtime.views[0].canvas_widget_focused_id);
+    try tooltipFrame(harness, app, tooltip_t0 + 900 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // The next focus arrival still reveals (activation dismissed one
+    // tooltip, not the register).
+    try tooltipKey(harness, app, "tab", tooltip_t0 + 1000 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_shown_id);
+}
+
+/// A raw-widget tooltip fixture with EXPLICIT ids (the rebuild tests
+/// swap trees, so ids must be author-controlled): a stack wrapping a
+/// trigger button (id 2) and its anchored tooltip (id 3),
+/// tooltip-delay 0 so the hover itself shows it.
+fn tooltipRebuildChildren(trigger_id: canvas.ObjectId, disabled: bool) [2]canvas.Widget {
+    return .{
+        .{
+            .id = trigger_id,
+            .kind = .button,
+            .frame = geometry.RectF.init(10, 40, 96, 32),
+            .text = "Run",
+            .state = .{ .disabled = disabled },
+        },
+        .{
+            .id = 3,
+            .kind = .tooltip,
+            .text = "Runs the job",
+            .tooltip_delay_ms = 0,
+            .layout = .{ .anchor = .{ .placement = .above } },
+        },
+    };
+}
+
+fn installTooltipRebuildFixture(harness: anytype, app: App) !void {
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 220, 120),
+    });
+    const children = tooltipRebuildChildren(2, false);
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 220, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // Hover the trigger: delay 0 shows the tooltip on the move itself.
+    try tooltipHover(harness, app, .{ .x = 58, .y = 56 }, tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, 3));
+}
+
+fn expectTooltipRebuildReset(harness: anytype, app: App, replacement: []const canvas.Widget) !void {
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = replacement }, geometry.RectF.init(0, 0, 220, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // The owning trigger is gone (removed, rekeyed, or disabled): the
+    // adoption prune resets the whole intent slot and re-stamps the
+    // surviving tooltip node hidden — no stale semantics.hidden=false.
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
+    try std.testing.expect(try tooltipHidden(harness, 3));
+
+    // And nothing appears later: frames past any would-be deadline
+    // leave the tooltip down.
+    try tooltipFrame(harness, app, tooltip_t0 + 2000 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 3));
+}
+
+test "a rebuild that removes the tooltip's trigger resets the shown tooltip" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-owner-gone", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipRebuildFixture(harness, app);
+
+    // The tooltip node SURVIVES the rebuild; only its trigger vanishes.
+    const replacement = [_]canvas.Widget{tooltipRebuildChildren(2, false)[1]};
+    try expectTooltipRebuildReset(harness, app, &replacement);
+}
+
+test "a rebuild that rekeys the tooltip's trigger resets the shown tooltip" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-owner-rekeyed", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipRebuildFixture(harness, app);
+
+    // Same structure, new trigger id: a new id is a new widget, so the
+    // intent earned against the old one does not transfer.
+    const replacement = tooltipRebuildChildren(9, false);
+    try expectTooltipRebuildReset(harness, app, &replacement);
+}
+
+test "a rebuild that disables the tooltip's trigger resets the shown tooltip" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-owner-disabled", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipRebuildFixture(harness, app);
+
+    // A disabled trigger leaves hover (and focus) routing entirely, so
+    // no interaction could ever hide the tooltip again: the prune must
+    // not wait for one.
+    const replacement = tooltipRebuildChildren(2, true);
+    try expectTooltipRebuildReset(harness, app, &replacement);
 }

@@ -190,7 +190,7 @@
     },
     {
       "name": "tooltip",
-      "doc": "Tooltip text leaf; content supports {} interpolation. anchor=\"above|below\" floats it against its parent (put it beside its trigger in a stack) and hands visibility to the RUNTIME: it shows after the trigger has been hovered tooltip-delay milliseconds (default 700; a shared 300ms warm window after any tooltip hides shows the next one instantly) and hides when the pointer leaves - the model never hears hover. Without anchor it stays a static leaf that paints whenever the view renders it."
+      "doc": "Tooltip text leaf; content supports {} interpolation. anchor=\"above|below\" floats it against its parent (put it beside its trigger in a stack) and hands visibility to the RUNTIME: it shows after the trigger has been hovered tooltip-delay milliseconds (default 600; a shared 400ms warm window after any tooltip hides shows the next one instantly), shows immediately when the trigger gains keyboard focus, and hides on pointer leave, focus departure, Escape, or a press of the trigger - the model never hears hover. Without anchor it stays a static leaf that paints whenever the view renders it."
     },
     {
       "name": "input",
@@ -438,7 +438,7 @@
     },
     {
       "name": "tooltip-delay",
-      "doc": "tooltip only, beside anchor: hover-intent show delay in milliseconds (a plain number or one {binding}) - the runtime shows the anchored tooltip after its trigger has been hovered this long on the recorded frame clock. 0 shows the instant the trigger is hovered; absent follows the 700ms token default. A shared 300ms warm window after any tooltip hides skips the delay on the next trigger. A delay without an anchor is a teaching error (it would be silently inert)."
+      "doc": "tooltip only, beside anchor: hover-intent show delay in milliseconds (a plain number or one {binding}) - the runtime shows the anchored tooltip after its trigger has been hovered this long on the recorded frame clock. 0 shows the instant the trigger is hovered; absent follows the 600ms token default. A shared 400ms warm window after any tooltip hides skips the delay on the next trigger; keyboard-focus reveals are always immediate. A delay without an anchor is a teaching error (it would be silently inert)."
     },
     {
       "name": "background",

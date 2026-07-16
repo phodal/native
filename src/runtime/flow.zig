@@ -12,6 +12,7 @@ const launch_timing = @import("launch_timing.zig");
 const runtime_clock = @import("clock.zig");
 const shell_layout = @import("shell_layout.zig");
 const runtime_builtin_bridge = @import("builtin_bridge.zig");
+const runtime_canvas_widget_events = @import("canvas_widget_events.zig");
 const runtime_canvas_widget_context_menu = @import("canvas_widget_context_menu.zig");
 const runtime_canvas_widget_scroll_drivers = @import("canvas_widget_scroll_drivers.zig");
 const runtime_gpu_surface_events = @import("gpu_surface_events.zig");
@@ -74,6 +75,10 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
 
         fn ContextMenuMethods() type {
             return runtime_canvas_widget_context_menu.RuntimeCanvasWidgetContextMenu(Runtime);
+        }
+
+        fn CanvasWidgetEventMethods() type {
+            return runtime_canvas_widget_events.RuntimeCanvasWidgetEvents(Runtime);
         }
 
         fn AutomationWidgetMethods() type {
@@ -230,6 +235,12 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                     emitAppLifecycleEvent(self, "app:activate") catch |err| log(self, "app.activate.emit_failed", @errorName(err), &.{});
                 },
                 .app_deactivated => {
+                    // Deactivation drops every tooltip conversation in
+                    // every window (see the seam's own rationale) BEFORE
+                    // the app hears the lifecycle event, so a model that
+                    // rebuilds on deactivate adopts against clean
+                    // tooltip state instead of a stale shown slot.
+                    try CanvasWidgetEventMethods().resetCanvasTooltipIntentForAppDeactivation(self);
                     try dispatchEvent(self, app, .{ .lifecycle = .deactivate });
                     emitAppLifecycleEvent(self, "app:deactivate") catch |err| log(self, "app.deactivate.emit_failed", @errorName(err), &.{});
                 },
@@ -305,7 +316,10 @@ pub fn RuntimeFlow(comptime Runtime: type) type {
                     }
                 },
                 .window_focused => |window_id| {
-                    if (WindowViewMethods().findWindowIndexById(self, window_id)) |index| WindowViewMethods().setFocusedIndex(self, index);
+                    // setFocusedIndex is the window-key seam: the
+                    // window LOSING key here also drops its views'
+                    // tooltip conversations there.
+                    if (WindowViewMethods().findWindowIndexById(self, window_id)) |index| try WindowViewMethods().setFocusedIndex(self, index);
                     self.invalidated = true;
                 },
                 .frame_requested => try frame(self, app),

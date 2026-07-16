@@ -1131,6 +1131,47 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             try reconcileCanvasTooltipIntent(self, view_index, .view_blur);
         }
 
+        /// The window key-loss seam: a window that stops being the
+        /// focused (key) window drops the tooltip conversation in EVERY
+        /// one of its views — the same `.view_blur` semantics as a
+        /// per-view focus move, WITHOUT touching `view.focused` (the
+        /// per-window focus memory survives key-loss so focus returns
+        /// where it was when the window re-keys; macOS keeps a
+        /// non-key window's first responder the same way). A tooltip is
+        /// transient explanation for a conversation the user just left
+        /// with the whole window: keeping one painted would also keep
+        /// its semantics node claiming visible in the a11y tree of a
+        /// window that no longer hears the keyboard.
+        /// `canvas_last_pointer_position` deliberately survives, like
+        /// every `.view_blur`: pointer truth belongs to the pointer
+        /// channel. A host whose hover delivery is key-window-scoped
+        /// (the macOS tracking areas are) announces the stream's end
+        /// with its own pointer cancel, which clears the store through
+        /// the existing cause; a host that keeps hovering non-key
+        /// windows keeps the store truthful for point-blind
+        /// re-hit-tests. Re-keying reveals nothing by construction —
+        /// both reveal paths are transition-edge-triggered (hover
+        /// change, focus-visible arrival) and a key gain replays
+        /// neither.
+        pub fn resetCanvasTooltipIntentForWindowKeyLoss(self: *Runtime, window_id: platform.WindowId) anyerror!void {
+            for (0..self.view_count) |view_index| {
+                if (self.views[view_index].window_id != window_id) continue;
+                try reconcileCanvasTooltipIntent(self, view_index, .view_blur);
+            }
+        }
+
+        /// The app-deactivation seam: the whole app resigning active is
+        /// key-loss for every window at once — every canvas view in
+        /// every window drops its tooltip conversation (focus-shown and
+        /// pointer-owned alike; both the keyboard and the pointer
+        /// conversation ended with the app). Reactivation reveals
+        /// nothing for the same edge-trigger reason as re-keying above.
+        pub fn resetCanvasTooltipIntentForAppDeactivation(self: *Runtime) anyerror!void {
+            for (0..self.view_count) |view_index| {
+                try reconcileCanvasTooltipIntent(self, view_index, .view_blur);
+            }
+        }
+
         /// The consumed-pointer seam, keyed by the raw input's view
         /// identity: pointer-carrying inputs that never reach the
         /// widget interaction pipeline — the secondary-button stream

@@ -576,21 +576,7 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         /// runtime itself stamps non-shown anchored tooltips hidden, and
         /// arming must find them to show them.
         pub fn canvasWidgetOwnedTooltipIndex(self: *const RuntimeView, trigger_index: usize) ?usize {
-            if (trigger_index >= self.widget_layout_node_count) return null;
-            if (canvasWidgetAnchoredTooltipChildIndex(self, trigger_index)) |tooltip_index| return tooltip_index;
-            const parent_index = self.widget_layout_nodes[trigger_index].parent_index orelse return null;
-            return canvasWidgetAnchoredTooltipChildIndex(self, parent_index);
-        }
-
-        fn canvasWidgetAnchoredTooltipChildIndex(self: *const RuntimeView, anchor_index: usize) ?usize {
-            var found: ?usize = null;
-            for (self.widget_layout_nodes[0..self.widget_layout_node_count], 0..) |node, index| {
-                if (node.parent_index != anchor_index) continue;
-                if (node.widget.kind != .tooltip) continue;
-                if (!canvas.widgetIsAnchored(node.widget)) continue;
-                found = index;
-            }
-            return found;
+            return canvasWidgetOwnedTooltipIndexInNodes(self.widget_layout_nodes[0..self.widget_layout_node_count], trigger_index);
         }
 
         /// Stamp hover-intent visibility onto every ANCHORED tooltip
@@ -600,7 +586,19 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         /// are never touched. Runs at tree adoption (each rebuild) and
         /// after every intent transition.
         pub fn applyCanvasTooltipVisibility(self: *RuntimeView) void {
-            for (self.widget_layout_nodes[0..self.widget_layout_node_count]) |*node| {
+            self.applyCanvasTooltipVisibilityToNodes(self.widget_layout_nodes[0..self.widget_layout_node_count]);
+        }
+
+        /// The same stamp over an arbitrary node slice. The rebuild path
+        /// normalizes the RECONCILED scratch tree with it BEFORE diffing
+        /// against the retained tree (see `setCanvasWidgetLayout`): the
+        /// retained side carries the intent machine's hidden stamps
+        /// while the source declares authored visibility, so diffing
+        /// them un-normalized reported the runtime's own stamp as a
+        /// spurious visibility invalidation on every rebuild that
+        /// contained a hidden anchored tooltip.
+        pub fn applyCanvasTooltipVisibilityToNodes(self: *const RuntimeView, nodes: []canvas.WidgetLayoutNode) void {
+            for (nodes) |*node| {
                 if (node.widget.kind != .tooltip) continue;
                 if (!canvas.widgetIsAnchored(node.widget)) continue;
                 node.widget.semantics.hidden = node.widget.id == 0 or node.widget.id != self.canvas_tooltip_shown_id;
@@ -623,13 +621,24 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         /// earned against widgets the rebuild replaced are not earned
         /// at all.
         pub fn pruneCanvasTooltipIntent(self: *RuntimeView) void {
-            if (self.canvas_tooltip_armed_id != 0 and !canvasTooltipIntentBindingAlive(self, self.canvas_tooltip_armed_id, self.canvas_tooltip_armed_owner_id, false)) {
+            self.pruneCanvasTooltipIntentForLayout(self.widgetLayoutTree());
+        }
+
+        /// The same prune against an arbitrary layout. The rebuild path
+        /// runs it against the RECONCILED tree before the pre-diff
+        /// visibility stamp above, so the stamp reflects the shown id
+        /// adoption will actually keep: an unchanged rebuild diffs
+        /// clean, while a rebuild that kills the shown binding still
+        /// diffs — and repaints — the hide. Adoption re-runs it against
+        /// the retained tree as the structural backstop.
+        pub fn pruneCanvasTooltipIntentForLayout(self: *RuntimeView, layout: canvas.WidgetLayoutTree) void {
+            if (self.canvas_tooltip_armed_id != 0 and !canvasTooltipIntentBindingAlive(layout, self.canvas_tooltip_armed_id, self.canvas_tooltip_armed_owner_id, false)) {
                 self.canvas_tooltip_armed_id = 0;
                 self.canvas_tooltip_armed_owner_id = 0;
                 self.canvas_tooltip_deadline_ns = 0;
                 self.canvas_tooltip_warm_until_ns = 0;
             }
-            if (self.canvas_tooltip_shown_id != 0 and !canvasTooltipIntentBindingAlive(self, self.canvas_tooltip_shown_id, self.canvas_tooltip_shown_owner_id, self.canvas_tooltip_shown_from_focus)) {
+            if (self.canvas_tooltip_shown_id != 0 and !canvasTooltipIntentBindingAlive(layout, self.canvas_tooltip_shown_id, self.canvas_tooltip_shown_owner_id, self.canvas_tooltip_shown_from_focus)) {
                 self.canvas_tooltip_shown_id = 0;
                 self.canvas_tooltip_shown_owner_id = 0;
                 self.canvas_tooltip_shown_from_focus = false;
@@ -648,15 +657,15 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         /// predicates already reject disabled and hidden widgets, so
         /// "the trigger can no longer be left" implies "the tooltip
         /// must not stay".
-        fn canvasTooltipIntentBindingAlive(self: *const RuntimeView, tooltip_id: canvas.ObjectId, owner_id: canvas.ObjectId, from_focus: bool) bool {
-            const tooltip_index = self.canvasWidgetNodeIndexById(tooltip_id) orelse return false;
-            const tooltip_widget = self.widget_layout_nodes[tooltip_index].widget;
+        fn canvasTooltipIntentBindingAlive(layout: canvas.WidgetLayoutTree, tooltip_id: canvas.ObjectId, owner_id: canvas.ObjectId, from_focus: bool) bool {
+            const tooltip_index = canvasWidgetNodeIndexByIdInNodes(layout.nodes, tooltip_id) orelse return false;
+            const tooltip_widget = layout.nodes[tooltip_index].widget;
             if (tooltip_widget.kind != .tooltip or !canvas.widgetIsAnchored(tooltip_widget)) return false;
-            const owner_index = self.canvasWidgetNodeIndexById(owner_id) orelse return false;
-            const owned_index = self.canvasWidgetOwnedTooltipIndex(owner_index) orelse return false;
+            const owner_index = canvasWidgetNodeIndexByIdInNodes(layout.nodes, owner_id) orelse return false;
+            const owned_index = canvasWidgetOwnedTooltipIndexInNodes(layout.nodes, owner_index) orelse return false;
             if (owned_index != tooltip_index) return false;
-            if (from_focus) return self.widgetLayoutTree().focusTargetById(owner_id) != null;
-            return canvasWidgetInteractionTargetExists(self.widgetLayoutTree(), owner_id);
+            if (from_focus) return layout.focusTargetById(owner_id) != null;
+            return canvasWidgetInteractionTargetExists(layout, owner_id);
         }
 
         /// True while the intent machine needs presented frames to keep
@@ -969,4 +978,41 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             return self.widget_span_entries[start..end];
         }
     };
+}
+
+/// Node index by widget id over a bare node slice — the retained
+/// tree's `canvasWidgetNodeIndexById` generalized so the tooltip
+/// binding checks can run against the RECONCILED scratch tree before
+/// adoption (the pre-diff visibility normalization) exactly as they
+/// run against the retained one.
+fn canvasWidgetNodeIndexByIdInNodes(nodes: []const canvas.WidgetLayoutNode, id: canvas.ObjectId) ?usize {
+    if (id == 0) return null;
+    for (nodes, 0..) |node, index| {
+        if (node.widget.id == id) return index;
+    }
+    return null;
+}
+
+/// The anchored tooltip a trigger owns, over a bare node slice: the
+/// last-mounted anchored `.tooltip` child of the trigger itself or of
+/// its parent — the stack-wraps-trigger-plus-tooltip ownership shape,
+/// mirroring the anchored-menu walk. Deliberately IGNORES the hidden
+/// flag: the runtime itself stamps non-shown anchored tooltips hidden,
+/// and arming must find them to show them.
+fn canvasWidgetOwnedTooltipIndexInNodes(nodes: []const canvas.WidgetLayoutNode, trigger_index: usize) ?usize {
+    if (trigger_index >= nodes.len) return null;
+    if (canvasWidgetAnchoredTooltipChildIndexInNodes(nodes, trigger_index)) |tooltip_index| return tooltip_index;
+    const parent_index = nodes[trigger_index].parent_index orelse return null;
+    return canvasWidgetAnchoredTooltipChildIndexInNodes(nodes, parent_index);
+}
+
+fn canvasWidgetAnchoredTooltipChildIndexInNodes(nodes: []const canvas.WidgetLayoutNode, anchor_index: usize) ?usize {
+    var found: ?usize = null;
+    for (nodes, 0..) |node, index| {
+        if (node.parent_index != anchor_index) continue;
+        if (node.widget.kind != .tooltip) continue;
+        if (!canvas.widgetIsAnchored(node.widget)) continue;
+        found = index;
+    }
+    return found;
 }

@@ -96,6 +96,22 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // and force-pushing the clamp into the live bounce (visible
             // jitter). Non-driver platforms clamp exactly as before.
             canvas_widget_runtime.clampCanvasWidgetLayoutScrollOffsets(reconciled_nodes[0..reconciled_layout.nodes.len], null);
+            // Runtime-owned tooltip visibility normalizes BEFORE the
+            // diff: the retained tree carries the intent machine's
+            // hidden stamps on anchored tooltips while the source
+            // declares authored visibility, so diffing them as-is
+            // reported a spurious visibility invalidation (a dirty
+            // repaint region for chrome that never changed) on EVERY
+            // rebuild containing a hidden anchored tooltip. Prune
+            // first, against the reconciled tree — the same binding
+            // check adoption re-runs below as its structural backstop —
+            // so the stamp matches the shown id the copy will keep: an
+            // unchanged rebuild diffs clean, a SHOWN tooltip stays
+            // visibly shown across the rebuild (no hide-then-show
+            // frame pair), and a rebuild that breaks the shown
+            // binding still diffs the hide honestly.
+            self.views[index].pruneCanvasTooltipIntentForLayout(reconciled_layout);
+            self.views[index].applyCanvasTooltipVisibilityToNodes(reconciled_nodes[0..reconciled_layout.nodes.len]);
             const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &self.canvas_widget_invalidations_scratch);
             const previous_render_state = self.views[index].canvasWidgetRenderState();
             const next_render_state = CanvasWidgetEventMethods(Runtime).canvasWidgetRenderStateAfterLayout(previous_render_state, reconciled_layout);

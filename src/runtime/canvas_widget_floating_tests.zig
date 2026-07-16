@@ -1891,3 +1891,83 @@ test "a rebuild that disables the tooltip's trigger resets the shown tooltip" {
     const replacement = tooltipRebuildChildren(2, true);
     try expectTooltipRebuildReset(harness, app, &replacement);
 }
+
+test "an unchanged rebuild with a hidden anchored tooltip diffs clean" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-rebuild-clean", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 220, 120),
+    });
+    const children = tooltipRebuildChildren(2, false);
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 220, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    try std.testing.expect(try tooltipHidden(harness, 3));
+
+    // Rebuild the byte-identical tree: the runtime's own hidden stamp
+    // is applied to the reconciled scratch BEFORE the diff, so the
+    // rebuild reports NO invalidation and accumulates no dirty region —
+    // the source's authored visibility never reaches the diff.
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    const frame_requests_before = harness.null_platform.gpu_surface_frame_request_count;
+    var rebuild_nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const rebuild_layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 220, 120), &rebuild_nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", rebuild_layout);
+
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+    // Exactly the one settle request every rebuild performs
+    // unconditionally (widget-revision bookkeeping, tooltip or not):
+    // the hidden tooltip adds nothing on top of it.
+    try std.testing.expectEqual(frame_requests_before + 1, harness.null_platform.gpu_surface_frame_request_count);
+    try std.testing.expect(try tooltipHidden(harness, 3));
+}
+
+test "a shown tooltip keeps its visible state across an unchanged rebuild without flicker" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-rebuild-shown", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipRebuildFixture(harness, app);
+
+    // Rebuild the same tree while the tooltip is SHOWN: the pre-diff
+    // prune (against the reconciled tree) keeps the binding alive, so
+    // the pre-diff stamp marks the scratch tooltip VISIBLE and the
+    // diff stays clean — the retained node never passes through a
+    // hidden state, so there is no hide-then-show frame pair to paint.
+    harness.runtime.invalidated = false;
+    harness.runtime.dirty_region_count = 0;
+    const children = tooltipRebuildChildren(2, false);
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 220, 120), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, 3));
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.pendingDirtyRegions().len);
+
+    // And the frame clock advancing past any stale deadline changes
+    // nothing: the rebuild carried no armed state to fire.
+    try tooltipFrame(harness, app, tooltip_t0 + 2000 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, 3));
+}

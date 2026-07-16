@@ -364,6 +364,10 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
                 const previous_state = self.views[view_index].canvasWidgetRenderState();
                 self.views[view_index].canvas_widget_focused_id = target.id;
                 self.views[view_index].canvas_widget_focus_visible_id = focus_visible_id;
+                // Pointer-contract provenance: a programmatic ring
+                // (editables only) never carries the keyboard's
+                // standing reveal intent into a layout adoption.
+                self.views[view_index].canvas_widget_focus_visible_keyboard = false;
                 // The pointer contract extends to tooltips: this move
                 // hides a focus-owned tooltip and reveals nothing (see
                 // updateCanvasTooltipIntentForProgrammaticFocusMove).
@@ -398,6 +402,9 @@ pub fn RuntimeAutomationWidgetDispatch(comptime Runtime: type) type {
                 if (plain_list_row and self.views[view_index].canvas_widget_focus_visible_id != id) {
                     const previous_state = self.views[view_index].canvasWidgetRenderState();
                     self.views[view_index].canvas_widget_focus_visible_id = id;
+                    // Still programmatic (no reveal — see the comment
+                    // above), so no keyboard provenance either.
+                    self.views[view_index].canvas_widget_focus_visible_keyboard = false;
                     try CanvasWidgetEventMethods().invalidateForCanvasWidgetRenderStateChange(self, view_index, previous_state, self.views[view_index].canvasWidgetRenderState());
                 }
             }

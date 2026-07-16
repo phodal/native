@@ -337,6 +337,13 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 break :blk 0;
             } else 0;
 
+            // Whatever this down resolves to, focus-visible provenance
+            // is now the POINTER's (before the unchanged early-return:
+            // a click that re-establishes the same editable's ring
+            // converts a keyboard ring into the caret contract, which
+            // never reveals tooltips — Base UI's focus-visible guard
+            // against click-focus opens).
+            self.views[index].canvas_widget_focus_visible_keyboard = false;
             if (self.views[index].canvas_widget_focused_id == next_focus_id and self.views[index].canvas_widget_focus_visible_id == next_focus_visible_id) return;
             const previous_state = self.views[index].canvasWidgetRenderState();
             self.views[index].canvas_widget_focused_id = next_focus_id;
@@ -494,8 +501,12 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             point_blind_scroll,
             /// A rebuild adopted a new tree under a stationary pointer
             /// (`setCanvasWidgetLayout`, after pose restores settle the
-            /// frames the user actually sees).
-            layout_adoption,
+            /// frames the user actually sees). Carries the OUTGOING
+            /// tree's tooltip bindings for the standing hover and
+            /// keyboard focus-visible owners — captured before adoption
+            /// alongside the transactional prune's verdict, because the
+            /// old tree is gone by the time this cause fires.
+            layout_adoption: CanvasTooltipAdoptionBindingSnapshot,
             /// Keyboard focus-visible landed on (or left) a widget: the
             /// tooltip's second reveal path.
             focus_visible: canvas.ObjectId,
@@ -507,6 +518,48 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             /// drops, focus-shown included — the keyboard itself left.
             view_blur,
         };
+
+        /// The pre-adoption tooltip bindings a rebuild must be compared
+        /// against: for the pointer-hovered owner and the KEYBOARD
+        /// focus-visible owner, the tooltip each one owned in the
+        /// OUTGOING tree (0 = none). The transactional prune validates
+        /// only EXISTING intent registers (armed/shown), so a rebuild
+        /// that mounts, replaces, rekeys, or reparents a tooltip
+        /// beneath an owner whose own ID is stable produces no hover
+        /// delta, no focus delta, and no stale register — without this
+        /// snapshot the new tooltip could never arm until the pointer
+        /// left and re-entered (or focus moved away and back).
+        pub const CanvasTooltipAdoptionBindingSnapshot = struct {
+            /// `canvas_widget_hovered_id` before adoption.
+            hovered_owner_id: canvas.ObjectId = 0,
+            /// The tooltip that owner owned in the outgoing tree.
+            hovered_tooltip_id: canvas.ObjectId = 0,
+            /// The standing KEYBOARD focus-visible owner before
+            /// adoption — 0 when the ring is pointer/programmatic
+            /// provenance (`canvas_widget_focus_visible_keyboard`) or
+            /// the view is not focused: those rings never reveal, so
+            /// they carry no standing intent across a rebuild either.
+            focus_visible_owner_id: canvas.ObjectId = 0,
+            /// The tooltip that owner owned in the outgoing tree.
+            focus_visible_tooltip_id: canvas.ObjectId = 0,
+        };
+
+        /// Capture the snapshot against the CURRENT retained tree —
+        /// `setCanvasWidgetLayout` calls this before any fallible
+        /// adoption step (next to the prune verdict it already
+        /// computes), because the outgoing tree's bindings are
+        /// unreadable once `copyWidgetLayoutTree` replaces it.
+        pub fn captureCanvasTooltipAdoptionBindings(self: *const Runtime, view_index: usize) CanvasTooltipAdoptionBindingSnapshot {
+            const view = &self.views[view_index];
+            const focus_owner_id: canvas.ObjectId =
+                if (view.focused and view.canvas_widget_focus_visible_keyboard) view.canvas_widget_focus_visible_id else 0;
+            return .{
+                .hovered_owner_id = view.canvas_widget_hovered_id,
+                .hovered_tooltip_id = view.canvasWidgetOwnedTooltipIdForOwner(view.canvas_widget_hovered_id),
+                .focus_visible_owner_id = focus_owner_id,
+                .focus_visible_tooltip_id = view.canvasWidgetOwnedTooltipIdForOwner(focus_owner_id),
+            };
+        }
 
         /// THE tooltip-intent choke point: the one owner of pointer-
         /// position bookkeeping, hover re-hit-testing from the stored
@@ -640,7 +693,7 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 .pointer_cancel => try closeCanvasTooltipPointerIntent(self, view_index),
                 .wheel_scroll => |point| try reconcileCanvasTooltipIntentForMovedContent(self, view_index, point, .scroll),
                 .point_blind_scroll => try reconcileCanvasTooltipIntentForMovedContent(self, view_index, null, .scroll),
-                .layout_adoption => try reconcileCanvasTooltipIntentForMovedContent(self, view_index, null, .adoption),
+                .layout_adoption => |bindings| try reconcileCanvasTooltipIntentForMovedContent(self, view_index, null, .{ .adoption = bindings }),
                 .focus_visible => |focus_visible_id| try updateCanvasTooltipIntentForFocusVisibleChange(self, view_index, focus_visible_id),
                 // A programmatic focus move writes focus on the pointer
                 // contract, not the keyboard one, so it never REVEALS
@@ -706,7 +759,13 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         /// Adoption passes the stored point through: its containment
         /// pre-check below already resolved the shown slot, and the
         /// point lets the arm/warm-show paths seed the apex in one step.
-        const CanvasTooltipMovedContentCause = enum { scroll, adoption };
+        /// Adoption also carries the pre-adoption binding snapshot, so
+        /// the binding-change step can see a tooltip that mounted or
+        /// swapped beneath a stable owner.
+        const CanvasTooltipMovedContentCause = union(enum) {
+            scroll,
+            adoption: CanvasTooltipAdoptionBindingSnapshot,
+        };
 
         /// Steps 2–4 of the choke point for the content-moved causes
         /// (scroll and layout adoption): re-hit-test the stored (or
@@ -729,6 +788,15 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const effective_point = live_point orelse view.canvas_last_pointer_position orelse {
                 view.reconcileCanvasWidgetRenderStateAfterScroll(null);
                 try closeCanvasTooltipPointerIntent(self, view_index);
+                // A keyboard-only session has no pointer to place, but
+                // the KEYBOARD's standing intent is not pointer intent:
+                // an adoption that swaps the focus-visible owner's
+                // tooltip must still reveal it (below), exactly like
+                // the focus-shown tooltip survives the close above.
+                switch (cause) {
+                    .adoption => |bindings| try reconcileCanvasTooltipIntentForAdoptedFocusBinding(self, view_index, bindings),
+                    .scroll => {},
+                }
                 return;
             };
             const previous_hovered_id = view.canvas_widget_hovered_id;
@@ -783,6 +851,63 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 // warm-shows) per the normal rules.
                 try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, transition_point);
             }
+            // Binding-change step, adoption only: the transition gate
+            // above sees HOVER deltas and the prune sees dead
+            // REGISTERS, so a rebuild that mounts, replaces, rekeys, or
+            // reparents a tooltip beneath an owner whose own ID stayed
+            // put slips past both — the new tooltip could never arm
+            // until the pointer left and re-entered. Compare the
+            // pre-adoption snapshot's owned-tooltip IDs against the
+            // adopted tree and step the machine for a changed binding.
+            //
+            // The matrix (mount/replace/rekey x hovered/focused x
+            // armed/shown):
+            //   - HOVERED owner, tooltip MOUNTED (owned none before):
+            //     no register existed, so the prune had nothing to do —
+            //     arm a FRESH dwell here. Mounting mid-hover must not
+            //     insta-show: the dwell IS the intent filter, and a
+            //     rebuild proves nothing about the user.
+            //   - HOVERED owner, tooltip REPLACED/REKEYED/REPARENTED
+            //     while ARMED or SHOWN: the transactional prune already
+            //     reset the old register (its binding died — owner no
+            //     longer resolves to that tooltip) and closed the warm
+            //     window with it; the pre-diff stamp reported a shown
+            //     tooltip's hide honestly. This step only re-earns the
+            //     NEW tooltip per the hover rule: a fresh dwell.
+            //   - HOVERED owner, tooltip UNMOUNTED: entirely the
+            //     prune's case (armed disarms, shown hides); the
+            //     zero-ID guard below leaves nothing to arm.
+            //   - FOCUS-VISIBLE owner (keyboard provenance only): a
+            //     newly bound tooltip reveals IMMEDIATELY — focus is
+            //     the user's standing intent, and the focus reveal
+            //     exists precisely so keyboard users never race a
+            //     pointer timing (shadcn's Base UI-backed default:
+            //     instant open on focus-visible). Replace/rekey under
+            //     a focus-SHOWN tooltip: the prune hid the old, this
+            //     reveals the new.
+            //   - Both standing on ONE owner: hover arms first, then
+            //     the focus step reveals and clears the now-redundant
+            //     dwell (focus re-affirms; blur owns the hide).
+            //
+            // Warm window: a binding change is not a pointer sweep, so
+            // no NEW warmth is minted here. Delegating to the normal
+            // hover-change step follows the existing warm semantics
+            // exactly: replace/rekey never warm-shows (the prune
+            // closed the window when it killed the old binding), while
+            // a plain MOUNT under warmth genuinely earned by prior
+            // pointer activity keeps the instant-show courtesy.
+            switch (cause) {
+                .adoption => |bindings| {
+                    if (bindings.hovered_owner_id != 0 and next_hovered_id == bindings.hovered_owner_id) {
+                        const adopted_tooltip_id = view.canvasWidgetOwnedTooltipIdForOwner(next_hovered_id);
+                        if (adopted_tooltip_id != 0 and adopted_tooltip_id != bindings.hovered_tooltip_id) {
+                            try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, transition_point);
+                        }
+                    }
+                    try reconcileCanvasTooltipIntentForAdoptedFocusBinding(self, view_index, bindings);
+                },
+                .scroll => {},
+            }
             // Whichever position drove this reconcile re-seeds the
             // corridor apex for whatever the step armed or warm-showed,
             // so a later leave fans out from the truth.
@@ -791,6 +916,32 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             {
                 view.canvas_tooltip_pointer_from = effective_point;
             }
+        }
+
+        /// The focus half of the adoption binding-change step: when
+        /// the standing KEYBOARD focus-visible owner survived the
+        /// rebuild and now owns a DIFFERENT tooltip than it did in the
+        /// outgoing tree, reveal the new one immediately through the
+        /// normal focus-visible transition. Focus is the user's
+        /// standing declared intent — the focus reveal path exists so
+        /// keyboard users get hover-revealed content without pointer
+        /// timing (shadcn's Base UI-backed instant focus-visible open;
+        /// WCAG 1.4.13) — so a tooltip the rebuild bound beneath that
+        /// focus inherits the reveal instead of waiting for focus to
+        /// leave and return. Guards, in order: no standing keyboard
+        /// ring captured (pointer/programmatic provenance never
+        /// reveals — the click-focus exclusion), the view lost focus,
+        /// the ring moved or was pruned during adoption, or the
+        /// binding did not actually change (the byte-identical
+        /// rebuild path must stay silent).
+        fn reconcileCanvasTooltipIntentForAdoptedFocusBinding(self: *Runtime, view_index: usize, bindings: CanvasTooltipAdoptionBindingSnapshot) anyerror!void {
+            const view = &self.views[view_index];
+            if (bindings.focus_visible_owner_id == 0) return;
+            if (!view.focused or !view.canvas_widget_focus_visible_keyboard) return;
+            if (view.canvas_widget_focus_visible_id != bindings.focus_visible_owner_id) return;
+            const adopted_tooltip_id = view.canvasWidgetOwnedTooltipIdForOwner(bindings.focus_visible_owner_id);
+            if (adopted_tooltip_id == 0 or adopted_tooltip_id == bindings.focus_visible_tooltip_id) return;
+            try updateCanvasTooltipIntentForFocusVisibleChange(self, view_index, bindings.focus_visible_owner_id);
         }
 
         /// The anchored-tooltip hover-intent state machine, stepped on
@@ -1515,11 +1666,14 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         /// per the normal rules (or closes pointer intent when no
         /// trustworthy position exists); this thin caller only wraps it
         /// in the repaint echo a re-hit-tested wash or cursor owes.
-        pub fn reconcileCanvasWidgetInteractionAfterLayoutAdoption(self: *Runtime, view_index: usize) anyerror!void {
+        /// `bindings` is the pre-adoption snapshot from
+        /// `captureCanvasTooltipAdoptionBindings` — the caller captures
+        /// it against the OUTGOING tree, which no longer exists here.
+        pub fn reconcileCanvasWidgetInteractionAfterLayoutAdoption(self: *Runtime, view_index: usize, bindings: CanvasTooltipAdoptionBindingSnapshot) anyerror!void {
             const view = &self.views[view_index];
             const previous_state = view.canvasWidgetRenderState();
             const previous_cursor = view.canvas_widget_cursor;
-            try reconcileCanvasTooltipIntent(self, view_index, .layout_adoption);
+            try reconcileCanvasTooltipIntent(self, view_index, .{ .layout_adoption = bindings });
             try invalidateForCanvasWidgetAdoptionReconcile(self, view_index, previous_state, previous_cursor);
         }
 
@@ -1987,6 +2141,10 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const previous_state = self.views[view_index].canvasWidgetRenderState();
             self.views[view_index].canvas_widget_focused_id = target_id;
             self.views[view_index].canvas_widget_focus_visible_id = target_id;
+            // The one provenance write that grants the keyboard
+            // contract: only rings placed HERE carry the standing
+            // reveal intent a later layout adoption may honor.
+            self.views[view_index].canvas_widget_focus_visible_keyboard = target_id != 0;
             // Keyboard focus-visible is the tooltip's second reveal
             // path: landing on a tooltip-owning trigger shows it
             // immediately, moving on hides the previous one (the

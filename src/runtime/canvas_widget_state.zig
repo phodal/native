@@ -121,6 +121,14 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // frame pair), and a rebuild that breaks the shown binding
             // still diffs the hide honestly.
             const prospective_shown_tooltip_id = self.views[index].canvasTooltipShownIdSurvivingLayout(reconciled_layout);
+            // Pre-adoption tooltip bindings for the standing hover and
+            // keyboard focus-visible owners, captured while the OLD
+            // tree is still retained (the copy below replaces it): the
+            // adoption reconcile at the bottom compares them against
+            // the adopted tree to catch a tooltip mounted/replaced/
+            // rekeyed beneath a stable owner — a change neither the
+            // hover re-hit-test nor the register prune can see.
+            const adoption_tooltip_bindings = CanvasWidgetEventMethods(Runtime).captureCanvasTooltipAdoptionBindings(self, index);
             self.views[index].applyCanvasTooltipVisibilityToNodesForShownId(reconciled_nodes[0..reconciled_layout.nodes.len], prospective_shown_tooltip_id);
             const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &self.canvas_widget_invalidations_scratch);
             const previous_render_state = self.views[index].canvasWidgetRenderState();
@@ -187,7 +195,7 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // under) the stationary pointer must step hover ownership
             // and the tooltip intent machine exactly like the
             // point-blind scroll paths do.
-            try CanvasWidgetEventMethods(Runtime).reconcileCanvasWidgetInteractionAfterLayoutAdoption(self, index);
+            try CanvasWidgetEventMethods(Runtime).reconcileCanvasWidgetInteractionAfterLayoutAdoption(self, index, adoption_tooltip_bindings);
             const requested_frame = try CanvasWidgetDisplayMethods(Runtime).refreshCanvasWidgetDisplayListIfOwned(self, index);
             if ((layout_dirty or widget_revision_changed) and !requested_frame) try CanvasFrameMethods(Runtime).requestCanvasFrameForView(self, index);
             return self.views[index].info();

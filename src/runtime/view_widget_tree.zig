@@ -310,9 +310,15 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 const return_id = if (focus_return_id != 0 and self.widgetLayoutTree().focusTargetById(focus_return_id) != null) focus_return_id else 0;
                 self.canvas_widget_focused_id = return_id;
                 self.canvas_widget_focus_visible_id = return_id;
+                // The focus-return ring is not a keyboard ARRIVAL:
+                // reveals fire only on focus-visible transitions (the
+                // dismissal seam's rule), so the returned ring never
+                // grants adoption-time tooltip reveals either.
+                self.canvas_widget_focus_visible_keyboard = false;
             }
             if (self.canvas_widget_focus_visible_id != 0 and (self.canvas_widget_focus_visible_id != self.canvas_widget_focused_id or self.widgetLayoutTree().focusTargetById(self.canvas_widget_focus_visible_id) == null)) {
                 self.canvas_widget_focus_visible_id = 0;
+                self.canvas_widget_focus_visible_keyboard = false;
             }
             if (self.canvas_widget_hovered_id != 0 and !canvasWidgetInteractionTargetExists(self.widgetLayoutTree(), self.canvas_widget_hovered_id)) {
                 self.canvas_widget_hovered_id = 0;
@@ -375,9 +381,11 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             if (self.canvas_widget_focused_id != 0 and layout.focusTargetById(self.canvas_widget_focused_id) == null) {
                 self.canvas_widget_focused_id = 0;
                 self.canvas_widget_focus_visible_id = 0;
+                self.canvas_widget_focus_visible_keyboard = false;
             }
             if (self.canvas_widget_focus_visible_id != 0 and (self.canvas_widget_focus_visible_id != self.canvas_widget_focused_id or layout.focusTargetById(self.canvas_widget_focus_visible_id) == null)) {
                 self.canvas_widget_focus_visible_id = 0;
+                self.canvas_widget_focus_visible_keyboard = false;
             }
 
             var next_hovered_id = self.canvas_widget_hovered_id;
@@ -504,8 +512,15 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 const return_id = self.canvasWidgetAnchorTriggerFocusId(surface_index) orelse 0;
                 self.canvas_widget_focused_id = return_id;
                 self.canvas_widget_focus_visible_id = return_id;
+                // Same rule as the rebuild's focus return: a returned
+                // ring is not a keyboard arrival, so it earns no
+                // reveal — here or at a later layout adoption.
+                self.canvas_widget_focus_visible_keyboard = false;
             }
-            if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_focus_visible_id, surface_index)) self.canvas_widget_focus_visible_id = 0;
+            if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_focus_visible_id, surface_index)) {
+                self.canvas_widget_focus_visible_id = 0;
+                self.canvas_widget_focus_visible_keyboard = false;
+            }
             if (self.canvasWidgetIdDescendsFromIndex(self.canvas_widget_hovered_id, surface_index)) {
                 self.canvas_widget_hovered_id = 0;
                 self.canvas_widget_cursor = .arrow;
@@ -577,6 +592,22 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
         /// arming must find them to show them.
         pub fn canvasWidgetOwnedTooltipIndex(self: *const RuntimeView, trigger_index: usize) ?usize {
             return canvasWidgetOwnedTooltipIndexInNodes(self.widget_layout_nodes[0..self.widget_layout_node_count], trigger_index);
+        }
+
+        /// The ID of the anchored tooltip `owner_id` owns in the
+        /// CURRENT retained tree, or 0 (no such owner / no owned
+        /// tooltip). The layout-adoption reconcile compares this value
+        /// across a rebuild — captured against the outgoing tree in
+        /// `setCanvasWidgetLayout`, re-read against the adopted one —
+        /// to see a binding that changed beneath a STABLE owner: a
+        /// tooltip mounted, replaced, rekeyed, or reparented under a
+        /// trigger whose own ID survived produces no hover or focus
+        /// delta, so only this comparison can arm (or reveal) it.
+        pub fn canvasWidgetOwnedTooltipIdForOwner(self: *const RuntimeView, owner_id: canvas.ObjectId) canvas.ObjectId {
+            if (owner_id == 0) return 0;
+            const owner_index = self.canvasWidgetNodeIndexById(owner_id) orelse return 0;
+            const tooltip_index = self.canvasWidgetOwnedTooltipIndex(owner_index) orelse return 0;
+            return self.widget_layout_nodes[tooltip_index].widget.id;
         }
 
         /// Stamp hover-intent visibility onto every ANCHORED tooltip

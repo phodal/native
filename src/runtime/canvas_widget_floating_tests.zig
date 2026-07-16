@@ -2686,6 +2686,274 @@ test "a shown tooltip keeps its visible state across an unchanged rebuild withou
     try std.testing.expect(!try tooltipHidden(harness, 3));
 }
 
+// ------------------------------------------- adoption binding changes
+//
+// A reactive rebuild that ADDS, REPLACES, or REKEYS a tooltip beneath
+// an owner whose own ID is stable produces no hover delta (the
+// re-hit-test resolves the same trigger) and no stale register (there
+// was no intent bound to the NEW tooltip for the prune to validate),
+// so only the adoption binding-change step can see it. These tests pin
+// the matrix — mount/replace/unmount x hovered/focus-visible x
+// armed/shown — plus the unchanged-binding rebuild staying inert.
+
+/// Stable-owner binding fixture: the trigger keeps id 2 in every
+/// variant while the tooltip beneath it mounts (`tooltip_id` != 0),
+/// unmounts (0), or rekeys (a different id). `trigger_kind` lets the
+/// provenance test swap the button for an editable field.
+fn setTooltipBindingLayout(harness: anytype, trigger_kind: canvas.WidgetKind, tooltip_id: canvas.ObjectId, delay_ms: i32) !void {
+    var children: [2]canvas.Widget = undefined;
+    children[0] = .{
+        .id = 2,
+        .kind = trigger_kind,
+        .frame = geometry.RectF.init(10, 40, 96, 32),
+        .text = "Run",
+    };
+    var child_count: usize = 1;
+    if (tooltip_id != 0) {
+        children[child_count] = .{
+            .id = tooltip_id,
+            .kind = .tooltip,
+            .text = "Runs the job",
+            .tooltip_delay_ms = delay_ms,
+            .layout = .{ .anchor = .{ .placement = .above } },
+        };
+        child_count += 1;
+    }
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(
+        .{ .kind = .stack, .children = children[0..child_count] },
+        geometry.RectF.init(0, 0, 220, 120),
+        &nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+}
+
+fn installTooltipBindingView(harness: anytype, app: App) !void {
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 220, 120),
+    });
+}
+
+test "a tooltip mounting beneath the hovered trigger mid-hover arms the fresh dwell" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-binding-mount", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipBindingView(harness, app);
+    try setTooltipBindingLayout(harness, .button, 0, 0);
+
+    // Hover the bare trigger: nothing exists to arm.
+    try tooltipHover(harness, app, .{ .x = 58, .y = 56 }, tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+
+    // The rebuild mounts the tooltip beneath the SAME trigger id: no
+    // hover delta, no stale register — only the binding-change step
+    // can arm it, and mounting mid-hover never insta-shows (the dwell
+    // is the intent filter; a rebuild proves nothing about the user).
+    try setTooltipBindingLayout(harness, .button, 3, -1);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_tooltip_armed_owner_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 3));
+    // Corridor apex seeded from the stored position, per normal arming.
+    try std.testing.expectEqual(@as(f32, 58), harness.runtime.views[0].canvas_tooltip_pointer_from.x);
+    try std.testing.expectEqual(@as(f32, 56), harness.runtime.views[0].canvas_tooltip_pointer_from.y);
+    const deadline = harness.runtime.views[0].canvas_tooltip_deadline_ns;
+    try std.testing.expect(deadline != 0);
+
+    // Movement WITHIN the trigger before the dwell behaves normally:
+    // gliding within one trigger is free — same armed id, same
+    // deadline, still hidden.
+    try tooltipHover(harness, app, .{ .x = 70, .y = 60 }, tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(deadline, harness.runtime.views[0].canvas_tooltip_deadline_ns);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // The dwell completes on the frame clock like any other.
+    try tooltipFrame(harness, app, tooltip_t0 + 700 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_tooltip_shown_owner_id);
+    try std.testing.expect(!try tooltipHidden(harness, 3));
+}
+
+test "a rebuild that rekeys the tooltip beneath a shown trigger hides the old and re-earns the dwell" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-binding-rekey", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipBindingView(harness, app);
+    try setTooltipBindingLayout(harness, .button, 3, 0);
+
+    // Delay 0: the hover itself shows tooltip 3.
+    try tooltipHover(harness, app, .{ .x = 58, .y = 56 }, tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // Rekey the tooltip under the stable, still-hovered trigger: the
+    // prune kills the old binding (a new id is a new widget) and
+    // closes the warm window with it — no instant carry-over of the
+    // old widget's show — and the binding-change step re-earns the
+    // NEW tooltip through its own declared dwell.
+    try setTooltipBindingLayout(harness, .button, 9, -1);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 9));
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 9), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_tooltip_armed_owner_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_deadline_ns != 0);
+
+    // The fresh dwell completes on the frame clock.
+    try tooltipFrame(harness, app, tooltip_t0 + 700 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 9), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, 9));
+}
+
+test "a tooltip mounting beneath the focus-visible trigger reveals immediately" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-binding-focus", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipBindingView(harness, app);
+    try setTooltipBindingLayout(harness, .button, 0, 0);
+
+    // Tab reaches the bare trigger: the ring stands, nothing reveals.
+    try tooltipKey(harness, app, "tab", tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focus_visible_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // The rebuild mounts the tooltip beneath the standing KEYBOARD
+    // focus-visible: it reveals on the rebuild itself — no dwell, no
+    // frame — because focus is the user's standing intent (shadcn's
+    // Base UI-backed instant focus-visible open). A keyboard-only
+    // session has no stored pointer position, so this also pins the
+    // blind-close path still running the focus half.
+    try setTooltipBindingLayout(harness, .button, 3, -1);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_tooltip_shown_owner_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+    try std.testing.expect(!try tooltipHidden(harness, 3));
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+
+    // Rekey under the focus-SHOWN tooltip: the old binding dies in the
+    // prune (old hides), and the new one re-earns per the FOCUS rule —
+    // immediately, keyboard focus still standing.
+    try setTooltipBindingLayout(harness, .button, 9, -1);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 9), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+    try std.testing.expect(!try tooltipHidden(harness, 9));
+}
+
+test "a tooltip mounting beneath a pointer-established ring arms the dwell, never the focus reveal" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-binding-caret", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipBindingView(harness, app);
+    try setTooltipBindingLayout(harness, .text_field, 0, 0);
+
+    // Click INTO the editable: ring and caret however focus arrived
+    // (the caret contract), but the provenance is the POINTER's.
+    try tooltipPointer(harness, app, .pointer_down, .{ .x = 58, .y = 56 }, tooltip_t0);
+    try tooltipPointer(harness, app, .pointer_up, .{ .x = 58, .y = 56 }, tooltip_t0 + 20 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focus_visible_id);
+
+    // The rebuild mounts the tooltip beneath that ring: NO immediate
+    // reveal (Base UI's focus-visible guard against click-focus opens
+    // extends to adoption-time bindings) — but the pointer honestly
+    // rests on the trigger, so the HOVER half arms the normal dwell.
+    try setTooltipBindingLayout(harness, .text_field, 3, -1);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 3));
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_tooltip_armed_owner_id);
+}
+
+test "a rebuild that unmounts the tooltip beneath a hovered trigger disarms the pending dwell" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-binding-unmount", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipBindingView(harness, app);
+    try setTooltipBindingLayout(harness, .button, 3, -1);
+
+    // Arm the dwell, then unmount the tooltip beneath the still-hovered
+    // trigger: the transactional prune's case exactly (the armed
+    // binding died with its tooltip node) — pinned here for the
+    // binding matrix's completeness. Nothing fires later.
+    try tooltipHover(harness, app, .{ .x = 58, .y = 56 }, tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try setTooltipBindingLayout(harness, .button, 0, 0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_owner_id);
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_deadline_ns);
+    try tooltipFrame(harness, app, tooltip_t0 + 2000 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+}
+
+test "an unchanged-binding adoption leaves the armed dwell untouched" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-binding-inert", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipBindingView(harness, app);
+    try setTooltipBindingLayout(harness, .button, 3, -1);
+
+    // Arm the dwell, advance the frame clock (so any buggy RE-arm
+    // would stamp a LATER deadline), then rebuild the identical tree:
+    // the binding compares equal, so the adoption step stays silent —
+    // same armed id, same deadline, same apex, nothing shown.
+    try tooltipHover(harness, app, .{ .x = 58, .y = 56 }, tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try tooltipFrame(harness, app, tooltip_t0 + 100 * tooltip_ms);
+    const deadline = harness.runtime.views[0].canvas_tooltip_deadline_ns;
+    try std.testing.expect(deadline != 0);
+
+    try setTooltipBindingLayout(harness, .button, 3, -1);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_tooltip_armed_owner_id);
+    try std.testing.expectEqual(deadline, harness.runtime.views[0].canvas_tooltip_deadline_ns);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // And the original dwell still completes on its own clock.
+    try tooltipFrame(harness, app, tooltip_t0 + 700 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+}
+
 // ---------------------------------------- lifecycle blur (deactivate / key)
 //
 // A tooltip leaves WITH the whole window: app deactivation and window

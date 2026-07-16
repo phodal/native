@@ -425,6 +425,20 @@ pub const RuntimeView = struct {
     scroll_driver_count: usize = 0,
     canvas_widget_focused_id: canvas.ObjectId = 0,
     canvas_widget_focus_visible_id: canvas.ObjectId = 0,
+    /// True when `canvas_widget_focus_visible_id` was written by the
+    /// KEYBOARD focus contract (`setCanvasWidgetFocusFromKeyboard`) —
+    /// the one focus path that reveals tooltips. Every other
+    /// focus-visible writer stamps false: pointer focus on editables
+    /// (the caret contract), programmatic/automation focus, the
+    /// automation key escalation on plain list rows, and the rebuild
+    /// and dismissal focus-return seams — all of which deliberately
+    /// skip the reveal (Base UI's focus-visible guard against
+    /// click-focus opens, and the reveals-are-transition-edges rule).
+    /// The layout-adoption reconcile reads this to decide whether a
+    /// tooltip newly bound beneath the standing focus-visible owner
+    /// inherits the keyboard's immediate reveal or must wait for the
+    /// next real focus arrival.
+    canvas_widget_focus_visible_keyboard: bool = false,
     canvas_widget_hovered_id: canvas.ObjectId = 0,
     canvas_widget_pressed_id: canvas.ObjectId = 0,
     /// Hover-intent state for ANCHORED tooltips — runtime-owned
@@ -675,6 +689,7 @@ pub const RuntimeView = struct {
     pub const canvasWidgetAnchoredDismissibleChildIndex = CanvasWidgetTreeMethods.canvasWidgetAnchoredDismissibleChildIndex;
     pub const canvasWidgetOwnedMenuSurfaceIndex = CanvasWidgetTreeMethods.canvasWidgetOwnedMenuSurfaceIndex;
     pub const canvasWidgetOwnedTooltipIndex = CanvasWidgetTreeMethods.canvasWidgetOwnedTooltipIndex;
+    pub const canvasWidgetOwnedTooltipIdForOwner = CanvasWidgetTreeMethods.canvasWidgetOwnedTooltipIdForOwner;
     pub const applyCanvasTooltipVisibility = CanvasWidgetTreeMethods.applyCanvasTooltipVisibility;
     pub const applyCanvasTooltipVisibilityToNodes = CanvasWidgetTreeMethods.applyCanvasTooltipVisibilityToNodes;
     pub const applyCanvasTooltipVisibilityToNodesForShownId = CanvasWidgetTreeMethods.applyCanvasTooltipVisibilityToNodesForShownId;

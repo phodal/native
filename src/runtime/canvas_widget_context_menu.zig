@@ -274,8 +274,9 @@ pub fn RuntimeCanvasWidgetContextMenu(comptime Runtime: type) type {
         /// the event to the app — the same two motions keyboard-driven
         /// edits perform, so runtime widget and app model stay in sync.
         fn applyEditKeyboardEvent(self: *Runtime, app: runtime_api.App(Runtime), keyboard_event: runtime_api.CanvasWidgetKeyboardEvent) anyerror!void {
-            try CanvasWidgetEventMethods().updateCanvasWidgetTextFromKeyboard(self, keyboard_event);
-            try self.dispatchEvent(app, .{ .canvas_widget_keyboard = keyboard_event });
+            var event = keyboard_event;
+            try CanvasWidgetEventMethods().updateCanvasWidgetTextFromKeyboard(self, &event);
+            try self.dispatchEvent(app, .{ .canvas_widget_keyboard = event });
         }
 
         fn editableSelectionText(self: *Runtime, view_index: usize, target_id: canvas.ObjectId) ?[]const u8 {

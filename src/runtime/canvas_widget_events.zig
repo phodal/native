@@ -619,11 +619,27 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             return widget.text[range.start..range.end];
         }
 
-        pub fn updateCanvasWidgetTextFromKeyboard(self: *Runtime, keyboard_event: CanvasWidgetKeyboardEvent) anyerror!void {
+        /// The ONE derivation seam for keyboard-driven editor mutations:
+        /// `canvasWidgetKeyboardTextEdit` maps the routed key to the edit
+        /// the retained editor applies, and that same edit is STAMPED
+        /// onto the event the app dispatch consumes — so the model's
+        /// `on_input` hears exactly what the editor did (the cut/paste
+        /// and clear-button stamping precedent, made the rule). Before
+        /// the stamp, edits that only THIS derivation produced — Escape's
+        /// search-field clear, Escape's composition cancel, the
+        /// single-line ArrowUp/Down caret jumps — mutated the editor
+        /// while the app-side dispatch re-derived the key on its own and
+        /// heard nothing: the field visibly cleared while `model.query`
+        /// kept the stale term, and the next keystroke dispatched
+        /// against it. Stamping happens even when applying changes
+        /// nothing (an Escape in an already-empty field), so a model
+        /// whose mirror diverged still hears the clear and resyncs.
+        pub fn updateCanvasWidgetTextFromKeyboard(self: *Runtime, keyboard_event: *CanvasWidgetKeyboardEvent) anyerror!void {
             const index = runtimeFindViewIndex(self, keyboard_event.window_id, keyboard_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
             const target = keyboard_event.target orelse return;
             const edit = self.views[index].canvasWidgetKeyboardTextEdit(target, keyboard_event.keyboard) orelse return;
+            keyboard_event.keyboard.edit = edit;
 
             const dirty = try self.views[index].applyCanvasWidgetTextEdit(target.id, edit) orelse return;
             if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {

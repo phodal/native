@@ -63,7 +63,24 @@ pub fn RuntimeViewCanvasWidgetText(comptime RuntimeView: type) type {
                 return newline_edit;
             }
 
-            if (canvasWidgetSingleLineTextKind(widget.kind) and keyboard.phase == .key_down and keyboard.text.len == 0 and !keyboard.modifiers.hasNavigationModifier()) {
+            // On a CLOSED combobox these same arrows are the trigger's
+            // OPEN keys (`widgetKeyboardControlIntent`'s menu-open
+            // mapping, which the app dispatch resolves BEFORE any
+            // stamped edit): platform convention is that opening wins
+            // and the caret does not move, so the derivation yields no
+            // edit and the retained editor agrees with the model's "no
+            // edit" verdict. The app-side fallback derivation for
+            // events that never crossed the runtime
+            // (`textEditEvent()`'s generic keymap) has no ArrowUp/Down
+            // arm at all, so both derivations stay in agreement. Once
+            // the picker is OPEN the focus step walks the arrows into
+            // the mounted menu before routing reaches the trigger; an
+            // arrow that still lands on an EXPANDED trigger (no
+            // focusable menu entry mounted) keeps the caret jump — the
+            // control resolver ignores it there, so both sides hear
+            // the same move.
+            const arrow_opens_combobox = widget.kind == .combobox and !(widget.state.expanded orelse false);
+            if (!arrow_opens_combobox and canvasWidgetSingleLineTextKind(widget.kind) and keyboard.phase == .key_down and keyboard.text.len == 0 and !keyboard.modifiers.hasNavigationModifier()) {
                 if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowup")) return .{ .move_caret = .{ .direction = .start, .extend = keyboard.modifiers.shift } };
                 if (std.ascii.eqlIgnoreCase(keyboard.key, "arrowdown")) return .{ .move_caret = .{ .direction = .end, .extend = keyboard.modifiers.shift } };
             }

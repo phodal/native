@@ -102,16 +102,26 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             // declares authored visibility, so diffing them as-is
             // reported a spurious visibility invalidation (a dirty
             // repaint region for chrome that never changed) on EVERY
-            // rebuild containing a hidden anchored tooltip. Prune
-            // first, against the reconciled tree — the same binding
-            // check adoption re-runs below as its structural backstop —
-            // so the stamp matches the shown id the copy will keep: an
-            // unchanged rebuild diffs clean, a SHOWN tooltip stays
-            // visibly shown across the rebuild (no hide-then-show
-            // frame pair), and a rebuild that breaks the shown
-            // binding still diffs the hide honestly.
-            self.views[index].pruneCanvasTooltipIntentForLayout(reconciled_layout);
-            self.views[index].applyCanvasTooltipVisibilityToNodes(reconciled_nodes[0..reconciled_layout.nodes.len]);
+            // rebuild containing a hidden anchored tooltip. The stamp
+            // uses the prune VERDICT against the reconciled tree — the
+            // shown id adoption will actually keep — WITHOUT mutating
+            // the live intent registers yet: everything between here
+            // and a retained tree is fallible (`diffWithTokens` can
+            // overflow its invalidation scratch, and
+            // `copyWidgetLayoutTree` rejects node/anchored-surface
+            // limits and every retained-pool budget before it resets
+            // the pools), and a register prune applied ahead of a
+            // failure left the OLD tree stamped visible with cleared
+            // registers — a tooltip no transition could ever hide
+            // again. The register mutation lands inside
+            // `copyWidgetLayoutTree`'s own prune, after the fallible
+            // steps succeed, where it applies this same verdict; an
+            // unchanged rebuild still diffs clean, a SHOWN tooltip
+            // stays visibly shown across the rebuild (no hide-then-show
+            // frame pair), and a rebuild that breaks the shown binding
+            // still diffs the hide honestly.
+            const prospective_shown_tooltip_id = self.views[index].canvasTooltipShownIdSurvivingLayout(reconciled_layout);
+            self.views[index].applyCanvasTooltipVisibilityToNodesForShownId(reconciled_nodes[0..reconciled_layout.nodes.len], prospective_shown_tooltip_id);
             const invalidations = try canvas.WidgetLayoutTree.diffWithTokens(previous_layout, reconciled_layout, tokens, &self.canvas_widget_invalidations_scratch);
             const previous_render_state = self.views[index].canvasWidgetRenderState();
             const next_render_state = CanvasWidgetEventMethods(Runtime).canvasWidgetRenderStateAfterLayout(previous_render_state, reconciled_layout);

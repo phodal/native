@@ -589,19 +589,32 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.applyCanvasTooltipVisibilityToNodes(self.widget_layout_nodes[0..self.widget_layout_node_count]);
         }
 
-        /// The same stamp over an arbitrary node slice. The rebuild path
-        /// normalizes the RECONCILED scratch tree with it BEFORE diffing
-        /// against the retained tree (see `setCanvasWidgetLayout`): the
-        /// retained side carries the intent machine's hidden stamps
-        /// while the source declares authored visibility, so diffing
-        /// them un-normalized reported the runtime's own stamp as a
-        /// spurious visibility invalidation on every rebuild that
-        /// contained a hidden anchored tooltip.
+        /// The same stamp over an arbitrary node slice, against the
+        /// view's LIVE shown register.
         pub fn applyCanvasTooltipVisibilityToNodes(self: *const RuntimeView, nodes: []canvas.WidgetLayoutNode) void {
+            applyCanvasTooltipVisibilityToNodesForShownId(self, nodes, self.canvas_tooltip_shown_id);
+        }
+
+        /// The stamp against an EXPLICIT shown id. The rebuild path
+        /// normalizes the RECONCILED scratch tree with it BEFORE diffing
+        /// against the retained tree (see `setCanvasWidgetLayout`),
+        /// passing the PROSPECTIVE prune verdict from
+        /// `canvasTooltipShownIdSurvivingLayout` rather than mutating
+        /// the live registers first: the retained side carries the
+        /// intent machine's hidden stamps while the source declares
+        /// authored visibility, so diffing them un-normalized reported
+        /// the runtime's own stamp as a spurious visibility
+        /// invalidation on every rebuild that contained a hidden
+        /// anchored tooltip — and mutating the registers before the
+        /// fallible adoption steps left a FAILED adoption with the old
+        /// tree stamped visible and cleared registers (an unhideable
+        /// tooltip).
+        pub fn applyCanvasTooltipVisibilityToNodesForShownId(self: *const RuntimeView, nodes: []canvas.WidgetLayoutNode, shown_id: canvas.ObjectId) void {
+            _ = self;
             for (nodes) |*node| {
                 if (node.widget.kind != .tooltip) continue;
                 if (!canvas.widgetIsAnchored(node.widget)) continue;
-                node.widget.semantics.hidden = node.widget.id == 0 or node.widget.id != self.canvas_tooltip_shown_id;
+                node.widget.semantics.hidden = node.widget.id == 0 or node.widget.id != shown_id;
             }
         }
 
@@ -624,13 +637,14 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
             self.pruneCanvasTooltipIntentForLayout(self.widgetLayoutTree());
         }
 
-        /// The same prune against an arbitrary layout. The rebuild path
-        /// runs it against the RECONCILED tree before the pre-diff
-        /// visibility stamp above, so the stamp reflects the shown id
-        /// adoption will actually keep: an unchanged rebuild diffs
-        /// clean, while a rebuild that kills the shown binding still
-        /// diffs — and repaints — the hide. Adoption re-runs it against
-        /// the retained tree as the structural backstop.
+        /// The same prune against an arbitrary layout. Runs inside
+        /// `copyWidgetLayoutTree` against the freshly retained tree —
+        /// AFTER every fallible adoption step has succeeded, which is
+        /// what keeps the registers transactional: the rebuild path's
+        /// pre-diff stamp reads only the VERDICT
+        /// (`canvasTooltipShownIdSurvivingLayout`) so a failed adoption
+        /// leaves both the old tree and the registers that can hide its
+        /// tooltip intact.
         pub fn pruneCanvasTooltipIntentForLayout(self: *RuntimeView, layout: canvas.WidgetLayoutTree) void {
             if (self.canvas_tooltip_armed_id != 0 and !canvasTooltipIntentBindingAlive(layout, self.canvas_tooltip_armed_id, self.canvas_tooltip_armed_owner_id, false)) {
                 self.canvas_tooltip_armed_id = 0;
@@ -645,6 +659,25 @@ pub fn RuntimeViewCanvasWidgetTree(comptime RuntimeView: type) type {
                 self.canvas_tooltip_warm_until_ns = 0;
                 self.canvas_tooltip_transit_deadline_ns = 0;
             }
+        }
+
+        /// The shown-tooltip prune VERDICT against a prospective
+        /// layout, WITHOUT the register mutation: the shown id that
+        /// would survive adopting `layout`, or 0 when the rebuild kills
+        /// the binding. `setCanvasWidgetLayout` stamps the reconciled
+        /// scratch tree with this ahead of the diff (so the diff
+        /// reports the hide a binding-breaking rebuild really causes,
+        /// and an unchanged rebuild diffs clean) while the live
+        /// registers stay untouched until the fallible adoption steps —
+        /// the diff itself and the retained-pool validation/copy —
+        /// succeed; `copyWidgetLayoutTree`'s own prune then applies the
+        /// same verdict for real. A failed adoption therefore leaves
+        /// the OLD tree with the registers that own its stamps: the
+        /// tooltip that is still painted is still hideable.
+        pub fn canvasTooltipShownIdSurvivingLayout(self: *const RuntimeView, layout: canvas.WidgetLayoutTree) canvas.ObjectId {
+            if (self.canvas_tooltip_shown_id == 0) return 0;
+            if (!canvasTooltipIntentBindingAlive(layout, self.canvas_tooltip_shown_id, self.canvas_tooltip_shown_owner_id, self.canvas_tooltip_shown_from_focus)) return 0;
+            return self.canvas_tooltip_shown_id;
         }
 
         /// Both ends of a tooltip intent slot are still live: the

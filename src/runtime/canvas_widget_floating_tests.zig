@@ -1,4 +1,6 @@
 const support = @import("test_support.zig");
+const canvas_limits = @import("canvas_limits.zig");
+const max_canvas_widget_anchored_per_view = canvas_limits.max_canvas_widget_anchored_per_view;
 const std = support.std;
 const geometry = support.geometry;
 const trace = support.trace;
@@ -2353,6 +2355,60 @@ test "a rebuild that disables the tooltip's trigger resets the shown tooltip" {
     // not wait for one.
     const replacement = tooltipRebuildChildren(2, true);
     try expectTooltipRebuildReset(harness, app, &replacement);
+}
+
+test "a failed adoption leaves the shown tooltip's registers coherent and hideable" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-adoption-failure", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipRebuildFixture(harness, app);
+
+    // A replacement that BOTH breaks the shown binding (trigger 2 is
+    // gone) AND blows the retained anchored-surface budget, so
+    // adoption fails inside copyWidgetLayoutTree — after the pre-diff
+    // visibility stamp, before anything destructive. The old
+    // register-mutating prune ran ahead of this failure: it cleared
+    // the shown slot while the OLD tree stayed retained and stamped
+    // visible — a tooltip no transition could ever hide again.
+    var overflow_children: [max_canvas_widget_anchored_per_view + 1]canvas.Widget = undefined;
+    for (&overflow_children, 0..) |*widget, child_index| {
+        widget.* = .{
+            .id = @intCast(100 + child_index),
+            .kind = .tooltip,
+            .text = "Overflow",
+            .layout = .{ .anchor = .{ .placement = .above } },
+        };
+    }
+    var overflow_nodes: [max_canvas_widget_anchored_per_view + 2]canvas.WidgetLayoutNode = undefined;
+    const overflow_layout = try canvas.layoutWidgetTree(
+        .{ .kind = .stack, .children = &overflow_children },
+        geometry.RectF.init(0, 0, 220, 120),
+        &overflow_nodes,
+    );
+    try std.testing.expectError(
+        error.WidgetAnchoredSurfaceLimitReached,
+        harness.runtime.setCanvasWidgetLayout(1, "canvas", overflow_layout),
+    );
+
+    // The failed adoption changed NOTHING: the old tree is still
+    // retained with its tooltip visibly shown, and the registers still
+    // own that stamp.
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_tooltip_shown_owner_id);
+    try std.testing.expect(!try tooltipHidden(harness, 3));
+
+    // And the tooltip stays HIDEABLE through a normal transition: the
+    // pointer leaving the trigger hides it exactly as if the failed
+    // rebuild never happened.
+    try tooltipHover(harness, app, .{ .x = 5, .y = 110 }, tooltip_t0 + 200 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 3));
 }
 
 /// The rebuild-relocation fixture: a wrapper stack at an

@@ -561,6 +561,35 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             };
         }
 
+        /// Whether tooltip intent may ACT for this view right now: the
+        /// app is active AND the view's owning window is key. Every
+        /// reveal and arm path checks this — the pointer dwell/warm
+        /// show, the keyboard focus-visible reveal, the frame promote,
+        /// and (through those leaves) the adoption binding-reconcile —
+        /// because intent causes genuinely reach views the user has
+        /// left: always-active tracking areas keep hovering non-key
+        /// windows, and a rebuild triggered FROM the deactivation
+        /// callback adopts while the app is inactive (the deactivation
+        /// reset ran first, so anything revealed or armed there would
+        /// resurrect, one dispatch later, exactly the state that reset
+        /// just cleared). Suppression gates ACTION only: the keyboard
+        /// focus-visible provenance register and
+        /// `canvas_last_pointer_position` stay preserved — their
+        /// persistence is what lets a later ACTIVE adoption or hover
+        /// behave normally; ACTING on them while inactive/non-key was
+        /// the bug, never their existence. Re-activation and re-key
+        /// reveal nothing spontaneously by construction: both reveal
+        /// paths are transition-edge-triggered, and regaining active or
+        /// key status replays no transition.
+        fn canvasTooltipIntentActionAllowed(self: *const Runtime, view_index: usize) bool {
+            if (!self.app_active) return false;
+            const window_id = self.views[view_index].window_id;
+            for (self.windows[0..self.window_count]) |*window| {
+                if (window.info.id == window_id) return window.info.focused;
+            }
+            return false;
+        }
+
         /// THE tooltip-intent choke point: the one owner of pointer-
         /// position bookkeeping, hover re-hit-testing from the stored
         /// position, content-hold containment against the CURRENT
@@ -1019,8 +1048,16 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 // Hover reached through the shown tooltip's frame belongs
                 // to the tooltip, not to whatever sits beneath it: never
                 // arm (or warm-show) a trigger the pointer is not
-                // actually on.
-                if (view.canvas_tooltip_shown_id != tooltip_id and tooltip_id != 0 and !held_by_content) {
+                // actually on. And an inactive app or a non-key window
+                // arms and reveals nothing at all (see
+                // canvasTooltipIntentActionAllowed) — hover reaches
+                // non-key windows on always-active-tracking hosts, and
+                // the adoption binding-reconcile funnels through here
+                // even mid-deactivation; the hide/disarm arms above
+                // deliberately stay ungated.
+                if (view.canvas_tooltip_shown_id != tooltip_id and tooltip_id != 0 and !held_by_content and
+                    canvasTooltipIntentActionAllowed(self, view_index))
+                {
                     const delay_ns = canvasTooltipShowDelayNs(view.widget_layout_nodes[node_index].widget, view.widget_tokens);
                     if (delay_ns == 0 or now_ns < view.canvas_tooltip_warm_until_ns) {
                         view.canvas_tooltip_shown_id = tooltip_id;
@@ -1235,6 +1272,21 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         /// frames coming while a delay is armed.
         pub fn advanceCanvasTooltipIntentForFrame(self: *Runtime, view_index: usize, timestamp_ns: u64) anyerror!void {
             const view = &self.views[view_index];
+            // A suppressed view promotes nothing: with the arm paths
+            // gated on the same predicate and both suppression edges
+            // (app deactivation, window key-loss) resetting the armed
+            // registers, a pending dwell here should be unreachable —
+            // but the promote IS a reveal, so it honors the same gate,
+            // and it DISARMS rather than defers (a deferred deadline in
+            // the past would fire on the first frame after re-key: a
+            // spontaneous reveal, which re-activation must never make).
+            if (!canvasTooltipIntentActionAllowed(self, view_index)) {
+                view.canvas_tooltip_armed_id = 0;
+                view.canvas_tooltip_armed_owner_id = 0;
+                view.canvas_tooltip_deadline_ns = 0;
+                view.canvas_tooltip_transit_deadline_ns = 0;
+                return;
+            }
             // A transit grace that ran out resolves here, on the same
             // recorded frame clock the show delay fires on: the pointer
             // parked in the corridor without arriving, so the tooltip
@@ -1392,7 +1444,16 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 view.canvas_tooltip_shown_from_focus = false;
                 shown_changed = true;
             }
-            if (tooltip_id != 0) {
+            // The focus reveal is gated exactly like the hover arm: an
+            // inactive app or a non-key window reveals nothing (the
+            // adoption focus-binding reconcile funnels through here, so
+            // a rebuild FROM the deactivation callback that binds a
+            // tooltip beneath the retained keyboard ring stays silent).
+            // The PROVENANCE register itself is untouched — it must
+            // survive so a genuine binding change under a later ACTIVE
+            // adoption still reveals; the hide half above also stays
+            // ungated.
+            if (tooltip_id != 0 and canvasTooltipIntentActionAllowed(self, view_index)) {
                 if (view.canvas_tooltip_shown_id != tooltip_id) {
                     view.canvas_tooltip_shown_id = tooltip_id;
                     shown_changed = true;

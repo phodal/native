@@ -533,6 +533,79 @@ test "compiled anchored tooltips stamp the hover-intent declaration identically 
     }
 }
 
+// ------------------------------------------- tooltip-delay range guard
+
+const TooltipDelayModel = struct { delay: i64 = 0 };
+
+const tooltip_delay_binding_markup =
+    \\<stack>
+    \\  <text>Bold</text>
+    \\  <tooltip anchor="above" tooltip-delay="{delay}">Bold the selection</tooltip>
+    \\</stack>
+;
+
+const tooltip_delay_boundary_markup =
+    \\<column gap="12">
+    \\  <stack>
+    \\    <text>Bold</text>
+    \\    <tooltip anchor="above" tooltip-delay="0">Bold the selection</tooltip>
+    \\  </stack>
+    \\  <stack>
+    \\    <text>Link</text>
+    \\    <tooltip anchor="below" tooltip-delay="2147483647">Insert a link</tooltip>
+    \\  </stack>
+    \\</column>
+;
+
+const tooltip_delay_overflow_literal_markup =
+    \\<stack>
+    \\  <text>Bold</text>
+    \\  <tooltip anchor="above" tooltip-delay="2147483648">Bold the selection</tooltip>
+    \\</stack>
+;
+
+const TooltipDelayUi = canvas.Ui(EntriesMsg);
+const TooltipDelayBindingCompiled = canvas.CompiledMarkupView(TooltipDelayModel, EntriesMsg, tooltip_delay_binding_markup);
+const TooltipDelayBoundaryCompiled = canvas.CompiledMarkupView(TooltipDelayModel, EntriesMsg, tooltip_delay_boundary_markup);
+const TooltipDelayOverflowLiteralCompiled = canvas.CompiledMarkupView(TooltipDelayModel, EntriesMsg, tooltip_delay_overflow_literal_markup);
+
+test "compiled tooltip-delay past i32 max fails the build instead of trapping" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A literal one past maxInt(i32): the option field's own type is
+    // the bound (the grid-lines pattern), so the cast that used to
+    // trap latches the failed build the interpreter's teaching error
+    // mirrors, and finalize surfaces it.
+    var literal_ui = TooltipDelayUi.init(arena);
+    const literal_node = TooltipDelayOverflowLiteralCompiled.build(&literal_ui, &TooltipDelayModel{});
+    try testing.expect(literal_ui.failed);
+    try testing.expectError(error.OutOfMemory, literal_ui.finalize(literal_node));
+
+    // Bindings deliver i64 model values into the same cast seam, so an
+    // out-of-range model value fails the same way — per-build, since
+    // only the value (not the document) is wrong.
+    var overflow_ui = TooltipDelayUi.init(arena);
+    const overflow_model = TooltipDelayModel{ .delay = @as(i64, std.math.maxInt(i32)) + 1 };
+    const overflow_node = TooltipDelayBindingCompiled.build(&overflow_ui, &overflow_model);
+    try testing.expect(overflow_ui.failed);
+    try testing.expectError(error.OutOfMemory, overflow_ui.finalize(overflow_node));
+
+    // The same document lowers when the model holds an in-range value.
+    var ok_ui = TooltipDelayUi.init(arena);
+    const ok_model = TooltipDelayModel{ .delay = 250 };
+    const ok_tree = try ok_ui.finalize(TooltipDelayBindingCompiled.build(&ok_ui, &ok_model));
+    try testing.expectEqual(@as(i32, 250), fixture.findByText(ok_tree.root, .tooltip, "Bold the selection").?.tooltip_delay_ms);
+
+    // Boundary values pass: 0 (the instant-show escape hatch) and the
+    // type's exact max.
+    var boundary_ui = TooltipDelayUi.init(arena);
+    const boundary_tree = try boundary_ui.finalize(TooltipDelayBoundaryCompiled.build(&boundary_ui, &TooltipDelayModel{}));
+    try testing.expectEqual(@as(i32, 0), fixture.findByText(boundary_tree.root, .tooltip, "Bold the selection").?.tooltip_delay_ms);
+    try testing.expectEqual(@as(i32, std.math.maxInt(i32)), fixture.findByText(boundary_tree.root, .tooltip, "Insert a link").?.tooltip_delay_ms);
+}
+
 // --------------------- multi-child for bodies and the for-empty else
 
 const multi_entries_markup =

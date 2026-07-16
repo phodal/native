@@ -1666,8 +1666,17 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 // Optional bools (`expanded`): the attribute's PRESENCE
                 // makes the state non-null; the value sets it.
                 .optional => @field(options, field) = value.truthy(),
+                // Range-checked against the FIELD's own integer type
+                // before the cast (the grid-lines teaching, generalized):
+                // expression values are i64, so a literal or model
+                // binding can deliver 2147483648 to the i32
+                // tooltip-delay — an unchecked @intCast TRAPPED on it
+                // instead of failing the build. The field type is the
+                // honest upper bound: no semantic millisecond cap is
+                // invented on top of it, matching resize-duration, whose
+                // only bound is likewise its u32.
                 .int => @field(options, field) = switch (value) {
-                    .integer => |int| if (int < 0)
+                    .integer => |int| if (int < 0 or int > std.math.maxInt(FieldType))
                         return self.failVoid(node, "expected a non-negative whole number")
                     else
                         @intCast(int),

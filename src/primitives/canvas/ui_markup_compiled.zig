@@ -1732,8 +1732,16 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                 .optional => @field(options, zig_field) = evalExpr(node, entries, raw, ui, model, scope).truthy(),
                 .int => {
                     comptime requireVariant(variant, &.{.integer}, node, "expected a whole number");
+                    // Range-checked against the field's own integer type
+                    // before the cast (the grid-lines pattern; the
+                    // interpreter fails the same way): expression values
+                    // are i64, so a literal or model binding can deliver
+                    // 2147483648 to the i32 tooltip-delay — an unchecked
+                    // @intCast TRAPPED on it instead of failing the
+                    // build. The field type is the honest upper bound;
+                    // no semantic cap is invented on top of it.
                     @field(options, zig_field) = switch (evalExpr(node, entries, raw, ui, model, scope)) {
-                        .integer => |int| if (int < 0) runtimeFail(FieldType, ui) else @intCast(int),
+                        .integer => |int| if (int < 0 or int > std.math.maxInt(FieldType)) runtimeFail(FieldType, ui) else @intCast(int),
                         else => runtimeFail(FieldType, ui),
                     };
                 },

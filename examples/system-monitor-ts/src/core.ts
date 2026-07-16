@@ -194,11 +194,24 @@ export interface Model {
   readonly tableScroll: number;
 
   readonly note: Bytes;
-  /// A note that clears itself on the NEXT applied ps sample: the kill
-  /// path's "terminate request delivered" is a moment, not a state —
-  /// the following tick (whose rows are the delivery's visible
-  /// consequence) retires it instead of letting it sit forever.
+  /// A note that clears itself on the next applied ps sample LAUNCHED
+  /// after it was set (`noteStampGeneration`): the kill path's
+  /// "terminate request delivered" is a moment, not a state — the
+  /// following tick (whose rows are the delivery's visible consequence)
+  /// retires it instead of letting it sit forever.
   readonly noteClearsOnSample: boolean;
+  /// Generation counter for ps sample LAUNCHES (not applies), bumped in
+  /// `sampling` when the spawns actually issue. Launches never overlap
+  /// (`psInflight` gates them), so the value is stable from a sample's
+  /// launch to its applied ps_done — at apply time it IS the applying
+  /// sample's launch generation. Pure Msg-driven state, no clock
+  /// anywhere near it, so replay walks the same values.
+  readonly sampleGeneration: number;
+  /// The generation current when the transient note was set: the note
+  /// retires only with a sample launched AFTER this stamp. A sample
+  /// already in flight at kill time collected its rows BEFORE the kill,
+  /// so its pre-termination rows must never retire the notice.
+  readonly noteStampGeneration: number;
 
   /// Chrome overlay geometry (tall hidden-inset titlebar) from the
   /// chromeMsg channel: the header leads with a spacer this wide so its
@@ -302,6 +315,8 @@ export const viewUnbound = [
   "pendingKill",
   "note",
   "noteClearsOnSample",
+  "sampleGeneration",
+  "noteStampGeneration",
 ] as const;
 
 export function initialModel(): [Model, Cmd<Msg>] {
@@ -333,6 +348,8 @@ export function initialModel(): [Model, Cmd<Msg>] {
       tableScroll: 0,
       note: new Uint8Array(0),
       noteClearsOnSample: false,
+      sampleGeneration: 0,
+      noteStampGeneration: 0,
       chromeLeading: 0,
       headerHeight: HEADER_NATURAL_HEIGHT,
     },
@@ -552,12 +569,16 @@ function appliedPsSample(model: Model, sample: PsSample): Model {
     model.procHistory.length >= HISTORY_LEN
       ? [...model.procHistory.slice(1), sample.processCountFloat]
       : [...model.procHistory, sample.processCountFloat];
+  // A transient note ("terminate request delivered") retires with the
+  // first sample LAUNCHED after it — those rows show the delivery's
+  // outcome. A sample already in flight when the note was stamped
+  // collected its rows before the kill, so it applies without retiring
+  // the notice (the generation gate).
+  const retiresNote = model.noteClearsOnSample && model.sampleGeneration > model.noteStampGeneration;
   return {
     ...model,
-    // A transient note ("terminate request delivered") retires with the
-    // sample that follows it — the fresh row set is the outcome.
-    note: model.noteClearsOnSample ? new Uint8Array(0) : model.note,
-    noteClearsOnSample: false,
+    note: retiresNote ? new Uint8Array(0) : model.note,
+    noteClearsOnSample: model.noteClearsOnSample && !retiresNote,
     psInflight: false,
     processCount: sample.processCount,
     uptimeSeconds: sample.uptimeSeconds,
@@ -590,17 +611,29 @@ function appliedMemSample(model: Model, sample: MemSample): Model {
 /// spawn commands themselves are built inline at each return site —
 /// commands live in update's return path only (NS1017).
 function sampling(model: Model): Model {
-  return { ...model, psInflight: true, memInflight: true };
+  return {
+    ...model,
+    psInflight: true,
+    memInflight: true,
+    sampleGeneration: model.sampleGeneration + 1,
+  };
 }
 
 function withNote(model: Model, note: Bytes): Model {
   return { ...model, note: note, noteClearsOnSample: false };
 }
 
-/// A `withNote` that retires itself on the next applied ps sample (see
-/// `Model.noteClearsOnSample`).
+/// A `withNote` that retires itself on the next applied ps sample
+/// launched after this moment (see `Model.noteClearsOnSample`). The
+/// generation stamp keeps a sample already in flight — whose rows
+/// predate whatever this note reports — from retiring it early.
 function withTransientNote(model: Model, note: Bytes): Model {
-  return { ...model, note: note, noteClearsOnSample: true };
+  return {
+    ...model,
+    note: note,
+    noteClearsOnSample: true,
+    noteStampGeneration: model.sampleGeneration,
+  };
 }
 
 export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
@@ -817,9 +850,10 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
       ];
     }
     case "kill_done": {
-      // Transient: the next sample's rows ARE the outcome, so the
-      // delivery notice retires with them instead of sitting in the
-      // footer forever.
+      // Transient: the next LAUNCHED sample's rows ARE the outcome, so
+      // the delivery notice retires with them instead of sitting in the
+      // footer forever (a sample already in flight predates the kill
+      // and cannot).
       if (msg.code === 0) return withTransientNote(model, asciiBytes("terminate request delivered"));
       return withNote(
         model,

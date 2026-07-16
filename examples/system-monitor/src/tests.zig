@@ -611,7 +611,12 @@ test "kill and copy exits land as status notes through the live loop" {
     defer live.stop();
     const model = &live.app_state.model;
 
-    apply(model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = ps_edge_fixture } });
+    // Land the eager boot sample through the live loop, so the next
+    // timer fire launches a REAL follow-up sample (the transient note
+    // below only retires with a sample launched after it).
+    try live.finishSpawn(model_mod.ps_key, ps_edge_fixture);
+    try live.finishSpawn(model_mod.mem_key, vm_stat_fixture);
+
     try live.dispatch(.{ .request_kill = 842 });
     try live.dispatch(.confirm_kill);
     try testing.expect(std.mem.indexOf(u8, model.note(), "SIGTERM sent to renderfarm-worker (pid 842)") != null);
@@ -619,11 +624,14 @@ test "kill and copy exits land as status notes through the live loop" {
     try live.wake();
     try testing.expect(std.mem.indexOf(u8, model.note(), "delivered") != null);
 
-    // The delivered notice is a moment, not a state: the NEXT applied
+    // The delivered notice is a moment, not a state: the NEXT LAUNCHED
     // sample (whose rows are the delivery's visible consequence)
     // retires it from the footer.
-    apply(model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = ps_edge_fixture } });
+    try live.app_state.effects.fireTimer(model_mod.sample_timer_key);
+    try live.wake();
+    try live.finishSpawn(model_mod.ps_key, ps_edge_fixture);
     try testing.expectEqual(@as(usize, 0), model.note().len);
+    try live.finishSpawn(model_mod.mem_key, vm_stat_fixture);
 
     // A failing kill (not your process) is a note, never fatal.
     try live.dispatch(.{ .request_kill = 1 });
@@ -632,10 +640,14 @@ test "kill and copy exits land as status notes through the live loop" {
     try live.wake();
     try testing.expect(std.mem.indexOf(u8, model.note(), "kill failed") != null);
 
-    // Failure is a state worth keeping: the next sample does NOT clear
-    // the failed note (only the delivered notice is transient).
-    apply(model, .{ .ps_done = .{ .key = model_mod.ps_key, .code = 0, .output = ps_edge_fixture } });
+    // Failure is a state worth keeping: the next launched sample does
+    // NOT clear the failed note (only the delivered notice is
+    // transient).
+    try live.app_state.effects.fireTimer(model_mod.sample_timer_key);
+    try live.wake();
+    try live.finishSpawn(model_mod.ps_key, ps_edge_fixture);
     try testing.expect(std.mem.indexOf(u8, model.note(), "kill failed") != null);
+    try live.finishSpawn(model_mod.mem_key, vm_stat_fixture);
 
     // Copy Name runs the clipboard effect with the process name.
     try live.dispatch(.{ .copy_name = 842 });
@@ -645,6 +657,51 @@ test "kill and copy exits land as status notes through the live loop" {
     try live.app_state.effects.feedClipboardResult(model_mod.copy_key, .ok, "");
     try live.wake();
     try testing.expect(std.mem.indexOf(u8, model.note(), "name copied") != null);
+}
+
+test "a sample already in flight at kill time cannot retire the delivered notice" {
+    if (!sampler.supported) return error.SkipZigTest;
+    const live = try LiveApp.start();
+    defer live.stop();
+    const model = &live.app_state.model;
+
+    // Land the eager boot sample, then fire the cadence so the NEXT
+    // sample is in flight — its `ps` collected the row set BEFORE any
+    // kill below.
+    try live.finishSpawn(model_mod.ps_key, ps_edge_fixture);
+    try live.finishSpawn(model_mod.mem_key, vm_stat_fixture);
+    try live.app_state.effects.fireTimer(model_mod.sample_timer_key);
+    try live.wake();
+    try testing.expect(model.ps_inflight);
+
+    // Confirm the kill while that sample runs, then drain the delivered
+    // exit AND the stale ps exit in ONE batch before any rebuild — the
+    // worst interleaving: kill_done marks the notice transient and the
+    // pre-termination rows land right behind it.
+    try live.dispatch(.{ .request_kill = 842 });
+    try live.dispatch(.confirm_kill);
+    const samples_before = model.samples_taken;
+    try live.app_state.effects.feedExit(model_mod.kill_key, 0);
+    try live.app_state.effects.feedLine(model_mod.ps_key, ps_edge_fixture);
+    try live.app_state.effects.feedExit(model_mod.ps_key, 0);
+    try live.wake();
+
+    // The stale rows applied, and the notice SURVIVED them into the
+    // rendered footer — it must show for at least one full sample.
+    try testing.expectEqual(samples_before + 1, model.samples_taken);
+    try testing.expect(std.mem.indexOf(u8, model.note(), "delivered") != null);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const tree = try buildTree(arena_state.allocator(), model);
+    try testing.expect(findTextContaining(tree.root, "delivered") != null);
+
+    // The first sample LAUNCHED after the kill shows the delivery's
+    // outcome, and retires the notice with it.
+    try live.finishSpawn(model_mod.mem_key, vm_stat_fixture);
+    try live.app_state.effects.fireTimer(model_mod.sample_timer_key);
+    try live.wake();
+    try live.finishSpawn(model_mod.ps_key, ps_edge_fixture);
+    try testing.expectEqual(@as(usize, 0), model.note().len);
 }
 
 // ---------------------------------------------------------------- theming

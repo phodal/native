@@ -168,11 +168,24 @@ pub const Model = struct {
     // in-window theme control by design).
     note_storage: [max_note]u8 = undefined,
     note_len: usize = 0,
-    /// A note that clears itself on the NEXT applied sample: the kill
-    /// path's "terminate request delivered" is a moment, not a state —
-    /// the following tick (whose ps output is the delivery's visible
+    /// A note that clears itself on the next applied sample LAUNCHED
+    /// after it was set (`note_stamp_generation`): the kill path's
+    /// "terminate request delivered" is a moment, not a state — the
+    /// following tick (whose ps output is the delivery's visible
     /// consequence) retires it instead of letting it sit forever.
     note_clears_on_sample: bool = false,
+    /// Generation counter for ps sample LAUNCHES (not applies), bumped
+    /// in `requestSample` when the spawn actually issues. Launches never
+    /// overlap (`ps_inflight` gates them), so the value is stable from a
+    /// sample's launch to its applied `ps_done` — at apply time it IS
+    /// the applying sample's launch generation. Pure Msg-driven state,
+    /// no clock anywhere near it, so replay walks the same values.
+    sample_generation: u32 = 0,
+    /// The generation current when the transient note was set: the note
+    /// retires only with a sample launched AFTER this stamp. A sample
+    /// already in flight at kill time collected its rows BEFORE the
+    /// kill, so its pre-termination rows must never retire the notice.
+    note_stamp_generation: u32 = 0,
     appearance: native_sdk.Appearance = .{},
     /// Chrome overlay geometry from `on_chrome` (tall hidden-inset
     /// titlebar): the header leads with a spacer this wide so its
@@ -210,10 +223,13 @@ pub const Model = struct {
     }
 
     /// A `setNote` that retires itself on the next applied ps sample
-    /// (see `note_clears_on_sample`).
+    /// launched after this moment (see `note_clears_on_sample`). The
+    /// generation stamp keeps a sample already in flight — whose rows
+    /// predate whatever this note reports — from retiring it early.
     pub fn setTransientNote(model: *Model, comptime fmt: []const u8, args: anytype) void {
         model.setNote(fmt, args);
         model.note_clears_on_sample = true;
+        model.note_stamp_generation = model.sample_generation;
     }
 
     pub fn colorScheme(model: *const Model) native_sdk.ColorScheme {
@@ -428,8 +444,11 @@ pub const Model = struct {
 
     fn applyPsSample(model: *Model, sample: sampler.PsSample, sampled_at_ms: i64) void {
         // A transient note ("terminate request delivered") retires with
-        // the sample that follows it — the fresh row set is the outcome.
-        if (model.note_clears_on_sample) {
+        // the first sample LAUNCHED after it — those rows show the
+        // delivery's outcome. A sample already in flight when the note
+        // was stamped collected its rows before the kill, so it applies
+        // without retiring the notice (the generation gate).
+        if (model.note_clears_on_sample and model.sample_generation > model.note_stamp_generation) {
             model.note_len = 0;
             model.note_clears_on_sample = false;
         }
@@ -605,9 +624,10 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .kill_done => |exit| {
             if (exit.reason == .exited and exit.code == 0) {
-                // Transient: the next sample's rows ARE the outcome, so
-                // the delivery notice retires with them instead of
-                // sitting in the footer forever.
+                // Transient: the next LAUNCHED sample's rows ARE the
+                // outcome, so the delivery notice retires with them
+                // instead of sitting in the footer forever (a sample
+                // already in flight predates the kill and cannot).
                 model.setTransientNote("terminate request delivered", .{});
             } else {
                 model.setNote("kill failed (code {d} — not your process?)", .{exit.code});
@@ -685,6 +705,7 @@ fn requestSample(model: *Model, fx: *Effects) void {
         model.ticks_skipped += 1;
         return;
     }
+    model.sample_generation += 1;
     model.ps_inflight = true;
     fx.spawn(.{
         .key = ps_key,

@@ -627,6 +627,54 @@ test "the SIGTERM round trip: request copies the target, cancel never signals, c
     try std.testing.expect(h.hasText("name copy requested"));
 }
 
+test "a sample already in flight at kill time cannot retire the delivered notice" {
+    const h = try Harness.create();
+    defer h.destroy();
+    try h.bootMac();
+    try h.spawnOutput(spawn_key_0, ps_edge_fixture, 0);
+    try h.spawnOutput(spawn_key_1, vm_stat_fixture, 0);
+
+    // Fire the cadence so the NEXT round is in flight: its `ps`
+    // collected the row set BEFORE any kill below.
+    try std.testing.expect(try h.fireSampleTimer());
+    try std.testing.expect(Bridge.model().psInflight);
+
+    // Confirm the kill while that round runs; ps and the memory command
+    // hold slots 0 and 1, so the kill spawn parks on the next free slot
+    // — find it by its argv rather than assuming the slot number.
+    try h.menu("mon.kill.842");
+    try h.click(h.findId(.button, "Send SIGTERM").?);
+    var kill_key: u64 = 0;
+    var index: usize = 0;
+    while (h.app_state.effects.pendingSpawnAt(index)) |request| : (index += 1) {
+        if (std.mem.eql(u8, request.argv[0], "/bin/kill")) kill_key = request.key;
+    }
+    try std.testing.expect(kill_key != 0);
+
+    // Drain the delivered exit AND the stale ps exit in ONE batch before
+    // any rebuild — the worst interleaving in the field: kill_done marks
+    // the notice transient and the pre-termination rows land right
+    // behind it in the same drain.
+    try h.app_state.effects.feedOutput(kill_key, "");
+    try h.app_state.effects.feedExit(kill_key, 0);
+    try h.app_state.effects.feedOutput(spawn_key_0, ps_edge_fixture);
+    try h.app_state.effects.feedExit(spawn_key_0, 0);
+    try h.wake();
+
+    // The stale rows applied, and the notice SURVIVED them into the
+    // rendered footer — it must show for at least one full sample.
+    try std.testing.expectEqual(@as(i64, 2), Bridge.model().samplesTaken);
+    try std.testing.expect(h.hasText("terminate request delivered"));
+
+    // The first sample LAUNCHED after the kill shows the delivery's
+    // outcome, and retires the notice with it.
+    try h.spawnOutput(spawn_key_1, vm_stat_fixture, 0);
+    try std.testing.expect(try h.fireSampleTimer());
+    try h.spawnOutput(spawn_key_0, ps_edge_fixture, 0);
+    try std.testing.expect(!h.hasText("terminate request delivered"));
+    try h.spawnOutput(spawn_key_1, vm_stat_fixture, 0);
+}
+
 // ----------------------------------------------------------------- chrome
 
 test "the chromeMsg channel drives the hidden-inset header band" {

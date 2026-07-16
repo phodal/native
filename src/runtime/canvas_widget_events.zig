@@ -348,18 +348,6 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
 
-            // Remember the pointer's last trustworthy position — and
-            // forget it on `.cancel`, which is how the pointer LEAVING
-            // the view arrives (AppKit mouseExited, and the GTK/Win32
-            // equivalents, emit pointer_cancel). The point-blind scroll
-            // reconcile re-hit-tests this stored position; a cleared
-            // store tells it the pointer is gone and it must close
-            // tooltip intent instead of guessing.
-            self.views[index].canvas_last_pointer_position = if (pointer_event.pointer.phase == .cancel)
-                null
-            else
-                pointer_event.pointer.point;
-
             // Hover and cursor resolve through the hover-target walk (the
             // press fall-through): a composite row is ONE interactive
             // surface, so a pointer over the row's own text/icon/badge
@@ -416,46 +404,19 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
                 canvasChartHoverKey(self, index, next_hovered_id, next_hover_point),
             );
 
-            // Anchored-tooltip hover intent steps on hover-target
-            // transitions (a pointer gliding within one trigger is
-            // free); the armed delay itself fires on presented-frame
-            // timestamps in advanceCanvasTooltipIntentForFrame.
-            //
-            // `.cancel` — the pointer LEAVING the view (mouseExited
-            // and kin) — short-circuits AHEAD of the transition gate:
-            // its immediate-hide semantics must not depend on a hover
-            // TRANSITION existing, and for a pointer-shown tooltip
-            // held open by its own hovered content there is none —
-            // the tooltip is not a hit target, so the hold already
-            // reads hovered_id == 0 and a cancel-to-0 is no
-            // transition. The close resets every pointer-owned slot
-            // (armed, pointer-shown including content-held, warm
-            // window, corridor state); the FOCUS-shown tooltip
-            // survives — the keyboard holds it and the pointer's
-            // departure says nothing about it. (View blur is the
-            // KEYBOARD leaving, which is why
-            // resetCanvasTooltipIntentForViewBlur clears focus-shown
-            // too while this path deliberately does not.)
-            if (pointer_event.pointer.phase == .cancel) {
-                try closeCanvasTooltipPointerIntent(self, index);
-            } else if (self.views[index].canvas_widget_hovered_id != next_hovered_id) {
-                try updateCanvasTooltipIntentForHoverChange(self, index, next_hovered_id, pointer_event.pointer.point);
-            }
-            // While a pointer-shown tooltip is up, EVERY move also steps
-            // the travel check: crossing the anchor gap or gliding over
-            // the tooltip's own frame usually changes no hover target
-            // (the tooltip is deliberately not hit-tested), so the
-            // transition gate above cannot see it.
-            if (pointer_event.pointer.phase == .hover or pointer_event.pointer.phase == .move) {
-                try updateCanvasTooltipIntentForPointerTravel(self, index, next_hovered_id, pointer_event.pointer.point);
-            }
-            // A press ends the tooltip conversation outright — pending
-            // reveal, shown tooltip, and warm window alike (after the
-            // hover step above, so a down that also moved the hover
-            // cannot re-arm or warm past the press).
-            if (pointer_event.pointer.phase == .down) {
-                try updateCanvasTooltipIntentForPress(self, index);
-            }
+            // Anchored-tooltip intent steps through the ONE choke point
+            // (see reconcileCanvasTooltipIntent): position bookkeeping,
+            // cancel's short-circuit, hover transitions, the travel
+            // step, the press reset, and the frame-pump obligation all
+            // live there — this path only feeds the cause.
+            try reconcileCanvasTooltipIntent(self, index, if (pointer_event.pointer.phase == .cancel)
+                .pointer_cancel
+            else
+                .{ .pointer = .{
+                    .phase = pointer_event.pointer.phase,
+                    .point = pointer_event.pointer.point,
+                    .next_hovered_id = next_hovered_id,
+                } });
 
             const interaction_changed = self.views[index].canvas_widget_hovered_id != next_hovered_id or
                 self.views[index].canvas_widget_pressed_id != next_pressed_id or
@@ -485,6 +446,351 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const hover_point = point orelse return null;
             const sample = canvasChartHoverIndexForId(self, view_index, hovered_id, hover_point) orelse return null;
             return .{ .id = hovered_id, .index = sample };
+        }
+
+        /// Every way the world can move under (or out from under) the
+        /// tooltip intent machine, named. One cause per input path; the
+        /// choke point below is the only place that maps causes to
+        /// intent transitions, so a new input path added tomorrow has
+        /// exactly one obligation: feed its cause.
+        pub const CanvasTooltipReconcileCause = union(enum) {
+            /// A routed pointer event, any button and phase except
+            /// `.cancel` (which is its own cause below). Carries the
+            /// hover resolution the interaction walk produced for this
+            /// event — the routed target for downs, the fresh hit-test
+            /// for hovers/moves/ups — so the transition gate compares
+            /// the same ids the wash and cursor will commit.
+            pointer: struct {
+                phase: canvas.WidgetPointerPhase,
+                point: geometry.PointF,
+                next_hovered_id: canvas.ObjectId,
+            },
+            /// A pointer-carrying input CONSUMED before the widget
+            /// pipeline — the secondary-button context-menu stream and
+            /// window-drag downs. The interaction path early-returns
+            /// for these, but the pointer still moved: position
+            /// bookkeeping runs for every one of them, and a consumed
+            /// down is still a down ("pointer-down dismisses" holds
+            /// for every button). Without this cause, a later
+            /// point-blind reconcile re-hit-tested a position the
+            /// pointer had already left.
+            consumed_pointer: struct {
+                point: geometry.PointF,
+                down: bool,
+            },
+            /// The pointer LEFT the view (AppKit mouseExited and kin
+            /// arrive as pointer_cancel, whichever button carried it).
+            /// Clears the stored position — the point-blind paths must
+            /// close pointer intent rather than guess — and closes the
+            /// pointer's whole conversation; a FOCUS-shown tooltip
+            /// survives, the keyboard holds it.
+            pointer_cancel,
+            /// Wheel scroll with the live pointer position: content
+            /// moved under a stationary pointer.
+            wheel_scroll: geometry.PointF,
+            /// A scroll with no pointer position of its own — kinetic
+            /// steps, native drivers, keyboard scrolling. Borrows the
+            /// stored position; with none, pointer intent closes.
+            point_blind_scroll,
+            /// A rebuild adopted a new tree under a stationary pointer
+            /// (`setCanvasWidgetLayout`, after pose restores settle the
+            /// frames the user actually sees).
+            layout_adoption,
+            /// Keyboard focus-visible landed on (or left) a widget: the
+            /// tooltip's second reveal path.
+            focus_visible: canvas.ObjectId,
+            /// A programmatic focus move (autofocus, accessibility
+            /// `focus`, automation) — the pointer contract: hides a
+            /// focus-owned tooltip, reveals nothing.
+            programmatic_focus,
+            /// The view stopped being focused: the whole conversation
+            /// drops, focus-shown included — the keyboard itself left.
+            view_blur,
+        };
+
+        /// THE tooltip-intent choke point: the one owner of pointer-
+        /// position bookkeeping, hover re-hit-testing from the stored
+        /// position, content-hold containment against the CURRENT
+        /// tooltip frames, corridor/grace state, deadline arming, and
+        /// the frame-pump obligation. Review rounds kept finding the
+        /// same disease — an input path that fed only part of the
+        /// machine (a deadline armed with no pump, a containment check
+        /// skipped behind an unchanged-hover early return, a consumed
+        /// down that never updated the stored position) — so every
+        /// entry point is now a thin caller that names its cause and
+        /// delegates here.
+        ///
+        /// ORDER OF OPERATIONS (fixed; each step may feed the next):
+        ///   1. position update — every pointer-carrying cause writes
+        ///      `canvas_last_pointer_position` (cancel clears it),
+        ///      BEFORE any transition logic, so even causes whose
+        ///      interaction handling early-returns leave the store
+        ///      truthful;
+        ///   2. hover re-hit-test — the content-moved causes (scroll,
+        ///      adoption) re-resolve hover from the stored/live
+        ///      position against the current tree; pointer causes
+        ///      carry their walk's resolution in the cause;
+        ///   3. containment re-check — a content-held tooltip is
+        ///      re-tested against its CURRENT frame, independent of
+        ///      whether the hover id changed (a hold reads
+        ///      hovered_id == 0 on both sides of a scroll or rebuild,
+        ///      so a transition gate alone can never see it break);
+        ///   4. transition resolution — hide/arm/dismiss with
+        ///      reason-awareness (focus-shown vs pointer-shown vs
+        ///      content-held), including reprocessing the current
+        ///      hover as a fresh transition when a content hold's
+        ///      release exposed a trigger already under the pointer;
+        ///   5. deadline/pump reconciliation — ANY pending deadline
+        ///      (armed show delay OR transit grace) obligates the
+        ///      frame pump: the deadlines fire only on presented-frame
+        ///      timestamps (advanceCanvasTooltipIntentForFrame), and
+        ///      planCanvasFrameForView re-invalidates per frame while
+        ///      one is pending, but that pump only runs once a frame
+        ///      is planned — so the reconcile that ARMS a deadline
+        ///      must kick the first invalidation itself. Deriving the
+        ///      kick from "any deadline pending" (never from "did this
+        ///      event repaint something") is what closes the idle-app
+        ///      hole: a transit grace armed by a 0→0 hover move
+        ///      changes no interaction state and would otherwise wait
+        ///      forever for a frame that nothing requested.
+        pub fn reconcileCanvasTooltipIntent(self: *Runtime, view_index: usize, cause: CanvasTooltipReconcileCause) anyerror!void {
+            if (view_index >= self.view_count) return;
+            if (self.views[view_index].kind != .gpu_surface) return;
+            const view = &self.views[view_index];
+
+            // 1. Pointer-position bookkeeping. The point-blind paths
+            // re-hit-test this stored position; a cleared store tells
+            // them the pointer is gone and they must close tooltip
+            // intent instead of guessing.
+            switch (cause) {
+                .pointer => |event| view.canvas_last_pointer_position = event.point,
+                .consumed_pointer => |event| view.canvas_last_pointer_position = event.point,
+                .pointer_cancel => view.canvas_last_pointer_position = null,
+                .wheel_scroll, .point_blind_scroll, .layout_adoption, .focus_visible, .programmatic_focus, .view_blur => {},
+            }
+
+            // 2–4. Hover re-hit-test, containment re-check, and
+            // transition resolution, per cause.
+            switch (cause) {
+                .pointer => |event| {
+                    const had_pointer_shown = view.canvas_tooltip_shown_id != 0 and !view.canvas_tooltip_shown_from_focus;
+                    // Hover transitions step the machine (a pointer
+                    // gliding within one trigger is free); the armed
+                    // delay itself fires on presented-frame timestamps
+                    // in advanceCanvasTooltipIntentForFrame.
+                    if (view.canvas_widget_hovered_id != event.next_hovered_id) {
+                        try updateCanvasTooltipIntentForHoverChange(self, view_index, event.next_hovered_id, event.point);
+                    }
+                    // While a pointer-shown tooltip is up, EVERY move
+                    // also steps the travel check: crossing the anchor
+                    // gap or gliding over the tooltip's own frame
+                    // usually changes no hover target (the tooltip is
+                    // deliberately not hit-tested), so the transition
+                    // gate above cannot see it.
+                    if (event.phase == .hover or event.phase == .move) {
+                        try updateCanvasTooltipIntentForPointerTravel(self, view_index, event.next_hovered_id, event.point);
+                        // Content-hold release reprocessing: when this
+                        // move hid the held tooltip (travel left both
+                        // regions, or the transition's containment
+                        // broke), the CURRENT hover — a trigger the
+                        // pointer was already recorded on THROUGH the
+                        // tooltip's frame — is reprocessed as a fresh
+                        // transition so it arms (or warm-shows) per the
+                        // normal rules. "No transition happened" was
+                        // measured against stale ownership (hover
+                        // reached through a floating frame belonged to
+                        // the tooltip), not against user intent: the
+                        // pointer is honestly on that trigger NOW.
+                        // Idempotent when the transition above already
+                        // armed it.
+                        if (had_pointer_shown and view.canvas_tooltip_shown_id == 0 and event.next_hovered_id != 0) {
+                            try updateCanvasTooltipIntentForHoverChange(self, view_index, event.next_hovered_id, event.point);
+                        }
+                    }
+                    // A press ends the tooltip conversation outright —
+                    // pending reveal, shown tooltip, and warm window
+                    // alike (after the hover step above, so a down that
+                    // also moved the hover cannot re-arm or warm past
+                    // the press).
+                    if (event.phase == .down) {
+                        try updateCanvasTooltipIntentForPress(self, view_index);
+                    }
+                },
+                .consumed_pointer => |event| {
+                    // Position bookkeeping (step 1) is the point for
+                    // moves/ups of a consumed stream; a consumed down
+                    // still dismisses ("pointer-down dismisses" is
+                    // documented for ANY down — shadcn's Base UI-backed
+                    // default; macOS help tags vanish on any click).
+                    if (event.down) try updateCanvasTooltipIntentForPress(self, view_index);
+                },
+                // `.pointer_cancel` — the pointer LEAVING the view —
+                // short-circuits ahead of any transition gate: its
+                // immediate-hide semantics must not depend on a hover
+                // TRANSITION existing, and for a tooltip held open by
+                // its own hovered content there is none (the tooltip is
+                // not a hit target, so the hold already reads
+                // hovered_id == 0 and a cancel-to-0 is no transition).
+                // The close resets every pointer-owned slot; the
+                // FOCUS-shown tooltip survives — the keyboard holds it
+                // and the pointer's departure says nothing about it.
+                // (View blur is the KEYBOARD leaving, which is why
+                // `.view_blur` clears focus-shown too while this arm
+                // deliberately does not.)
+                .pointer_cancel => try closeCanvasTooltipPointerIntent(self, view_index),
+                .wheel_scroll => |point| try reconcileCanvasTooltipIntentForMovedContent(self, view_index, point, .scroll),
+                .point_blind_scroll => try reconcileCanvasTooltipIntentForMovedContent(self, view_index, null, .scroll),
+                .layout_adoption => try reconcileCanvasTooltipIntentForMovedContent(self, view_index, null, .adoption),
+                .focus_visible => |focus_visible_id| try updateCanvasTooltipIntentForFocusVisibleChange(self, view_index, focus_visible_id),
+                // A programmatic focus move writes focus on the pointer
+                // contract, not the keyboard one, so it never REVEALS
+                // the new target's tooltip (Base UI's focus-visible
+                // gate against click-focus opens). But a focus-OWNED
+                // tooltip whose keyboard hold the move just broke must
+                // not stay painted (the blur-hides contract), and
+                // hiding it opens no warm window: warmth is a
+                // pointer-sweep courtesy, and nothing swept.
+                // Pointer-owned tooltips are untouched — hover holds
+                // them, and a focus move says nothing about the pointer.
+                .programmatic_focus => {
+                    if (view.canvas_tooltip_shown_id != 0 and view.canvas_tooltip_shown_from_focus) {
+                        view.canvas_tooltip_shown_id = 0;
+                        view.canvas_tooltip_shown_owner_id = 0;
+                        view.canvas_tooltip_shown_from_focus = false;
+                        try commitCanvasTooltipVisibility(self, view_index);
+                    }
+                },
+                // A view that stops being FOCUSED drops its whole
+                // tooltip conversation — armed delay, shown tooltip
+                // (focus-owned AND pointer-owned), warm window, transit
+                // grace — and re-stamps the tooltip hidden. The widget
+                // focus bookkeeping survives a view switch so focus can
+                // return where it was, but a tooltip is transient
+                // explanation for the interaction the user just left:
+                // keeping one painted (or letting a warm window
+                // smolder) in a view that no longer hears the keyboard
+                // is a stale affordance, and its semantics node would
+                // keep claiming visible in the a11y tree.
+                .view_blur => {
+                    const had_shown = view.canvas_tooltip_shown_id != 0;
+                    view.canvas_tooltip_armed_id = 0;
+                    view.canvas_tooltip_armed_owner_id = 0;
+                    view.canvas_tooltip_deadline_ns = 0;
+                    view.canvas_tooltip_warm_until_ns = 0;
+                    view.canvas_tooltip_transit_deadline_ns = 0;
+                    view.canvas_tooltip_shown_id = 0;
+                    view.canvas_tooltip_shown_owner_id = 0;
+                    view.canvas_tooltip_shown_from_focus = false;
+                    if (had_shown) try commitCanvasTooltipVisibility(self, view_index);
+                },
+            }
+
+            // 5. Deadline/pump reconciliation: any pending deadline —
+            // armed show delay OR transit grace, exactly what
+            // canvasTooltipIntentArmed derives — obligates a frame, so
+            // the deadline can resolve on the recorded frame clock in
+            // an app that receives no further input. The per-frame pump
+            // in planCanvasFrameForView takes over from the first
+            // planned frame.
+            if (view.canvasTooltipIntentArmed()) {
+                self.invalidateFor(.state, view.frame);
+            }
+        }
+
+        /// How a content-moved reconcile treats the transition step:
+        /// scrolls are deliberately corridor-free (immediate-hide
+        /// semantics — the pointer did not move, the content did, and a
+        /// scroll is the reader moving on; Base UI closes open tooltips
+        /// on scroll for the same reason), so their transitions run
+        /// point-blind and the corridor apex re-seeds afterward.
+        /// Adoption passes the stored point through: its containment
+        /// pre-check below already resolved the shown slot, and the
+        /// point lets the arm/warm-show paths seed the apex in one step.
+        const CanvasTooltipMovedContentCause = enum { scroll, adoption };
+
+        /// Steps 2–4 of the choke point for the content-moved causes
+        /// (scroll and layout adoption): re-hit-test the stored (or
+        /// live) pointer position against the current tree, re-check
+        /// the content hold against the tooltip's CURRENT frame, then
+        /// resolve transitions. Hover ownership follows the content
+        /// honestly — a trigger moved out from under the pointer
+        /// releases (armed disarms, shown hides with the usual
+        /// pointer-hide warmth), one moved under it arms the normal
+        /// delay or warm-shows — and with no trustworthy position
+        /// (a keyboard-only session, or the pointer left the view) the
+        /// pointer's whole conversation CLOSES rather than guesses.
+        /// Focus-shown tooltips survive every arm of this: the keyboard
+        /// holds them.
+        fn reconcileCanvasTooltipIntentForMovedContent(self: *Runtime, view_index: usize, live_point: ?geometry.PointF, cause: CanvasTooltipMovedContentCause) anyerror!void {
+            const view = &self.views[view_index];
+            // 2. Hover re-hit-test from the stored position (the wheel
+            // passes its live point; whichever is used is the truth the
+            // rest of this reconcile measures against).
+            const effective_point = live_point orelse view.canvas_last_pointer_position orelse {
+                view.reconcileCanvasWidgetRenderStateAfterScroll(null);
+                try closeCanvasTooltipPointerIntent(self, view_index);
+                return;
+            };
+            const previous_hovered_id = view.canvas_widget_hovered_id;
+            view.reconcileCanvasWidgetRenderStateAfterScroll(effective_point);
+            const next_hovered_id = view.canvas_widget_hovered_id;
+
+            // 3. Content-hold containment re-check, BEFORE the
+            // transition step and INDEPENDENT of whether the hover id
+            // changed: a content-held tooltip reads hovered_id == 0 (or
+            // the id of whatever sits beneath its frame) on both sides
+            // of a scroll or rebuild, so gating this on a hover
+            // TRANSITION let content slide out from under the hold
+            // while the tooltip stayed pinned to a pointer that no
+            // longer touched it. Still inside the current frame — or
+            // still on the owner — keeps the hold and re-seeds the
+            // corridor apex; moved out breaks it on this reconcile
+            // itself, with the usual pointer-hide warmth and
+            // deliberately NO transit corridor: the content moved, not
+            // the pointer, and a corridor hold here would let
+            // continuous scrolls or rebuilds re-arm the bounded grace
+            // forever under a stationary pointer.
+            var held_released = false;
+            if (view.canvas_tooltip_shown_id != 0 and !view.canvas_tooltip_shown_from_focus) {
+                const on_owner = next_hovered_id != 0 and next_hovered_id == view.canvas_tooltip_shown_owner_id;
+                if (on_owner or canvasTooltipShownContentContains(view, effective_point)) {
+                    view.canvas_tooltip_pointer_from = effective_point;
+                    view.canvas_tooltip_transit_deadline_ns = 0;
+                } else {
+                    hideShownCanvasTooltipWithWarmth(view, canvasRenderAnimationStartNsForView(view));
+                    try commitCanvasTooltipVisibility(self, view_index);
+                    held_released = true;
+                }
+            }
+
+            // 4. Transition resolution. Scroll transitions run
+            // point-blind (no corridor — see the mode doc above);
+            // adoption's pass the stored point through.
+            const transition_point: ?geometry.PointF = switch (cause) {
+                .scroll => null,
+                .adoption => effective_point,
+            };
+            if (next_hovered_id != previous_hovered_id) {
+                try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, transition_point);
+            } else if (held_released and next_hovered_id != 0) {
+                // Content-hold release reprocessing, the content-moved
+                // shape: the hold broke while the hover id stayed put
+                // on a trigger the pointer had reached THROUGH the
+                // tooltip's frame. That id was recorded under stale
+                // ownership — the frame claimed the hover — so it never
+                // stepped the machine; reprocess it as a fresh
+                // transition so the trigger under the pointer arms (or
+                // warm-shows) per the normal rules.
+                try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, transition_point);
+            }
+            // Whichever position drove this reconcile re-seeds the
+            // corridor apex for whatever the step armed or warm-showed,
+            // so a later leave fans out from the truth.
+            if (next_hovered_id != 0 and (view.canvas_tooltip_armed_owner_id == next_hovered_id or
+                (view.canvas_tooltip_shown_owner_id == next_hovered_id and !view.canvas_tooltip_shown_from_focus)))
+            {
+                view.canvas_tooltip_pointer_from = effective_point;
+            }
         }
 
         /// The anchored-tooltip hover-intent state machine, stepped on
@@ -814,48 +1120,40 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         /// moving focus off the trigger, so the broad reset never fights
         /// the narrower paths, and it keeps window-drag and capture
         /// corners honest.
-        /// A view that stops being FOCUSED drops its whole tooltip
-        /// conversation — armed delay, shown tooltip (focus-owned AND
-        /// pointer-owned), warm window, transit grace — and re-stamps
-        /// the tooltip hidden. The focus-shown tooltip's blur-hides
-        /// contract (shadcn's Base UI-backed default) extends to the
-        /// VIEW: the widget focus bookkeeping survives a view switch so
-        /// focus can return where it was, but a tooltip is transient
-        /// explanation for the interaction the user just left — keeping
-        /// one painted (or letting a warm window smolder) in a view
-        /// that no longer hears the keyboard is a stale affordance, and
-        /// its semantics node would keep claiming visible in the a11y
-        /// tree. Both focus seams call this: per-view focus moves
+        /// The view-blur seam: a view that stops being FOCUSED drops
+        /// its whole tooltip conversation (see the `.view_blur` arm of
+        /// the choke point — the focus-shown tooltip's blur-hides
+        /// contract, shadcn's Base UI-backed default, extended to the
+        /// VIEW). Both focus seams call this: per-view focus moves
         /// (setFocusedView, from input and from the focus commands) and
         /// window-level focus loss (clearFocusedView).
         pub fn resetCanvasTooltipIntentForViewBlur(self: *Runtime, view_index: usize) anyerror!void {
-            if (view_index >= self.view_count) return;
-            if (self.views[view_index].kind != .gpu_surface) return;
-            const view = &self.views[view_index];
-            const had_shown = view.canvas_tooltip_shown_id != 0;
-            view.canvas_tooltip_armed_id = 0;
-            view.canvas_tooltip_armed_owner_id = 0;
-            view.canvas_tooltip_deadline_ns = 0;
-            view.canvas_tooltip_warm_until_ns = 0;
-            view.canvas_tooltip_transit_deadline_ns = 0;
-            view.canvas_tooltip_shown_id = 0;
-            view.canvas_tooltip_shown_owner_id = 0;
-            view.canvas_tooltip_shown_from_focus = false;
-            if (had_shown) try commitCanvasTooltipVisibility(self, view_index);
+            try reconcileCanvasTooltipIntent(self, view_index, .view_blur);
         }
 
-        /// The press reset, keyed by the raw input's view identity: the
-        /// entry point for pointer-downs that never reach the widget
-        /// press pipeline — secondary-button downs consumed by the
-        /// context-menu gesture and primary downs consumed by a
-        /// window-drag region. "Pointer-down dismisses" is documented
-        /// for ANY down (shadcn's Base UI-backed default; macOS help
-        /// tags vanish on any click), so those consumed downs must
-        /// reset the machine too.
-        pub fn updateCanvasTooltipIntentForPressInput(self: *Runtime, window_id: platform.WindowId, label: []const u8) anyerror!void {
-            const index = runtimeFindViewIndex(self, window_id, label) orelse return;
+        /// The consumed-pointer seam, keyed by the raw input's view
+        /// identity: pointer-carrying inputs that never reach the
+        /// widget interaction pipeline — the secondary-button stream
+        /// consumed by the context-menu gesture and primary downs
+        /// consumed by a window-drag region. EVERY such event still
+        /// feeds the choke point: position bookkeeping happens even
+        /// when the interaction path early-returned (a later
+        /// point-blind reconcile must hit-test where the pointer really
+        /// is), a consumed down still dismisses ("pointer-down
+        /// dismisses" is documented for ANY down), and a consumed
+        /// cancel is still the pointer leaving the view.
+        pub fn reconcileCanvasTooltipIntentForConsumedPointerInput(self: *Runtime, input_event: GpuSurfaceInputEvent) anyerror!void {
+            const index = runtimeFindViewIndex(self, input_event.window_id, input_event.label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
-            try updateCanvasTooltipIntentForPress(self, index);
+            const cause: CanvasTooltipReconcileCause = switch (input_event.kind) {
+                .pointer_cancel => .pointer_cancel,
+                .pointer_down, .pointer_up, .pointer_move, .pointer_drag => .{ .consumed_pointer = .{
+                    .point = geometry.PointF.init(input_event.x, input_event.y),
+                    .down = input_event.kind == .pointer_down,
+                } },
+                else => return,
+            };
+            try reconcileCanvasTooltipIntent(self, index, cause);
         }
 
         fn updateCanvasTooltipIntentForPress(self: *Runtime, view_index: usize) anyerror!void {
@@ -927,28 +1225,14 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             if (shown_changed) try commitCanvasTooltipVisibility(self, view_index);
         }
 
-        /// A PROGRAMMATIC focus move — window-default autofocus, the
+        /// The programmatic-focus seam — window-default autofocus, the
         /// accessibility `focus` action, automation focus (all funnel
-        /// through `focusAutomationCanvasWidget`) — writes focus on the
-        /// pointer contract, not the keyboard one, so it must never
-        /// REVEAL the new target's tooltip: the same guard rationale as
-        /// the click-focus exclusion in
-        /// `updateCanvasTooltipIntentForFocusVisibleChange` (Base UI's
-        /// focus-visible gate against click-focus opens) — only
-        /// keyboard focus-VISIBLE proves navigation deliberate enough
-        /// to explain. But a focus-OWNED tooltip whose keyboard hold
-        /// the move just broke must not stay painted (the blur-hides
-        /// contract), and hiding it opens no warm window: warmth is a
-        /// pointer-sweep courtesy, and nothing swept. Pointer-owned
-        /// tooltips are untouched — hover holds them, and a focus move
-        /// says nothing about where the pointer is.
+        /// through `focusAutomationCanvasWidget`). Programmatic focus
+        /// writes on the pointer contract, so it never reveals and only
+        /// releases a focus-owned hold (see the `.programmatic_focus`
+        /// arm of the choke point).
         pub fn updateCanvasTooltipIntentForProgrammaticFocusMove(self: *Runtime, view_index: usize) anyerror!void {
-            const view = &self.views[view_index];
-            if (view.canvas_tooltip_shown_id == 0 or !view.canvas_tooltip_shown_from_focus) return;
-            view.canvas_tooltip_shown_id = 0;
-            view.canvas_tooltip_shown_owner_id = 0;
-            view.canvas_tooltip_shown_from_focus = false;
-            try commitCanvasTooltipVisibility(self, view_index);
+            try reconcileCanvasTooltipIntent(self, view_index, .programmatic_focus);
         }
 
         /// Keyboard activation (Space/Enter on the focused trigger)
@@ -1134,51 +1418,20 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             return b == null;
         }
 
-        /// Scroll moved content under a (possibly stationary) pointer:
-        /// reconcile the hover against the new layout, then step the
-        /// tooltip intent machine on the hover-target transition
-        /// exactly like a pointer move would — a trigger scrolled out
-        /// from under the pointer disarms its pending reveal and hides
-        /// its shown tooltip (usual warm window), and a trigger the
-        /// scroll brings under the pointer arms the normal delay. The
-        /// intent step is deliberately point-blind (immediate-hide
-        /// semantics, no transit corridor): the pointer did not move,
-        /// the content did, and a scroll is the reader moving on —
-        /// Base UI closes open tooltips on scroll for the same reason.
-        ///
-        /// `point` is the live pointer position when the path has one
-        /// (the wheel). Paths without one — kinetic steps, native
-        /// drivers, keyboard scrolling — pass null and borrow the
-        /// view's last JOURNALED pointer position instead: the pointer
-        /// is stationary, so re-hit-testing where it last stood against
-        /// the post-scroll tree is sound, and hover ownership follows
-        /// the content honestly (a trigger scrolled out from under the
-        /// pointer releases; one scrolled under it arms). Base UI
-        /// simply closes on scroll; we do strictly better exactly
-        /// where that re-hit-test is sound. Where it is NOT — no
-        /// pointer position was ever recorded (a keyboard-only
-        /// session) or the pointer left the view (`.cancel` cleared
-        /// the store) — pointer tooltip intent CLOSES rather than
-        /// guesses. Whichever position is used re-seeds the corridor
-        /// apex for whatever the scroll armed or warm-showed, so a
-        /// later leave fans out from the truth.
+        /// The scroll seam: content moved under a (possibly stationary)
+        /// pointer — the wheel passes its live position, and the paths
+        /// without one (kinetic steps, native drivers, keyboard
+        /// scrolling) pass null to borrow the view's last JOURNALED
+        /// pointer position. The choke point re-hit-tests that
+        /// position, re-checks the content hold against the tooltip's
+        /// post-scroll frame, and steps the transitions point-blind
+        /// (immediate-hide semantics, no transit corridor: the pointer
+        /// did not move, the content did — Base UI closes open tooltips
+        /// on scroll for the same reason; we do strictly better exactly
+        /// where the re-hit-test is sound, and CLOSE pointer intent
+        /// where it is not).
         pub fn reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self: *Runtime, view_index: usize, point: ?geometry.PointF) anyerror!void {
-            const effective_point = point orelse self.views[view_index].canvas_last_pointer_position orelse {
-                self.views[view_index].reconcileCanvasWidgetRenderStateAfterScroll(null);
-                try closeCanvasTooltipPointerIntent(self, view_index);
-                return;
-            };
-            const previous_hovered_id = self.views[view_index].canvas_widget_hovered_id;
-            self.views[view_index].reconcileCanvasWidgetRenderStateAfterScroll(effective_point);
-            const next_hovered_id = self.views[view_index].canvas_widget_hovered_id;
-            if (next_hovered_id == previous_hovered_id) return;
-            try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, null);
-            const view = &self.views[view_index];
-            if (next_hovered_id != 0 and (view.canvas_tooltip_armed_owner_id == next_hovered_id or
-                (view.canvas_tooltip_shown_owner_id == next_hovered_id and !view.canvas_tooltip_shown_from_focus)))
-            {
-                view.canvas_tooltip_pointer_from = effective_point;
-            }
+            try reconcileCanvasTooltipIntent(self, view_index, if (point) |value| .{ .wheel_scroll = value } else .point_blind_scroll);
         }
 
         /// Close the POINTER's whole tooltip conversation — armed
@@ -1207,70 +1460,25 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             try commitCanvasTooltipVisibility(self, view_index);
         }
 
-        /// A rebuild adopted a new tree under a (possibly stationary)
-        /// pointer — the layout sibling of the point-blind scroll
-        /// reconcile above, called by `setCanvasWidgetLayout` after
-        /// adoption (copy, tween pose restores) settles the frames the
-        /// user actually sees. The adoption prune validates only
-        /// tooltip/owner IDENTITY and hover survives by ID, so without
-        /// this step a rebuild that MOVED the same-ID trigger away from
-        /// the stationary pointer left armed intent able to fire — and
-        /// a shown tooltip visible — until the next real pointer event.
-        ///
-        /// With a trustworthy stored position, re-hit-test it against
-        /// the adopted tree exactly like the blind-scroll path: hover
-        /// ownership follows the content honestly (wash and cursor
-        /// included), and the hover transition steps the intent machine
-        /// per normal rules — armed disarms, shown hides with the usual
-        /// warmth, a trigger arriving under the pointer arms (or
-        /// warm-shows) with the corridor apex seeded from the stored
-        /// truth. On top of that, the content HOLD is re-checked
-        /// against the tooltip's NEW frame, which the transition gate
-        /// cannot see (a content-held tooltip reads hovered_id == 0 on
-        /// both sides of the rebuild): still inside the adopted frame —
-        /// or still on the owner — keeps the hold and re-seeds the
-        /// apex; moved out from under the pointer hides on the rebuild
-        /// itself. Deliberately NO transit corridor for that hide: the
-        /// content moved, not the pointer (the blind-scroll doctrine),
-        /// and a corridor hold here would let continuous rebuilds
-        /// re-arm the bounded grace forever under a stationary pointer.
-        ///
-        /// With no trustworthy position (a keyboard-only session, or
-        /// the pointer left the view), the pointer's whole tooltip
-        /// conversation closes — the blind-scroll close policy.
-        /// Focus-shown tooltips survive every arm of this: the
-        /// keyboard holds them, and the adoption prune already handles
-        /// a binding the rebuild actually broke.
+        /// The adoption seam: a rebuild adopted a new tree under a
+        /// (possibly stationary) pointer — called by
+        /// `setCanvasWidgetLayout` after adoption (copy, tween pose
+        /// restores) settles the frames the user actually sees. The
+        /// adoption prune validates only tooltip/owner IDENTITY and
+        /// hover survives by ID, so without this step a rebuild that
+        /// MOVED the same-ID trigger away from the stationary pointer
+        /// left armed intent able to fire — and a shown tooltip
+        /// visible — until the next real pointer event. The choke point
+        /// re-hit-tests the stored position, re-checks the content hold
+        /// against the tooltip's ADOPTED frame, and steps transitions
+        /// per the normal rules (or closes pointer intent when no
+        /// trustworthy position exists); this thin caller only wraps it
+        /// in the repaint echo a re-hit-tested wash or cursor owes.
         pub fn reconcileCanvasWidgetInteractionAfterLayoutAdoption(self: *Runtime, view_index: usize) anyerror!void {
             const view = &self.views[view_index];
             const previous_state = view.canvasWidgetRenderState();
             const previous_cursor = view.canvas_widget_cursor;
-            const point = view.canvas_last_pointer_position orelse {
-                view.reconcileCanvasWidgetRenderStateAfterScroll(null);
-                try closeCanvasTooltipPointerIntent(self, view_index);
-                try invalidateForCanvasWidgetAdoptionReconcile(self, view_index, previous_state, previous_cursor);
-                return;
-            };
-            const previous_hovered_id = view.canvas_widget_hovered_id;
-            view.reconcileCanvasWidgetRenderStateAfterScroll(point);
-            const next_hovered_id = view.canvas_widget_hovered_id;
-            // The content-hold re-check, BEFORE the transition step so
-            // a hover arriving on a new trigger arms against the
-            // settled shown slot (the transition step's own
-            // held-by-content test then agrees with this resolution).
-            if (view.canvas_tooltip_shown_id != 0 and !view.canvas_tooltip_shown_from_focus) {
-                const on_owner = next_hovered_id != 0 and next_hovered_id == view.canvas_tooltip_shown_owner_id;
-                if (on_owner or canvasTooltipShownContentContains(view, point)) {
-                    view.canvas_tooltip_pointer_from = point;
-                    view.canvas_tooltip_transit_deadline_ns = 0;
-                } else {
-                    hideShownCanvasTooltipWithWarmth(view, canvasRenderAnimationStartNsForView(view));
-                    try commitCanvasTooltipVisibility(self, view_index);
-                }
-            }
-            if (next_hovered_id != previous_hovered_id) {
-                try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, point);
-            }
+            try reconcileCanvasTooltipIntent(self, view_index, .layout_adoption);
             try invalidateForCanvasWidgetAdoptionReconcile(self, view_index, previous_state, previous_cursor);
         }
 
@@ -1740,9 +1948,9 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             self.views[view_index].canvas_widget_focus_visible_id = target_id;
             // Keyboard focus-visible is the tooltip's second reveal
             // path: landing on a tooltip-owning trigger shows it
-            // immediately, moving on hides the previous one (see
-            // updateCanvasTooltipIntentForFocusVisibleChange).
-            try updateCanvasTooltipIntentForFocusVisibleChange(self, view_index, target_id);
+            // immediately, moving on hides the previous one (the
+            // `.focus_visible` cause of the intent choke point).
+            try reconcileCanvasTooltipIntent(self, view_index, .{ .focus_visible = target_id });
             // Keyboard focus landing on an editable establishes a caret:
             // without a selection the emitters draw no caret line, so a
             // tabbed-into field would render its ring but no insertion

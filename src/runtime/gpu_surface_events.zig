@@ -184,15 +184,19 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 if (runtimeFindViewIndex(self, input_event.window_id, input_event.label)) |index| {
                     self.views[index].recordGpuSurfaceInputTimestamp(input_event.timestamp_ns);
                 }
+                // The whole consumed stream still feeds the tooltip
+                // intent choke point: every pointer-carrying event
+                // updates the stored position (a later point-blind
+                // reconcile must hit-test where the pointer really is),
+                // the secondary down resets the machine before the menu
+                // presents ("pointer-down dismisses" holds for EVERY
+                // button — no tooltip floats behind or over the native
+                // menu), and a consumed cancel is still the pointer
+                // leaving the view.
+                try CanvasWidgetEventMethods().reconcileCanvasTooltipIntentForConsumedPointerInput(self, input_event);
                 if (input_event.kind == .pointer_down) {
                     try setFocusedView(self, input_event.window_id, input_event.label);
                     self.invalidated = true;
-                    // "Pointer-down dismisses" holds for EVERY button:
-                    // the secondary down consumed by the context-menu
-                    // gesture resets the tooltip machine before the
-                    // menu presents, so no tooltip floats behind (or
-                    // over) the native menu.
-                    try CanvasWidgetEventMethods().updateCanvasTooltipIntentForPressInput(self, input_event.window_id, input_event.label);
                     try ContextMenuMethods().presentCanvasWidgetContextMenuFromPointer(self, app, input_event);
                 }
                 try self.dispatchEvent(app, .{ .gpu_surface_input = input_event });
@@ -256,10 +260,14 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 window_drag_started = try CanvasWidgetEventMethods().startCanvasWidgetWindowDragFromPointer(self, input_event, pointer_event.*);
                 if (window_drag_started) {
                     // The drag consumed the down, but "pointer-down
-                    // dismisses" still holds: the OS owning the pointer
-                    // from here must not strand an armed or shown
-                    // tooltip (the matching up may never arrive).
-                    try CanvasWidgetEventMethods().updateCanvasTooltipIntentForPressInput(self, pointer_event.window_id, pointer_event.view_label);
+                    // dismisses" still holds — and the down still
+                    // carried a position the intent machine must
+                    // record: the OS owning the pointer from here must
+                    // not strand an armed or shown tooltip (the
+                    // matching up may never arrive), and a later
+                    // point-blind reconcile must hit-test where the
+                    // pointer really went down.
+                    try CanvasWidgetEventMethods().reconcileCanvasTooltipIntentForConsumedPointerInput(self, input_event);
                 } else {
                     try CanvasWidgetEventMethods().updateCanvasWidgetControlFromPointer(self, pointer_event.*);
                     try CanvasWidgetEventMethods().updateCanvasWidgetInteractionFromPointer(self, pointer_event.*);

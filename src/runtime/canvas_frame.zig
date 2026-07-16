@@ -1137,9 +1137,15 @@ pub fn RuntimeCanvasFrames(comptime Runtime: type) type {
                 // An armed tooltip show delay — and a running anchor-gap
                 // transit grace — only fire on a presented frame's
                 // timestamp, so frames must keep coming while either is
-                // pending: the render-animation pump's policy. Settled
-                // shown tooltips and the warm window need no pump: both
-                // step on journaled input timestamps.
+                // pending: the render-animation pump's policy. This
+                // per-frame leg takes over from the FIRST invalidation,
+                // which the intent choke point kicks the moment any
+                // deadline arms (reconcileCanvasTooltipIntent step 5 —
+                // a deadline armed by an event that repainted nothing
+                // would otherwise wait forever for a frame nothing
+                // requested). Settled shown tooltips and the warm
+                // window need no pump: both step on journaled input
+                // timestamps.
                 if (self.views[index].canvasTooltipIntentArmed()) {
                     self.invalidateFor(.state, self.views[index].frame);
                 }

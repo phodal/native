@@ -974,6 +974,36 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             return b == null;
         }
 
+        /// Scroll moved content under a (possibly stationary) pointer:
+        /// reconcile the hover against the new layout, then step the
+        /// tooltip intent machine on the hover-target transition
+        /// exactly like a pointer move would — a trigger scrolled out
+        /// from under the pointer disarms its pending reveal and hides
+        /// its shown tooltip (usual warm window), and a trigger the
+        /// scroll brings under the pointer arms the normal delay. The
+        /// step is deliberately point-blind (immediate-hide semantics,
+        /// no transit corridor): the pointer did not move, the content
+        /// did, and a scroll is the reader moving on — Base UI closes
+        /// open tooltips on scroll for the same reason. `point` is the
+        /// live pointer position when the path has one (the wheel); it
+        /// re-seeds the corridor apex for whatever the scroll armed or
+        /// warm-showed, so a later leave fans out from the truth.
+        pub fn reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self: *Runtime, view_index: usize, point: ?geometry.PointF) anyerror!void {
+            const previous_hovered_id = self.views[view_index].canvas_widget_hovered_id;
+            self.views[view_index].reconcileCanvasWidgetRenderStateAfterScroll(point);
+            const next_hovered_id = self.views[view_index].canvas_widget_hovered_id;
+            if (next_hovered_id == previous_hovered_id) return;
+            try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, null);
+            if (point) |value| {
+                const view = &self.views[view_index];
+                if (next_hovered_id != 0 and (view.canvas_tooltip_armed_owner_id == next_hovered_id or
+                    (view.canvas_tooltip_shown_owner_id == next_hovered_id and !view.canvas_tooltip_shown_from_focus)))
+                {
+                    view.canvas_tooltip_pointer_from = value;
+                }
+            }
+        }
+
         pub fn updateCanvasWidgetScrollFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) anyerror!void {
             if (pointer_event.pointer.phase != .wheel) return;
             const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
@@ -981,7 +1011,7 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
 
             const dirty = try self.views[index].applyCanvasWidgetScrollRoute(pointer_event.route, pointer_event.pointer.delta.dy, .wheel) orelse return;
             const previous_cursor = self.views[index].canvas_widget_cursor;
-            self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(pointer_event.pointer.point);
+            try reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self, index, pointer_event.pointer.point);
             if (previous_cursor != self.views[index].canvas_widget_cursor) try syncCanvasWidgetCursorForView(self, index);
             if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
                 self.invalidateFor(.state, dirty_region);
@@ -1198,7 +1228,7 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const dirty = try self.views[index].applyCanvasWidgetControlKeyboard(target.id, keyboard_event.keyboard) orelse return;
             if (toggle_animation) |animation| try runtime_canvas_widget_display.RuntimeCanvasWidgetDisplay(Runtime).scheduleCanvasWidgetToggleAnimation(self, index, animation);
             const previous_cursor = self.views[index].canvas_widget_cursor;
-            if (target.kind == .scroll_view) self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
+            if (target.kind == .scroll_view) try reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self, index, null);
             if (previous_cursor != self.views[index].canvas_widget_cursor) try syncCanvasWidgetCursorForView(self, index);
             if (canvasDirtyRegionForView(self.views[index].frame, dirty)) |dirty_region| {
                 self.invalidateFor(.state, dirty_region);

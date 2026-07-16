@@ -266,7 +266,7 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
 
             const dirty = try self.views[index].stepCanvasWidgetKineticScroll(dt_ms) orelse return self.views[index].info();
             const previous_cursor = self.views[index].canvas_widget_cursor;
-            self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
+            try CanvasWidgetEventMethods(Runtime).reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self, index, null);
             if (previous_cursor != self.views[index].canvas_widget_cursor) try CanvasWidgetEventMethods(Runtime).syncCanvasWidgetCursorForView(self, index);
             try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, index, dirty);
             _ = try CanvasWidgetDisplayMethods(Runtime).refreshCanvasWidgetDisplayListIfOwned(self, index);

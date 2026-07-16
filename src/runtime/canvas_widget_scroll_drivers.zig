@@ -128,7 +128,7 @@ pub fn RuntimeCanvasWidgetScrollDrivers(comptime Runtime: type) type {
             const dirty = try self.views[index].applyCanvasWidgetScrollDriverOffset(node_index, event.offset_y) orelse return;
 
             const previous_cursor = self.views[index].canvas_widget_cursor;
-            self.views[index].reconcileCanvasWidgetRenderStateAfterScroll(null);
+            try CanvasWidgetEventMethods().reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self, index, null);
             if (previous_cursor != self.views[index].canvas_widget_cursor) {
                 try CanvasWidgetEventMethods().syncCanvasWidgetCursorForView(self, index);
             }

@@ -419,12 +419,27 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             // Anchored-tooltip hover intent steps on hover-target
             // transitions (a pointer gliding within one trigger is
             // free); the armed delay itself fires on presented-frame
-            // timestamps in advanceCanvasTooltipIntentForFrame. A
-            // .cancel carries no trustworthy position, so it steps the
-            // machine point-blind (immediate hide semantics).
-            const tooltip_intent_point: ?geometry.PointF = if (pointer_event.pointer.phase == .cancel) null else pointer_event.pointer.point;
-            if (self.views[index].canvas_widget_hovered_id != next_hovered_id) {
-                try updateCanvasTooltipIntentForHoverChange(self, index, next_hovered_id, tooltip_intent_point);
+            // timestamps in advanceCanvasTooltipIntentForFrame.
+            //
+            // `.cancel` — the pointer LEAVING the view (mouseExited
+            // and kin) — short-circuits AHEAD of the transition gate:
+            // its immediate-hide semantics must not depend on a hover
+            // TRANSITION existing, and for a pointer-shown tooltip
+            // held open by its own hovered content there is none —
+            // the tooltip is not a hit target, so the hold already
+            // reads hovered_id == 0 and a cancel-to-0 is no
+            // transition. The close resets every pointer-owned slot
+            // (armed, pointer-shown including content-held, warm
+            // window, corridor state); the FOCUS-shown tooltip
+            // survives — the keyboard holds it and the pointer's
+            // departure says nothing about it. (View blur is the
+            // KEYBOARD leaving, which is why
+            // resetCanvasTooltipIntentForViewBlur clears focus-shown
+            // too while this path deliberately does not.)
+            if (pointer_event.pointer.phase == .cancel) {
+                try closeCanvasTooltipPointerIntent(self, index);
+            } else if (self.views[index].canvas_widget_hovered_id != next_hovered_id) {
+                try updateCanvasTooltipIntentForHoverChange(self, index, next_hovered_id, pointer_event.pointer.point);
             }
             // While a pointer-shown tooltip is up, EVERY move also steps
             // the travel check: crossing the anchor gap or gliding over
@@ -494,9 +509,12 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         /// transition, when one exists: it lets a SHOWN tooltip hold
         /// through a move into its own frame or across the anchor gap
         /// (see `updateCanvasTooltipIntentForPointerTravel`). Pass null
-        /// for point-blind steps — pointer cancel, and scroll paths
-        /// without a live pointer position — which keep the classic
-        /// immediate-hide semantics.
+        /// for point-blind steps — the scroll paths, which are
+        /// deliberately corridor-free — to keep the classic
+        /// immediate-hide semantics. (Pointer `.cancel` never reaches
+        /// here: it closes the whole pointer conversation through
+        /// `closeCanvasTooltipPointerIntent` ahead of the transition
+        /// gate.)
         fn updateCanvasTooltipIntentForHoverChange(self: *Runtime, view_index: usize, next_hovered_id: canvas.ObjectId, point: ?geometry.PointF) anyerror!void {
             const view = &self.views[view_index];
             const now_ns = canvasRenderAnimationStartNsForView(view);
@@ -1147,7 +1165,7 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         pub fn reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self: *Runtime, view_index: usize, point: ?geometry.PointF) anyerror!void {
             const effective_point = point orelse self.views[view_index].canvas_last_pointer_position orelse {
                 self.views[view_index].reconcileCanvasWidgetRenderStateAfterScroll(null);
-                try closeCanvasTooltipPointerIntentForBlindScroll(self, view_index);
+                try closeCanvasTooltipPointerIntent(self, view_index);
                 return;
             };
             const previous_hovered_id = self.views[view_index].canvas_widget_hovered_id;
@@ -1163,17 +1181,20 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             }
         }
 
-        /// The staleness arm of the point-blind reconcile: with no
-        /// trustworthy pointer position, the pointer's whole tooltip
-        /// conversation closes — armed reveal, pointer-shown tooltip,
-        /// warm window, transit grace — Base UI's close-on-scroll,
-        /// applied exactly where the re-hit-test upgrade above is
-        /// unsound. No warmth survives: an instant re-show is a
-        /// courtesy earned by a pointer we cannot place. A focus-SHOWN
-        /// tooltip stays — the keyboard holds it (it scrolls with its
-        /// anchored trigger), and blur, focus moves, and activation
-        /// own its lifecycle.
-        fn closeCanvasTooltipPointerIntentForBlindScroll(self: *Runtime, view_index: usize) anyerror!void {
+        /// Close the POINTER's whole tooltip conversation — armed
+        /// reveal, pointer-shown tooltip, warm window, transit grace —
+        /// while a focus-SHOWN tooltip stays: the keyboard holds it,
+        /// and blur, focus moves, and activation own its lifecycle.
+        /// Two callers share this shape, both places where the pointer
+        /// cannot be placed on the tree:
+        ///   - the point-blind scroll reconcile's staleness arm (no
+        ///     trustworthy position to re-hit-test — Base UI's
+        ///     close-on-scroll, applied exactly where the re-hit-test
+        ///     upgrade is unsound);
+        ///   - pointer `.cancel` (the pointer LEFT the view).
+        /// No warmth survives either one: an instant re-show is a
+        /// courtesy earned by a pointer we cannot place.
+        fn closeCanvasTooltipPointerIntent(self: *Runtime, view_index: usize) anyerror!void {
             const view = &self.views[view_index];
             view.canvas_tooltip_armed_id = 0;
             view.canvas_tooltip_armed_owner_id = 0;

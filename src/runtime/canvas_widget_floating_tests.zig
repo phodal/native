@@ -1132,6 +1132,57 @@ test "a collinear apex holds only the corridor's segment, never the infinite lin
     try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_transit_deadline_ns);
 }
 
+test "pointer cancel dismisses the content-held tooltip immediately, focus-shown survives" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-cancel-held", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Earn Bold's tooltip, then park the pointer INSIDE the tooltip's
+    // own frame: the content hold — and, because the tooltip is not a
+    // hit target, hovered_id is already 0 here, so a cancel-to-0 is no
+    // hover transition and the transition gate alone cannot see it.
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0);
+    try tooltipFrame(harness, app, tooltip_t0 + 600 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+    const tooltip_frame = try tooltipNodeFrame(harness, toolbar.tooltip_ids[0]);
+    try tooltipHover(harness, app, tooltip_frame.center(), tooltip_t0 + 700 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // The pointer leaves the view: cancel's immediate-hide semantics
+    // hold for the content-held tooltip too — hidden on the cancel
+    // itself, warm window closed, stored position gone, and no frame
+    // ever resurrects it.
+    try tooltipPointer(harness, app, .pointer_cancel, tooltip_frame.center(), tooltip_t0 + 800 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_transit_deadline_ns);
+    try std.testing.expect(harness.runtime.views[0].canvas_last_pointer_position == null);
+    try tooltipFrame(harness, app, tooltip_t0 + 1500 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // A FOCUS-shown tooltip survives a pointer cancel: the keyboard
+    // holds it, and the pointer's departure says nothing about it —
+    // unlike view blur, where the keyboard itself leaves.
+    try tooltipKey(harness, app, "tab", tooltip_t0 + 1600 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+    try tooltipPointer(harness, app, .pointer_cancel, .{ .x = 5, .y = 150 }, tooltip_t0 + 1700 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+}
+
 /// A scrollable toolbar column: a scroll_view whose two stacks each
 /// wrap a trigger button and its anchored tooltip, viewport 40 points
 /// tall so a 40-point scroll swaps which trigger sits under a
@@ -1365,21 +1416,25 @@ test "point-blind scrolls without a trustworthy pointer position close tooltip i
     try installTooltipScrollFixture(harness, app, true);
 
     // The pointer LEAVES the view mid-conversation: earn One's tooltip,
-    // then the exit's pointer_cancel hides it (with the pointer-hide
-    // warm window) and clears the stored position.
+    // then the exit's pointer_cancel closes the whole pointer-owned
+    // conversation (shown tooltip AND warm window — no courtesy for a
+    // pointer that left) and clears the stored position.
     try tooltipPointer(harness, app, .pointer_down, .{ .x = 12, .y = 36 }, tooltip_t0);
     try tooltipPointer(harness, app, .pointer_up, .{ .x = 12, .y = 36 }, tooltip_t0 + 20 * tooltip_ms);
     try tooltipHover(harness, app, .{ .x = 12, .y = 12 }, tooltip_t0 + 50 * tooltip_ms);
     try std.testing.expectEqual(@as(canvas.ObjectId, 5), harness.runtime.views[0].canvas_tooltip_shown_id);
     try tooltipPointer(harness, app, .pointer_cancel, .{ .x = 12, .y = 12 }, tooltip_t0 + 100 * tooltip_ms);
     try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
-    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_warm_until_ns != 0);
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
     try std.testing.expect(harness.runtime.views[0].canvas_last_pointer_position == null);
 
     // A keyboard scroll now has no position to re-hit-test: the
     // pointer's tooltip conversation CLOSES — the warm window included
     // (an instant re-show is earned by a pointer we cannot place) —
-    // instead of guessing where the departed pointer might be.
+    // instead of guessing where the departed pointer might be. Seed a
+    // smoldering warm window directly (cancel already closed the real
+    // one) so the blind scroll's own close stays observable.
+    harness.runtime.views[0].canvas_tooltip_warm_until_ns = tooltip_t0 + 5000 * tooltip_ms;
     try tooltipKey(harness, app, "end", tooltip_t0 + 200 * tooltip_ms);
     try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
     try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);

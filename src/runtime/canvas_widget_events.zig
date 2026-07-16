@@ -722,6 +722,20 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         /// moving focus off the trigger, so the broad reset never fights
         /// the narrower paths, and it keeps window-drag and capture
         /// corners honest.
+        /// The press reset, keyed by the raw input's view identity: the
+        /// entry point for pointer-downs that never reach the widget
+        /// press pipeline — secondary-button downs consumed by the
+        /// context-menu gesture and primary downs consumed by a
+        /// window-drag region. "Pointer-down dismisses" is documented
+        /// for ANY down (shadcn's Base UI-backed default; macOS help
+        /// tags vanish on any click), so those consumed downs must
+        /// reset the machine too.
+        pub fn updateCanvasTooltipIntentForPressInput(self: *Runtime, window_id: platform.WindowId, label: []const u8) anyerror!void {
+            const index = runtimeFindViewIndex(self, window_id, label) orelse return;
+            if (self.views[index].kind != .gpu_surface) return;
+            try updateCanvasTooltipIntentForPress(self, index);
+        }
+
         fn updateCanvasTooltipIntentForPress(self: *Runtime, view_index: usize) anyerror!void {
             const view = &self.views[view_index];
             view.canvas_tooltip_armed_id = 0;

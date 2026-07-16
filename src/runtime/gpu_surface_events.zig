@@ -187,6 +187,12 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 if (input_event.kind == .pointer_down) {
                     try setFocusedView(self, input_event.window_id, input_event.label);
                     self.invalidated = true;
+                    // "Pointer-down dismisses" holds for EVERY button:
+                    // the secondary down consumed by the context-menu
+                    // gesture resets the tooltip machine before the
+                    // menu presents, so no tooltip floats behind (or
+                    // over) the native menu.
+                    try CanvasWidgetEventMethods().updateCanvasTooltipIntentForPressInput(self, input_event.window_id, input_event.label);
                     try ContextMenuMethods().presentCanvasWidgetContextMenuFromPointer(self, app, input_event);
                 }
                 try self.dispatchEvent(app, .{ .gpu_surface_input = input_event });
@@ -248,7 +254,13 @@ pub fn RuntimeGpuSurfaceEvents(comptime Runtime: type) type {
                 // click on the native titlebar. Dismissal above still ran:
                 // clicking the header closes an open surface first.
                 window_drag_started = try CanvasWidgetEventMethods().startCanvasWidgetWindowDragFromPointer(self, input_event, pointer_event.*);
-                if (!window_drag_started) {
+                if (window_drag_started) {
+                    // The drag consumed the down, but "pointer-down
+                    // dismisses" still holds: the OS owning the pointer
+                    // from here must not strand an armed or shown
+                    // tooltip (the matching up may never arrive).
+                    try CanvasWidgetEventMethods().updateCanvasTooltipIntentForPressInput(self, pointer_event.window_id, pointer_event.view_label);
+                } else {
                     try CanvasWidgetEventMethods().updateCanvasWidgetControlFromPointer(self, pointer_event.*);
                     try CanvasWidgetEventMethods().updateCanvasWidgetInteractionFromPointer(self, pointer_event.*);
                     // The text pass may stamp a clear edit onto the

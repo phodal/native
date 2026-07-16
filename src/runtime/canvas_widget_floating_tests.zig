@@ -1356,6 +1356,108 @@ test "keyboard activation dismisses the focus-shown tooltip like a press" {
     try std.testing.expectEqual(toolbar.tooltip_ids[1], harness.runtime.views[0].canvas_tooltip_shown_id);
 }
 
+test "a secondary-button down dismisses the shown tooltip and the context menu still presents" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-right-click", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 200),
+    });
+
+    // A trigger that declares a context menu AND owns an anchored
+    // tooltip (delay 0 so the hover itself shows it).
+    const items = [_]canvas.WidgetContextMenuItem{
+        .{ .label = "Rename" },
+        .{ .label = "Delete" },
+    };
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(10, 80, 96, 32), .text = "Run", .context_menu = &items },
+        .{ .id = 3, .kind = .tooltip, .text = "Runs the job", .tooltip_delay_ms = 0, .layout = .{ .anchor = .{ .placement = .above } } },
+    };
+    var nodes: [4]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try tooltipHover(harness, app, .{ .x = 58, .y = 96 }, tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!try tooltipHidden(harness, 3));
+
+    // The secondary down is consumed by the context-menu gesture and
+    // never reaches the widget press pipeline — but "pointer-down
+    // dismisses" holds for every button: the tooltip is gone (warm
+    // window included) and the native menu presents over clean glass.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .pointer_down,
+        .button = 1,
+        .x = 58,
+        .y = 96,
+        .timestamp_ns = tooltip_t0 + 100 * tooltip_ms,
+    } });
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 3));
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.context_menu_request_count);
+}
+
+test "a window-drag down dismisses the shown tooltip before the OS takes the pointer" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-window-drag", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 320, 200),
+    });
+
+    // A hidden-titlebar shape: a window-drag header row above a trigger
+    // that owns an anchored tooltip (delay 0).
+    const trigger_children = [_]canvas.Widget{
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(10, 80, 96, 32), .text = "Run" },
+        .{ .id = 4, .kind = .tooltip, .text = "Runs the job", .tooltip_delay_ms = 0, .layout = .{ .anchor = .{ .placement = .above } } },
+    };
+    const children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .row, .frame = geometry.RectF.init(0, 0, 320, 40), .window_drag = true },
+        .{ .id = 5, .kind = .stack, .frame = geometry.RectF.init(0, 40, 320, 160), .children = &trigger_children },
+    };
+    var nodes: [6]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    try tooltipHover(harness, app, .{ .x = 58, .y = 136 }, tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 4), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // The primary down on the drag header hands the gesture to the OS
+    // and skips the whole widget press pipeline — but the press reset
+    // still runs: no tooltip may float while the window moves.
+    try tooltipPointer(harness, app, .pointer_down, .{ .x = 160, .y = 20 }, tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.window_drag_start_count);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 4));
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
+}
+
 /// A raw-widget tooltip fixture with EXPLICIT ids (the rebuild tests
 /// swap trees, so ids must be author-controlled): a stack wrapping a
 /// trigger button (id 2) and its anchored tooltip (id 3),

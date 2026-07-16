@@ -1169,7 +1169,7 @@ test "wheel scroll steps the tooltip intent machine like a pointer move" {
     try std.testing.expect(harness.runtime.views[0].canvas_tooltip_warm_until_ns != 0);
 }
 
-test "keyboard scrolling a shown tooltip's trigger out of the tree hides it" {
+test "keyboard scrolling re-hit-tests the stationary pointer against the post-scroll tree" {
     const harness = try TestHarness().create(std.testing.allocator, .{});
     defer harness.destroy(std.testing.allocator);
     const TestApp = struct {
@@ -1190,15 +1190,162 @@ test "keyboard scrolling a shown tooltip's trigger out of the tree hides it" {
     try tooltipHover(harness, app, .{ .x = 12, .y = 12 }, tooltip_t0 + 50 * tooltip_ms);
     try std.testing.expectEqual(@as(canvas.ObjectId, 5), harness.runtime.views[0].canvas_tooltip_shown_id);
 
-    // End scrolls the focused scroll view to its bottom: trigger One
-    // leaves the interactive tree (clipped out), the hover reconcile
-    // clears it, and the SAME machine step hides its tooltip — the
-    // point-blind scroll path (kinetic steps and native drivers share
-    // this exact reconcile).
+    // End scrolls the focused scroll view to its bottom. The keyboard
+    // scroll carries no pointer position of its own, so the reconcile
+    // re-hit-tests the STORED one (the pointer is stationary at 12,12):
+    // trigger One scrolled out from under it — its tooltip hides with
+    // the usual warm window — and trigger Two arrived under it, so the
+    // warm window transfers the show exactly as a wheel scroll (or a
+    // real pointer move) would. Kinetic steps and native drivers share
+    // this exact reconcile.
     try tooltipKey(harness, app, "end", tooltip_t0 + 100 * tooltip_ms);
-    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 7), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_shown_owner_id);
+    try std.testing.expect(try tooltipHidden(harness, 5));
+    try std.testing.expect(!try tooltipHidden(harness, 7));
+
+    // Home scrolls back to the top: Two leaves from under the pointer,
+    // One returns beneath it, and the warm transfer swaps the shown
+    // tooltip back — symmetric with the wheel path's sweep.
+    try tooltipKey(harness, app, "home", tooltip_t0 + 200 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 5), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 7));
+    try std.testing.expect(!try tooltipHidden(harness, 5));
+}
+
+test "a keyboard scroll hides the shown tooltip whose trigger stays partially visible but slid off the pointer" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-scroll-partial", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    // Tall triggers in a short viewport: a page scroll leaves One
+    // PARTIALLY visible, the exact hole the old point-blind
+    // reconciliation fell into — the trigger still existed in the
+    // interactive tree, so hover ownership (and the shown tooltip)
+    // was retained even though the stationary pointer no longer sat
+    // on it.
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 160, 40),
+    });
+    const first_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 160, 36), .text = "One" },
+        .{ .id = 5, .kind = .tooltip, .text = "First action", .tooltip_delay_ms = 0, .layout = .{ .anchor = .{ .placement = .below } } },
+    };
+    const second_children = [_]canvas.Widget{
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 0, 160, 36), .text = "Two" },
+        .{ .id = 7, .kind = .tooltip, .text = "Second action", .layout = .{ .anchor = .{ .placement = .below } } },
+    };
+    const stacks = [_]canvas.Widget{
+        .{ .id = 4, .kind = .stack, .frame = geometry.RectF.init(0, 8, 160, 36), .children = &first_children },
+        .{ .id = 6, .kind = .stack, .frame = geometry.RectF.init(0, 78, 160, 36), .children = &second_children },
+    };
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(
+        .{ .id = 1, .kind = .scroll_view, .children = &stacks },
+        geometry.RectF.init(0, 0, 160, 40),
+        &nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // Focus the scroll view via the gap above One, then earn One's
+    // tooltip (delay 0) with the pointer parked at (12, 26).
+    try tooltipPointer(harness, app, .pointer_down, .{ .x = 12, .y = 4 }, tooltip_t0);
+    try tooltipPointer(harness, app, .pointer_up, .{ .x = 12, .y = 4 }, tooltip_t0 + 20 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 1), harness.runtime.views[0].canvas_widget_focused_id);
+    try tooltipHover(harness, app, .{ .x = 12, .y = 26 }, tooltip_t0 + 50 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 5), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // PageDown slides One up so it stays partially visible but ends
+    // above the stationary pointer, which now sits in the gap between
+    // the triggers: hover moves to the scroll view and the shown
+    // tooltip hides — ownership follows the re-hit-test, not the
+    // trigger's mere survival.
+    try tooltipKey(harness, app, "pagedown", tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expect(harness.runtime.views[0].canvasWidgetNodeIndexById(2) != null);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 1), harness.runtime.views[0].canvas_widget_hovered_id);
     try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
     try std.testing.expect(try tooltipHidden(harness, 5));
+
+    // Let the pointer-hide warm window lapse, then PageDown again:
+    // trigger Two scrolls UNDER the stored pointer position and arms
+    // the normal delay — a fresh dwell, not a warm transfer.
+    try tooltipFrame(harness, app, tooltip_t0 + 2000 * tooltip_ms);
+    try tooltipKey(harness, app, "pagedown", tooltip_t0 + 2100 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_hovered_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 7), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_tooltip_armed_owner_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    // The corridor apex re-seeded to the stored position, so the
+    // eventual leave fans out from where the pointer really is.
+    try std.testing.expectEqual(@as(f32, 12), harness.runtime.views[0].canvas_tooltip_pointer_from.x);
+    try std.testing.expectEqual(@as(f32, 26), harness.runtime.views[0].canvas_tooltip_pointer_from.y);
+}
+
+test "point-blind scrolls without a trustworthy pointer position close tooltip intent" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-scroll-blind", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    try installTooltipScrollFixture(harness, app, true);
+
+    // The pointer LEAVES the view mid-conversation: earn One's tooltip,
+    // then the exit's pointer_cancel hides it (with the pointer-hide
+    // warm window) and clears the stored position.
+    try tooltipPointer(harness, app, .pointer_down, .{ .x = 12, .y = 36 }, tooltip_t0);
+    try tooltipPointer(harness, app, .pointer_up, .{ .x = 12, .y = 36 }, tooltip_t0 + 20 * tooltip_ms);
+    try tooltipHover(harness, app, .{ .x = 12, .y = 12 }, tooltip_t0 + 50 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 5), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try tooltipPointer(harness, app, .pointer_cancel, .{ .x = 12, .y = 12 }, tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_warm_until_ns != 0);
+    try std.testing.expect(harness.runtime.views[0].canvas_last_pointer_position == null);
+
+    // A keyboard scroll now has no position to re-hit-test: the
+    // pointer's tooltip conversation CLOSES — the warm window included
+    // (an instant re-show is earned by a pointer we cannot place) —
+    // instead of guessing where the departed pointer might be.
+    try tooltipKey(harness, app, "end", tooltip_t0 + 200 * tooltip_ms);
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_warm_until_ns);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // A KEYBOARD-ONLY session (no pointer event ever): the store was
+    // never seeded, so a point-blind scroll closes whatever intent is
+    // pending rather than inventing a hover. Seed an armed dwell
+    // directly to make the close observable.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .key_down,
+        .key = "home",
+        .timestamp_ns = tooltip_t0 + 300 * tooltip_ms,
+    } });
+    harness.runtime.views[0].canvas_last_pointer_position = null;
+    harness.runtime.views[0].canvas_tooltip_armed_id = 5;
+    harness.runtime.views[0].canvas_tooltip_armed_owner_id = 2;
+    harness.runtime.views[0].canvas_tooltip_deadline_ns = tooltip_t0 + 1000 * tooltip_ms;
+    try tooltipKey(harness, app, "end", tooltip_t0 + 400 * tooltip_ms);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_armed_owner_id);
+    try std.testing.expectEqual(@as(u64, 0), harness.runtime.views[0].canvas_tooltip_deadline_ns);
 }
 
 fn tooltipKey(harness: anytype, app: App, key: []const u8, timestamp_ns: u64) !void {

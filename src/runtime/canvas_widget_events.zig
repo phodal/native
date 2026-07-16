@@ -348,6 +348,18 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, pointer_event.window_id, pointer_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
 
+            // Remember the pointer's last trustworthy position — and
+            // forget it on `.cancel`, which is how the pointer LEAVING
+            // the view arrives (AppKit mouseExited, and the GTK/Win32
+            // equivalents, emit pointer_cancel). The point-blind scroll
+            // reconcile re-hit-tests this stored position; a cleared
+            // store tells it the pointer is gone and it must close
+            // tooltip intent instead of guessing.
+            self.views[index].canvas_last_pointer_position = if (pointer_event.pointer.phase == .cancel)
+                null
+            else
+                pointer_event.pointer.point;
+
             // Hover and cursor resolve through the hover-target walk (the
             // press fall-through): a composite row is ONE interactive
             // surface, so a pointer over the row's own text/icon/badge
@@ -1049,27 +1061,67 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
         /// from under the pointer disarms its pending reveal and hides
         /// its shown tooltip (usual warm window), and a trigger the
         /// scroll brings under the pointer arms the normal delay. The
-        /// step is deliberately point-blind (immediate-hide semantics,
-        /// no transit corridor): the pointer did not move, the content
-        /// did, and a scroll is the reader moving on — Base UI closes
-        /// open tooltips on scroll for the same reason. `point` is the
-        /// live pointer position when the path has one (the wheel); it
-        /// re-seeds the corridor apex for whatever the scroll armed or
-        /// warm-showed, so a later leave fans out from the truth.
+        /// intent step is deliberately point-blind (immediate-hide
+        /// semantics, no transit corridor): the pointer did not move,
+        /// the content did, and a scroll is the reader moving on —
+        /// Base UI closes open tooltips on scroll for the same reason.
+        ///
+        /// `point` is the live pointer position when the path has one
+        /// (the wheel). Paths without one — kinetic steps, native
+        /// drivers, keyboard scrolling — pass null and borrow the
+        /// view's last JOURNALED pointer position instead: the pointer
+        /// is stationary, so re-hit-testing where it last stood against
+        /// the post-scroll tree is sound, and hover ownership follows
+        /// the content honestly (a trigger scrolled out from under the
+        /// pointer releases; one scrolled under it arms). Base UI
+        /// simply closes on scroll; we do strictly better exactly
+        /// where that re-hit-test is sound. Where it is NOT — no
+        /// pointer position was ever recorded (a keyboard-only
+        /// session) or the pointer left the view (`.cancel` cleared
+        /// the store) — pointer tooltip intent CLOSES rather than
+        /// guesses. Whichever position is used re-seeds the corridor
+        /// apex for whatever the scroll armed or warm-showed, so a
+        /// later leave fans out from the truth.
         pub fn reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent(self: *Runtime, view_index: usize, point: ?geometry.PointF) anyerror!void {
+            const effective_point = point orelse self.views[view_index].canvas_last_pointer_position orelse {
+                self.views[view_index].reconcileCanvasWidgetRenderStateAfterScroll(null);
+                try closeCanvasTooltipPointerIntentForBlindScroll(self, view_index);
+                return;
+            };
             const previous_hovered_id = self.views[view_index].canvas_widget_hovered_id;
-            self.views[view_index].reconcileCanvasWidgetRenderStateAfterScroll(point);
+            self.views[view_index].reconcileCanvasWidgetRenderStateAfterScroll(effective_point);
             const next_hovered_id = self.views[view_index].canvas_widget_hovered_id;
             if (next_hovered_id == previous_hovered_id) return;
             try updateCanvasTooltipIntentForHoverChange(self, view_index, next_hovered_id, null);
-            if (point) |value| {
-                const view = &self.views[view_index];
-                if (next_hovered_id != 0 and (view.canvas_tooltip_armed_owner_id == next_hovered_id or
-                    (view.canvas_tooltip_shown_owner_id == next_hovered_id and !view.canvas_tooltip_shown_from_focus)))
-                {
-                    view.canvas_tooltip_pointer_from = value;
-                }
+            const view = &self.views[view_index];
+            if (next_hovered_id != 0 and (view.canvas_tooltip_armed_owner_id == next_hovered_id or
+                (view.canvas_tooltip_shown_owner_id == next_hovered_id and !view.canvas_tooltip_shown_from_focus)))
+            {
+                view.canvas_tooltip_pointer_from = effective_point;
             }
+        }
+
+        /// The staleness arm of the point-blind reconcile: with no
+        /// trustworthy pointer position, the pointer's whole tooltip
+        /// conversation closes — armed reveal, pointer-shown tooltip,
+        /// warm window, transit grace — Base UI's close-on-scroll,
+        /// applied exactly where the re-hit-test upgrade above is
+        /// unsound. No warmth survives: an instant re-show is a
+        /// courtesy earned by a pointer we cannot place. A focus-SHOWN
+        /// tooltip stays — the keyboard holds it (it scrolls with its
+        /// anchored trigger), and blur, focus moves, and activation
+        /// own its lifecycle.
+        fn closeCanvasTooltipPointerIntentForBlindScroll(self: *Runtime, view_index: usize) anyerror!void {
+            const view = &self.views[view_index];
+            view.canvas_tooltip_armed_id = 0;
+            view.canvas_tooltip_armed_owner_id = 0;
+            view.canvas_tooltip_deadline_ns = 0;
+            view.canvas_tooltip_warm_until_ns = 0;
+            view.canvas_tooltip_transit_deadline_ns = 0;
+            if (view.canvas_tooltip_shown_id == 0 or view.canvas_tooltip_shown_from_focus) return;
+            view.canvas_tooltip_shown_id = 0;
+            view.canvas_tooltip_shown_owner_id = 0;
+            try commitCanvasTooltipVisibility(self, view_index);
         }
 
         pub fn updateCanvasWidgetScrollFromPointer(self: *Runtime, pointer_event: CanvasWidgetPointerEvent) anyerror!void {

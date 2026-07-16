@@ -476,6 +476,19 @@ pub const RuntimeView = struct {
     /// triggers, and never open the pointer's warm window when they
     /// hide (deliberate keyboard motion is not a pointer sweep).
     canvas_tooltip_shown_from_focus: bool = false,
+    /// The pointer's last JOURNALED position over this view — every
+    /// phase that carries a trustworthy point (hover, move, down, up,
+    /// wheel) updates it; null before the first pointer event and after
+    /// a `.cancel` (the pointer-exit AppKit/GTK/Win32 hosts emit, and
+    /// gesture cancels). Point-blind scroll reconciliation (kinetic
+    /// steps, native drivers, keyboard scrolling) re-hit-tests this
+    /// position against the post-scroll tree — the pointer did not
+    /// move, so where it last stood is where it still is — and a null
+    /// here means those paths must CLOSE pointer tooltip intent rather
+    /// than guess (see
+    /// reconcileCanvasWidgetRenderStateAfterScrollWithTooltipIntent).
+    /// Journaled input only, so replay sees identical positions.
+    canvas_last_pointer_position: ?geometry.PointF = null,
     /// Pointer position while the hovered widget draws hover-detail
     /// chrome (a `.chart` with hover details opted in); null everywhere
     /// else. Feeds `WidgetRenderState.hover_point`, so the display list

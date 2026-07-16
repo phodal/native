@@ -835,6 +835,30 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             if (shown_changed) try commitCanvasTooltipVisibility(self, view_index);
         }
 
+        /// A PROGRAMMATIC focus move — window-default autofocus, the
+        /// accessibility `focus` action, automation focus (all funnel
+        /// through `focusAutomationCanvasWidget`) — writes focus on the
+        /// pointer contract, not the keyboard one, so it must never
+        /// REVEAL the new target's tooltip: the same guard rationale as
+        /// the click-focus exclusion in
+        /// `updateCanvasTooltipIntentForFocusVisibleChange` (Base UI's
+        /// focus-visible gate against click-focus opens) — only
+        /// keyboard focus-VISIBLE proves navigation deliberate enough
+        /// to explain. But a focus-OWNED tooltip whose keyboard hold
+        /// the move just broke must not stay painted (the blur-hides
+        /// contract), and hiding it opens no warm window: warmth is a
+        /// pointer-sweep courtesy, and nothing swept. Pointer-owned
+        /// tooltips are untouched — hover holds them, and a focus move
+        /// says nothing about where the pointer is.
+        pub fn updateCanvasTooltipIntentForProgrammaticFocusMove(self: *Runtime, view_index: usize) anyerror!void {
+            const view = &self.views[view_index];
+            if (view.canvas_tooltip_shown_id == 0 or !view.canvas_tooltip_shown_from_focus) return;
+            view.canvas_tooltip_shown_id = 0;
+            view.canvas_tooltip_shown_owner_id = 0;
+            view.canvas_tooltip_shown_from_focus = false;
+            try commitCanvasTooltipVisibility(self, view_index);
+        }
+
         /// Keyboard activation (Space/Enter on the focused trigger)
         /// dismisses that trigger's armed or shown tooltip and closes
         /// the warm window — the keyboard mirror of the pointer-down

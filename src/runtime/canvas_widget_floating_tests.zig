@@ -1277,6 +1277,119 @@ test "keyboard focus-visible shows the tooltip immediately, blur hides it, escap
     try std.testing.expectEqual(toolbar.tooltip_ids[2], harness.runtime.views[0].canvas_tooltip_shown_id);
 }
 
+test "programmatic focus hides the focus-shown tooltip and reveals nothing, pointer-shown unaffected" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-programmatic-focus", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const toolbar = try installTooltipToolbar(harness, app, arena.allocator());
+
+    // Tab earns Bold's focus-shown tooltip through the keyboard seam.
+    try tooltipKey(harness, app, "tab", tooltip_t0);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+
+    // An accessibility `focus` action (the same direct write autofocus
+    // and automation focus funnel through) moves focus to Italic:
+    // programmatic focus is the pointer contract, so Bold's focus-owned
+    // tooltip HIDES and Italic's does NOT reveal — the click-focus
+    // exclusion's rationale (only keyboard focus-visible opens).
+    _ = try harness.runtime.dispatchCanvasWidgetAccessibilityAction(app, 1, "canvas", .{ .id = toolbar.button_ids[1], .action = .focus });
+    try std.testing.expectEqual(toolbar.button_ids[1], harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focus_visible_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[0]));
+    try std.testing.expect(try tooltipHidden(harness, toolbar.tooltip_ids[1]));
+
+    // A hide without warmth: hovering another trigger now arms the full
+    // delay instead of showing instantly.
+    try tooltipHover(harness, app, toolbar.button_centers[0], tooltip_t0 + 100 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[0], harness.runtime.views[0].canvas_tooltip_armed_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+
+    // POINTER-shown tooltips are unaffected by focus moves: earn Link's
+    // tooltip by hover (delay 0), then move focus programmatically —
+    // hover still holds it.
+    try tooltipHover(harness, app, toolbar.button_centers[2], tooltip_t0 + 200 * tooltip_ms);
+    try std.testing.expectEqual(toolbar.tooltip_ids[2], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+    _ = try harness.runtime.dispatchCanvasWidgetAccessibilityAction(app, 1, "canvas", .{ .id = toolbar.button_ids[0], .action = .focus });
+    try std.testing.expectEqual(toolbar.tooltip_ids[2], harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(!harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+    try std.testing.expect(!try tooltipHidden(harness, toolbar.tooltip_ids[2]));
+}
+
+/// The autofocus fixture: two buttons owning anchored tooltips through
+/// the stack-wraps-trigger pattern. `second_autofocus` flips the second
+/// button's autofocus flag on — the edge the NEXT rebuild's
+/// source-driven focus move fires on.
+fn setTooltipAutofocusLayout(harness: anytype, second_autofocus: bool) !void {
+    const first_children = [_]canvas.Widget{
+        .{ .id = 2, .kind = .button, .frame = geometry.RectF.init(0, 0, 160, 32), .text = "One" },
+        .{ .id = 5, .kind = .tooltip, .text = "First action", .layout = .{ .anchor = .{ .placement = .below } } },
+    };
+    const second_children = [_]canvas.Widget{
+        .{ .id = 3, .kind = .button, .frame = geometry.RectF.init(0, 0, 160, 32), .text = "Two", .autofocus = second_autofocus },
+        .{ .id = 7, .kind = .tooltip, .text = "Second action", .layout = .{ .anchor = .{ .placement = .below } } },
+    };
+    const stacks = [_]canvas.Widget{
+        .{ .id = 4, .kind = .stack, .frame = geometry.RectF.init(0, 0, 160, 32), .children = &first_children },
+        .{ .id = 6, .kind = .stack, .frame = geometry.RectF.init(0, 48, 160, 32), .children = &second_children },
+    };
+    var nodes: [8]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(
+        .{ .id = 1, .kind = .stack, .children = &stacks },
+        geometry.RectF.init(0, 0, 160, 120),
+        &nodes,
+    );
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+}
+
+test "autofocus arriving on a rebuild hides the focus-shown tooltip and reveals nothing" {
+    const harness = try TestHarness().create(std.testing.allocator, .{});
+    defer harness.destroy(std.testing.allocator);
+    const TestApp = struct {
+        fn app(self: *@This()) App {
+            return .{ .context = self, .name = "gpu-tooltip-autofocus", .source = platform.WebViewSource.html("<h1>GPU</h1>") };
+        }
+    };
+    var app_state: TestApp = .{};
+    const app = app_state.app();
+    harness.null_platform.gpu_surfaces = true;
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 160, 120),
+    });
+    try setTooltipAutofocusLayout(harness, false);
+
+    // Tab reaches One with the ring: its tooltip is focus-shown.
+    try tooltipKey(harness, app, "tab", tooltip_t0);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 2), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 5), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(harness.runtime.views[0].canvas_tooltip_shown_from_focus);
+
+    // A rebuild flips Two's autofocus on (edge-triggered): the
+    // source-driven focus move is programmatic — One's focus-owned
+    // tooltip hides, Two's does not reveal, and Two takes focus
+    // quietly (no ring; not keyboard focus-visible).
+    try setTooltipAutofocusLayout(harness, true);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 3), harness.runtime.views[0].canvas_widget_focused_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_widget_focus_visible_id);
+    try std.testing.expectEqual(@as(canvas.ObjectId, 0), harness.runtime.views[0].canvas_tooltip_shown_id);
+    try std.testing.expect(try tooltipHidden(harness, 5));
+    try std.testing.expect(try tooltipHidden(harness, 7));
+}
+
 test "a press cancels the armed tooltip and dismisses the shown one without leaving warmth" {
     const harness = try TestHarness().create(std.testing.allocator, .{});
     defer harness.destroy(std.testing.allocator);

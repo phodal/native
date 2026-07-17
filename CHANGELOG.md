@@ -2,9 +2,45 @@
 
 All notable changes to the Native SDK (formerly zero-native) will be documented in this file.
 
-## 0.5.1
+## 0.5.2
 
 <!-- release:start -->
+
+### New Features
+
+- **Anchored tooltips with hover intent**: `<tooltip anchor="above|below">` beside its trigger in a stack floats against the trigger and hands visibility to the runtime — it shows after the pointer has rested on the trigger for the show delay (default 600ms) and hides on leave, so sweeping a toolbar flashes nothing; after a pointer-hovered tooltip hides on leave, a shared 400ms warm window shows the next trigger's tooltip instantly (the other hide causes below — focus moving on, Escape, a press, view blur — deliberately open no warm window). Delay, warm window, and the behaviors below match shadcn/ui's defaults (Base UI). The model never hears hover, both engines lower it identically, and every transition steps on the recorded input/frame clock, so recorded hover-dwell sessions replay their show/hide frames byte-identically.
+- **`tooltip-delay` attribute**: per-tooltip show delay in milliseconds (`0` shows the instant the trigger is hovered); absent follows the new `tooltip_show_delay_ms`/`tooltip_warm_window_ms` metric tokens. Registry attr code 80; static (non-anchored) tooltips keep their classic paint-when-rendered behavior.
+- **Keyboard focus reveals immediately**: tabbing onto a tooltip-owning trigger shows its tooltip with no dwell (keyboard navigation is deliberate, and content revealed on hover or focus must not depend on pointer timing); focus moving on or Escape hides it just as immediately, without warming the pointer's skip window.
+- **Hoverable content**: a shown tooltip's own bounds hold it open (WCAG 1.4.13; Base UI's `hoverable` default) — the pointer can cross the anchor gap into the tooltip along a bounded safe-polygon corridor, and it hides only after leaving both the trigger and the tooltip (with the usual warm window); the corridor resolves on the recorded frame clock, so replays stay byte-identical.
+- **Scroll steps the machine**: every scroll path (wheel, kinetic steps, native drivers, keyboard scrolling) routes its hover change through the same intent transition a pointer move takes — a trigger scrolled out from under the pointer disarms/hides, and a trigger scrolled under it arms per normal.
+- **Press dismisses**: ANY pointer-down — primary or secondary, including downs consumed by the context-menu gesture or a window-drag region — or Space/Enter on the focused trigger cancels a pending reveal, dismisses a shown tooltip, and closes the warm window, so an activated control never re-explains itself on the post-click hover. Keyboard activation and Escape also spend the standing focus reveal: a rebuild that replaces or rekeys the tooltip (the activation's own model update, typically) cannot resurrect it — it stays down while focus rests on the trigger, until the keyboard genuinely leaves and returns; the focus ring stays painted, and a later pointer hover re-earns the dwell normally.
+- **Rebuild hygiene**: a rebuild that removes, rekeys, disables, or re-parents a tooltip's trigger resets that tooltip's armed/shown/warm state and re-stamps it hidden, even when the tooltip node itself survives.
+- **View blur resets**: a canvas view that loses focus (to a sibling view or with the window) drops its entire tooltip conversation — armed delay, shown tooltip (keyboard- and pointer-owned), warm window — and re-stamps hidden, so no stale tooltip floats in a view the keyboard left. The window key-loss reset fires on the flag's own focused→unfocused edge, so it holds however the host announces the change: one gain event (macOS) or loss-before-gain (Windows, GTK), including a loss with no gain at all (every window inactive).
+
+### Improvements
+
+- **Search empty state names its scope**: the system monitor's no-match state now says search only sees the top 128 processes by CPU, so a miss on a quiet process reads as scope, not absence (both tiers).
+
+### Bug Fixes
+
+- **Dark-scheme accent focus rings settle down — and stay visible**: a `theme_accent` (or `canvas.accentOverrides`) now derives its dark-appearance focus ring at half the accent's saturation instead of the raw brand hue, contrast-floored at 3:1 (WCAG non-text) against the lightest dark tone controls commonly sit on (the house muted surface `#262626` — rings draw outside controls, so clearing the lightest adjacent container tone clears the page background and card surface too, in both shipped packs) — desaturation alone can cost a deep accent the bar it cleared (`#008000` fell from 3.9:1 to ~2.6:1 on the background; the floor lifts it back over 3:1 on background and card surface alike) — so the soundboard search field's ring no longer glares neon in dark mode; `canvas.accentFocusRing` exports the derivation so hand-authored token sets (the Zig soundboard's theme) state the identical ring.
+- **Breaking**: `canvas.accentOverrides` now takes the resolved `ColorScheme` alongside the accent — a deliberate break while the toolkit is pre-1.0, so the one function under the natural name states the scheme it layers over; pass `.light` to reproduce the previous output exactly.
+- **Escape in a search field now reaches your core**: Escape's clear (and its composition cancel) was a runtime-local editor operation — the field emptied on screen while the model kept the stale query and the list stayed filtered. Every keyboard-driven editor mutation now derives ONE edit that is applied to the retained editor AND stamped onto the dispatched event, so `on-input` hears Escape exactly like typing, paste, and the clear affordance — on both authoring tiers, and byte-identically under record→replay.
+- **Automation and accessibility composition verbs ride the real input path**: `widget-action set_composition/commit_composition/cancel_composition` now dispatch the same ime input events a live IME session produces (journaled, mirrored to the core), and `set_selection` reaches the core's selection mirror through the stamped-edit channel.
+- **Accessibility actions replay without double-dispatch**: a journaled assistive action (press, toggle, set_text, drag, ...) no longer also journals the key/text events its verb synthesizes — replaying the action re-derives them, so recorded AX-driven sessions replay each input exactly once instead of twice.
+- **Direct verb calls journal outer-wins too**: an embed host's `widgetAction` and automation `widget_action` commands now record the same single `widget_accessibility_action` record the platform accessibility path does (the enum gained the composition kinds), so replay re-runs the verb — focus included — instead of delivering its untargeted key/ime children to whichever field the session happened to leave focused.
+- **Grids keep their declared column slots**: children fewer than a grid's declared `columns` now keep the column-slot width and fill the leading slots, instead of stretching across the freed row — a search that narrows the soundboard album grid below its column count leaves image-forward tiles at their natural size.
+- **"terminate request delivered" retires itself**: the system monitor's delivery notice now clears on the next applied sample instead of sitting in the footer forever; failure notes keep sticking (both tiers).
+- **System monitor footer says UTC**: the sample-time stamp renders from the journaled clock in UTC, and the footer now labels it "UTC" instead of passing it off as local time — local rendering would need a journaled timezone channel to stay replay-byte-identical, so the label is the honest fix (both the Zig example and the TS port).
+
+### Contributors
+
+- @ctate
+- @marcusschiesser
+
+<!-- release:end -->
+
+## 0.5.1
 
 ### Improvements
 
@@ -25,8 +61,6 @@ All notable changes to the Native SDK (formerly zero-native) will be documented 
 ### Contributors
 
 - @ctate
-
-<!-- release:end -->
 
 ## 0.5.0
 

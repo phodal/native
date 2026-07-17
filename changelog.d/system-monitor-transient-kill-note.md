@@ -1,1 +1,0 @@
-fix: **"terminate request delivered" retires itself**: the system monitor's delivery notice now clears on the next applied sample instead of sitting in the footer forever; failure notes keep sticking (both tiers).

@@ -1,1 +1,0 @@
-fix: **System monitor footer says UTC**: the sample-time stamp renders from the journaled clock in UTC, and the footer now labels it "UTC" instead of passing it off as local time — local rendering would need a journaled timezone channel to stay replay-byte-identical, so the label is the honest fix (both the Zig example and the TS port).

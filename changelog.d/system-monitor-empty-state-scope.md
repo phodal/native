@@ -1,1 +1,0 @@
-improvement: **Search empty state names its scope**: the system monitor's no-match state now says search only sees the top 128 processes by CPU, so a miss on a quiet process reads as scope, not absence (both tiers).

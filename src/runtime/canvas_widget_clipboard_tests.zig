@@ -168,6 +168,129 @@ test "keyboard-only selection (shift+arrows) feeds copy" {
     try std.testing.expectEqualStrings("ry", try harness.runtime.readClipboard(&clipboard_buffer));
 }
 
+test "a multi-line paste into a single-line field strips line breaks; a textarea keeps them" {
+    var app_state: ClipboardTestApp = .{};
+    const app = app_state.app();
+    const harness = try createClipboardHarness(app);
+    defer harness.destroy(std.testing.allocator);
+
+    const children = [_]canvas.Widget{
+        .{
+            .id = 2,
+            .kind = .text_field,
+            .frame = geometry.RectF.init(12, 16, 200, 36),
+            .text = "",
+        },
+        .{
+            .id = 3,
+            .kind = .textarea,
+            .frame = geometry.RectF.init(12, 64, 280, 100),
+            .text = "",
+        },
+    };
+    var nodes: [3]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &children }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // Interior LF, CRLF, and a trailing CR: the single-line field strips
+    // every break (the HTML value-sanitization rule — lines join with
+    // nothing between them), and the app-facing keyboard event carries
+    // the SAME stripped insert so a model mirror stays byte-identical.
+    try harness.runtime.writeClipboard("alpha\nbeta\r\ngamma\r");
+    try harness.runtime.dispatchPlatformEvent(app, pointerInput(.pointer_down, 100, 30));
+    try harness.runtime.dispatchPlatformEvent(app, keyInput("v", cmd));
+    var retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("alphabetagamma", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(14), retained.nodes[1].widget.text_selection.?);
+    try std.testing.expectEqualStrings("alphabetagamma", app_state.last_edit_insert[0..app_state.last_edit_insert_len]);
+    try std.testing.expect(!app_state.saw_truncated);
+
+    // The SAME clipboard pasted into the textarea keeps its breaks: only
+    // single-line kinds sanitize.
+    try harness.runtime.dispatchPlatformEvent(app, pointerInput(.pointer_down, 100, 100));
+    try harness.runtime.dispatchPlatformEvent(app, keyInput("v", cmd));
+    retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("alpha\nbeta\r\ngamma\r", retained.nodes[2].widget.text);
+    try std.testing.expectEqualStrings("alpha\nbeta\r\ngamma\r", app_state.last_edit_insert[0..app_state.last_edit_insert_len]);
+}
+
+test "a paste of only line breaks into a single-line field inserts nothing and keeps the selection" {
+    var app_state: ClipboardTestApp = .{};
+    const app = app_state.app();
+    const harness = try createClipboardHarness(app);
+    defer harness.destroy(std.testing.allocator);
+
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 200, 36),
+        .text = "Keep",
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+
+    // Select all, then paste bare newlines: the sanitized insert is
+    // EMPTY, so the edit suppresses — nothing inserts, the live
+    // selection survives, and the app hears no insert at all (an empty
+    // insert is cut's delete-selection edit, which this must never be).
+    try harness.runtime.writeClipboard("\r\n\n");
+    try harness.runtime.dispatchPlatformEvent(app, pointerInput(.pointer_down, 100, 30));
+    try harness.runtime.dispatchPlatformEvent(app, keyInput("a", cmd));
+    try harness.runtime.dispatchPlatformEvent(app, keyInput("v", cmd));
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    try std.testing.expectEqualStrings("Keep", retained.nodes[1].widget.text);
+    try std.testing.expectEqualDeep(canvas.TextSelection{ .anchor = 0, .focus = 4 }, retained.nodes[1].widget.text_selection.?);
+    try std.testing.expect(!app_state.saw_empty_insert);
+    try std.testing.expectEqual(@as(usize, 0), app_state.last_edit_insert_len);
+}
+
+test "a near-capacity multi-line paste sanitizes before it clamps" {
+    var app_state: ClipboardTestApp = .{};
+    const app = app_state.app();
+    const harness = try createClipboardHarness(app);
+    defer harness.destroy(std.testing.allocator);
+
+    // Fill the view's shared widget-text storage to EXACTLY three free
+    // bytes, the boundary where the sanitize/clamp ordering shows:
+    // pasting "a\nbc" must land "abc" (sanitized 3 bytes, fits whole).
+    // Clamping the raw clipboard first would spend the third byte on
+    // the '\n' the seam strips anyway — "a\nb" then "ab" — silently
+    // discarding the valid 'c' and flagging a truncation that never
+    // happened to the bytes that count.
+    const fill_len = canvas_limits.max_canvas_widget_text_bytes_per_view - 3;
+    const fill = try std.testing.allocator.alloc(u8, fill_len);
+    defer std.testing.allocator.free(fill);
+    @memset(fill, 'x');
+    const text_field = canvas.Widget{
+        .id = 2,
+        .kind = .text_field,
+        .frame = geometry.RectF.init(12, 16, 200, 36),
+        .text = fill,
+    };
+    var nodes: [2]canvas.WidgetLayoutNode = undefined;
+    const layout = try canvas.layoutWidgetTree(.{ .kind = .stack, .children = &.{text_field} }, geometry.RectF.init(0, 0, 320, 200), &nodes);
+    _ = try harness.runtime.setCanvasWidgetLayout(1, "canvas", layout);
+    // Pin the boundary premise: exactly 3 bytes of capacity remain.
+    try std.testing.expectEqual(fill_len, harness.runtime.views[0].widget_text_len);
+
+    try harness.runtime.writeClipboard("a\nbc");
+    try harness.runtime.dispatchPlatformEvent(app, pointerInput(.pointer_down, 100, 30));
+    try harness.runtime.dispatchPlatformEvent(app, keyInput("end", .{}));
+    try harness.runtime.dispatchPlatformEvent(app, keyInput("v", cmd));
+
+    // The retained editor holds the whole sanitized suffix ...
+    const retained = try harness.runtime.canvasWidgetLayout(1, "canvas");
+    const text = retained.nodes[1].widget.text;
+    try std.testing.expectEqual(fill_len + 3, text.len);
+    try std.testing.expectEqualStrings("abc", text[text.len - 3 ..]);
+    try std.testing.expectEqualDeep(canvas.TextSelection.collapsed(text.len), retained.nodes[1].widget.text_selection.?);
+    // ... the app's stamped edit is byte-identical to what the editor
+    // applied, and nothing was (falsely) reported truncated.
+    try std.testing.expectEqualStrings("abc", app_state.last_edit_insert[0..app_state.last_edit_insert_len]);
+    try std.testing.expect(!app_state.saw_truncated);
+}
+
 test "paste clamps to view text capacity and flags truncation loudly" {
     var app_state: ClipboardTestApp = .{};
     const app = app_state.app();

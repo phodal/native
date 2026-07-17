@@ -172,6 +172,7 @@ pub const CommandRef = command_model.CommandRef;
 pub const DiffKind = command_model.DiffKind;
 pub const DiffChange = command_model.DiffChange;
 pub const Builder = command_model.Builder;
+pub const max_display_list_text_bytes = command_model.max_display_list_text_bytes;
 
 // Canvas render data and cache plans live in `render.zig`; root keeps the public API stable.
 pub const max_render_state_stack = render_model.max_render_state_stack;
@@ -566,6 +567,8 @@ pub const WidgetInvalidation = event_model.WidgetInvalidation;
 pub const WidgetClipboardAction = event_model.WidgetClipboardAction;
 pub const widgetKeyboardClipboardAction = event_model.widgetKeyboardClipboardAction;
 pub const widgetKeyboardNewlineTextEditEvent = event_model.widgetKeyboardNewlineTextEditEvent;
+pub const widgetKindSingleLineTextEntry = event_model.widgetKindSingleLineTextEntry;
+pub const sanitizedSingleLineTextInputEvent = event_model.sanitizedSingleLineTextInputEvent;
 pub const widgetKeyboardControlIntent = event_model.widgetKeyboardControlIntent;
 pub const semanticActions = event_model.semanticActions;
 pub const widgetSemanticControlIntent = event_model.widgetSemanticControlIntent;

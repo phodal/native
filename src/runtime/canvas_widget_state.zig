@@ -819,7 +819,12 @@ pub fn RuntimeCanvasWidgetState(comptime Runtime: type) type {
             if (self.views[index].kind != .gpu_surface) return error.InvalidViewOptions;
             if (!self.views[index].canEditCanvasWidgetText(id)) return error.InvalidCommand;
 
-            const dirty = try self.views[index].applyCanvasWidgetTextEdit(id, edit) orelse return self.views[index].info();
+            // Direct runtime edits sanitize like every other insertion
+            // source (the keyboard choke point's rule): a single-line
+            // field's editor never accepts a line break, whoever writes.
+            const node = self.views[index].widgetLayoutTree().findById(id) orelse return error.InvalidCommand;
+            const sanitized = canvas.sanitizedSingleLineTextInputEvent(node.widget.kind, edit) orelse return self.views[index].info();
+            const dirty = try self.views[index].applyCanvasWidgetTextEdit(id, sanitized) orelse return self.views[index].info();
             try CanvasWidgetEventMethods(Runtime).invalidateForCanvasWidgetDirty(self, index, dirty);
             _ = try CanvasWidgetDisplayMethods(Runtime).refreshCanvasWidgetDisplayListIfOwned(self, index);
             return self.views[index].info();

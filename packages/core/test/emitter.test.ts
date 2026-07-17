@@ -1711,16 +1711,19 @@ test("pinchMsg emits with boundary-float record fields and holds its channel con
   // The good shape: the record's number fields are HOST values classed
   // f64 even against an integer-literal comparison (`scale === 0` must
   // never int-claim the slot — a rounded magnification delta would zero
-  // every zoom product), and the zoom chain fed from them floats too.
+  // every zoom product; the same wholesale classing covers the windowId
+  // identity field against its `=== 0` comparison), and the zoom chain
+  // fed from them floats too.
   const zig = emit(`
 export type PinchPhase = "begin" | "change" | "end";
-export interface PinchEvent { readonly phase: PinchPhase; readonly scale: number; readonly x: number; readonly y: number; }
+export interface PinchEvent { readonly windowId: number; readonly label: string; readonly phase: PinchPhase; readonly scale: number; readonly x: number; readonly y: number; }
 export interface Model { readonly zoom: number; }
 export type Msg =
   | { readonly kind: "zoomed"; readonly factor: number }
   | { readonly kind: "noop" };
 export function pinchMsg(pinch: PinchEvent): Msg | null {
-  if (pinch.phase !== "change" || pinch.scale === 0) return null;
+  if (pinch.phase !== "change" || pinch.scale === 0 || pinch.windowId === 0) return null;
+  if (pinch.label !== "board-canvas") return null;
   return { kind: "zoomed", factor: 1 + pinch.scale };
 }
 export function initialModel(): Model { return { zoom: 1 }; }
@@ -1732,10 +1735,13 @@ export function update(model: Model, msg: Msg): Model {
 }
 `);
   assert.match(zig, /scale: f64/);
+  assert.match(zig, /windowId: f64/);
+  assert.match(zig, /label: \[\]const u8/);
   assert.match(zig, /zoom: f64/);
   assert.match(zig, /pub fn pinchMsg/);
 
-  // The bad shape (missing anchor fields) is a taught NS1033.
+  // The bad shape (missing the anchor and identity fields) is a taught
+  // NS1033.
   const bad_pinch = transpile(`
 export type PinchPhase = "begin" | "change" | "end";
 export interface PinchEvent { readonly phase: PinchPhase; readonly scale: number; }
@@ -1748,4 +1754,20 @@ export function update(model: Model, msg: Msg): Model {
 `);
   assert.equal(bad_pinch.ok, false);
   assert.ok(bad_pinch.diagnostics.some((d) => d.id === "NS1033"), JSON.stringify(bad_pinch.diagnostics));
+
+  // The pre-identity 4-field shape is refused too: the channel record
+  // carries its source (windowId/label) — x/y are view-local, so a
+  // coordinate without its view is not a position.
+  const legacy_pinch = transpile(`
+export type PinchPhase = "begin" | "change" | "end";
+export interface PinchEvent { readonly phase: PinchPhase; readonly scale: number; readonly x: number; readonly y: number; }
+export interface Model { readonly w: number; }
+export type Msg = { readonly kind: "a" } | { readonly kind: "b" };
+export function pinchMsg(pinch: PinchEvent): Msg | null { return null; }
+export function update(model: Model, msg: Msg): Model {
+  switch (msg.kind) { case "a": return model; case "b": return model; }
+}
+`);
+  assert.equal(legacy_pinch.ok, false);
+  assert.ok(legacy_pinch.diagnostics.some((d) => d.id === "NS1033"), JSON.stringify(legacy_pinch.diagnostics));
 });

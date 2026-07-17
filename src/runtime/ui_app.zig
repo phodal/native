@@ -546,9 +546,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// on `change` — the cumulative gesture scale is the running
             /// product of `(1 + scale)` — and the pointer anchor in
             /// view-local canvas points (`x`/`y`, the zoom-at-cursor
-            /// anchor). Only hosts with a pinch source emit these
-            /// (macOS today); everywhere else the channel simply never
-            /// fires.
+            /// anchor). Every event names its source window and view
+            /// (`window_id`/`label`, the `on_frame` identity shape) —
+            /// view-local coordinates mean nothing without their view,
+            /// so multi-window apps tell pinches apart. Only hosts with
+            /// a pinch source emit these (macOS today); everywhere else
+            /// the channel simply never fires.
             on_pinch: ?*const fn (pinch: platform.PinchEvent) ?MsgT = null,
             /// Optional mapping from runtime timer events (started via
             /// `runtime.startTimer`) into messages. Framework-reserved timer
@@ -3376,6 +3379,8 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 else => return,
             };
             if (map(.{
+                .window_id = input_event.window_id,
+                .label = input_event.label,
                 .phase = phase,
                 .scale = input_event.scale,
                 .x = input_event.x,

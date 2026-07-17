@@ -509,8 +509,11 @@ export class IntInference {
         // keeps a core's `pinch.scale === 0` comparison from
         // int-claiming the slot (which would round every zoom product
         // to whole numbers); the integer side of such a comparison
-        // widens to f64 instead. frameMsg/keyMsg records keep their
-        // historical by-usage classing.
+        // widens to f64 instead. The loop marks EVERY field of the
+        // record, so any field the channel grows (windowId, the source
+        // identity, included) is boundary-classed without a new rule.
+        // frameMsg/keyMsg records keep their historical by-usage
+        // classing.
         if (stmt.name?.text === "pinchMsg") {
           for (const p of stmt.parameters) {
             if (!p.type) continue;

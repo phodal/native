@@ -303,6 +303,8 @@ test "the runtime markup interpreter builds the emitted model exactly like the c
         .draft = "",
         .canvasWidth = 0,
         .zoom = 1,
+        .zoomWindowId = 0,
+        .zoomFromBoard = false,
         .dark = false,
         .chromeTop = 0,
     };
@@ -483,8 +485,13 @@ test "the wiring channels drive the core: frame, key, appearance, and chrome" {
     // pinchMsg: the trackpad pinch channel — the phase alias matches by
     // member name, begin/end gate to null in the core, and each change
     // compounds the zoom by (1 + delta): two +25% deltas land on the
-    // PRODUCT 1.5625, never a sum's 1.45.
+    // PRODUCT 1.5625, never a sum's 1.45. The source identity
+    // (windowId/label) rides the record into the core: this single-view
+    // fixture pins that the emitted core hears WHICH window and view
+    // the gesture happened on.
     try std.testing.expectEqual(@as(f64, 1), Bridge.model().zoom);
+    try std.testing.expectEqual(@as(f64, 0), Bridge.model().zoomWindowId);
+    try std.testing.expect(!Bridge.model().zoomFromBoard);
     try h.harness.runtime.dispatchPlatformEvent(h.app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = canvas_label,
@@ -517,6 +524,10 @@ test "the wiring channels drive the core: frame, key, appearance, and chrome" {
         .y = 80,
     } });
     try std.testing.expectEqual(@as(f64, 1.5625), Bridge.model().zoom);
+    // The core saw the source identity: window 1, this fixture's view
+    // label (the core compares `pinch.label === "ts-markup-canvas"`).
+    try std.testing.expectEqual(@as(f64, 1), Bridge.model().zoomWindowId);
+    try std.testing.expect(Bridge.model().zoomFromBoard);
 
     // The automation pinch verb dispatches the same real events into the
     // transpiled core: one gesture whose change carries scale - 1.

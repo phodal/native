@@ -84,16 +84,20 @@ export interface KeyEvent {
 export type PinchPhase = "begin" | "change" | "end";
 
 /// The pinch channel's record (`pinchMsg(pinch)`): the trackpad pinch
-/// gesture, phase-explicit. `scale` is the magnification DELTA for this
-/// event (nonzero only on "change"; the cumulative gesture scale is the
-/// running product of `1 + scale`), and `x`/`y` is the pointer anchor in
-/// view-local canvas points — the pointer location during the gesture
-/// (hosts report gesture events at the pointer, not at a midpoint
-/// between the fingers), so a zoom can anchor under the cursor. Pinch is a
-/// view-global gesture — it never routes through widgets — so this is
-/// the honest home for timeline and canvas zoom. Only hosts with a pinch
-/// source emit it (macOS today).
+/// gesture, phase-explicit. `windowId`/`label` name the source window and
+/// gpu-surface view — `x`/`y` are view-local, so a coordinate without its
+/// view is not a position, and multi-window apps tell pinches apart by
+/// these. `scale` is the magnification DELTA for this event (nonzero only
+/// on "change"; the cumulative gesture scale is the running product of
+/// `1 + scale`), and `x`/`y` is the pointer anchor in view-local canvas
+/// points — the pointer location during the gesture (hosts report gesture
+/// events at the pointer, not at a midpoint between the fingers), so a
+/// zoom can anchor under the cursor. Pinch is a view-global gesture — it
+/// never routes through widgets — so this is the honest home for timeline
+/// and canvas zoom. Only hosts with a pinch source emit it (macOS today).
 export interface PinchEvent {
+  readonly windowId: number;
+  readonly label: string;
   readonly phase: PinchPhase;
   readonly scale: number;
   readonly x: number;

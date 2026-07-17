@@ -1301,9 +1301,12 @@ export class Emitter {
             );
           }
         } else {
-          // pinchMsg: { phase: <named "begin"|"change"|"end" alias>,
-          //   scale, x, y } — matched by NAME (the wiring maps the phase
-          //   enum by member name and widens the numbers).
+          // pinchMsg: { windowId, label: string,
+          //   phase: <named "begin"|"change"|"end" alias>, scale, x, y }
+          //   — matched by NAME (the wiring maps the phase enum by
+          //   member name and widens the numbers; windowId/label are the
+          //   source identity — x/y are view-local, so a coordinate
+          //   without its view is not a position).
           const paramT = stmt.parameters.length === 1 && stmt.parameters[0].type
             ? this.table.resolveTypeNode(stmt.parameters[0].type!)
             : null;
@@ -1319,16 +1322,17 @@ export class Emitter {
             phaseEnum.members.includes("end");
           const ok =
             fields !== null &&
-            fields.length === 4 &&
+            fields.length === 6 &&
             phaseOk &&
-            (["scale", "x", "y"] as const).every((n) => {
+            fieldNamed(fields, "label")?.type.k === "string" &&
+            (["windowId", "scale", "x", "y"] as const).every((n) => {
               const f = fieldNamed(fields, n);
               return f !== undefined && isNum(f.type.k);
             });
           if (!ok) {
             this.fail(
               stmt,
-              '`pinchMsg` takes one `PinchEvent` parameter, exactly `{ phase: PinchPhase; scale: number; x: number; y: number }` where PinchPhase is a named "begin" | "change" | "end" alias',
+              '`pinchMsg` takes one `PinchEvent` parameter, exactly `{ windowId: number; label: string; phase: PinchPhase; scale: number; x: number; y: number }` where PinchPhase is a named "begin" | "change" | "end" alias',
               "NS1033",
             );
           }

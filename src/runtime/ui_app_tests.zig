@@ -4053,6 +4053,12 @@ const ZoomModel = struct {
     ends: u32 = 0,
     anchor_x: f32 = 0,
     anchor_y: f32 = 0,
+    /// Source-identity mirrors: the window and view the last pinch
+    /// event named (x/y are view-local, so a coordinate without its
+    /// view is not a position — multi-window apps tell pinches apart
+    /// by these).
+    window_id: u64 = 0,
+    label: []const u8 = "",
 };
 
 const ZoomMsg = union(enum) {
@@ -4063,14 +4069,18 @@ const ZoomApp = ui_app_model.UiApp(ZoomModel, ZoomMsg);
 
 fn zoomUpdate(model: *ZoomModel, msg: ZoomMsg) void {
     switch (msg) {
-        .pinch => |pinch| switch (pinch.phase) {
-            .begin => {
-                model.begins += 1;
-                model.anchor_x = pinch.x;
-                model.anchor_y = pinch.y;
-            },
-            .change => model.scale *= (1 + pinch.scale),
-            .end => model.ends += 1,
+        .pinch => |pinch| {
+            model.window_id = pinch.window_id;
+            model.label = pinch.label;
+            switch (pinch.phase) {
+                .begin => {
+                    model.begins += 1;
+                    model.anchor_x = pinch.x;
+                    model.anchor_y = pinch.y;
+                },
+                .change => model.scale *= (1 + pinch.scale),
+                .end => model.ends += 1,
+            }
         },
     }
 }
@@ -4227,4 +4237,119 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
     const pinch_bad = try std.fmt.bufPrint(&command_buffer, "widget-pinch {s} 0", .{canvas_label});
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, pinch_bad));
     try std.testing.expectEqual(@as(u32, 2), app_state.model.begins);
+}
+
+const zoom_pair_main_views = [_]app_manifest.ShellView{
+    .{ .label = "zoom-main-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+};
+const zoom_pair_inspector_views = [_]app_manifest.ShellView{
+    .{ .label = "zoom-inspector-canvas", .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+};
+const zoom_pair_windows = [_]app_manifest.ShellWindow{ .{
+    .label = "main",
+    .title = "Zoom",
+    .width = 400,
+    .height = 300,
+    .views = &zoom_pair_main_views,
+}, .{
+    .label = "inspector",
+    .title = "Zoom Inspector",
+    .width = 300,
+    .height = 300,
+    .views = &zoom_pair_inspector_views,
+} };
+const zoom_pair_scene: app_manifest.ShellConfig = .{ .windows = &zoom_pair_windows };
+
+test "pinch identity distinguishes windows and views in the Msg" {
+    // Two windows, two gpu-surface views: the pinch channel forwards
+    // the source identity (window_id + view label) the journaled
+    // platform event already carries, so a multi-window app hears WHICH
+    // view a gesture zoomed — x/y are view-local, and a coordinate
+    // without its view is not a position.
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(ZoomApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = ZoomApp.init(std.heap.page_allocator, .{}, .{
+        .name = "ui-app-zoom-pair",
+        .scene = zoom_pair_scene,
+        .canvas_label = "zoom-main-canvas",
+        .update = zoomUpdate,
+        .view = zoomView,
+        .on_pinch = zoomPinch,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = "zoom-main-canvas",
+        .size = geometry.SizeF.init(400, 300),
+        .scale_factor = 2,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    // A gesture on the main window's canvas names its source on every
+    // phase.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "zoom-main-canvas",
+        .kind = .pinch_begin,
+        .x = 100,
+        .y = 50,
+    } });
+    try std.testing.expectEqual(@as(u64, 1), app_state.model.window_id);
+    try std.testing.expectEqualStrings("zoom-main-canvas", app_state.model.label);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "zoom-main-canvas",
+        .kind = .pinch_change,
+        .x = 100,
+        .y = 50,
+        .scale = 0.25,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = "zoom-main-canvas",
+        .kind = .pinch_end,
+        .x = 100,
+        .y = 50,
+    } });
+    try std.testing.expectEqual(@as(f32, 1.25), app_state.model.scale);
+
+    // A gesture on the second window's view is distinguishable: same
+    // channel, different identity in the Msg.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 2,
+        .label = "zoom-inspector-canvas",
+        .kind = .pinch_begin,
+        .x = 10,
+        .y = 20,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 2,
+        .label = "zoom-inspector-canvas",
+        .kind = .pinch_change,
+        .x = 10,
+        .y = 20,
+        .scale = -0.5,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 2,
+        .label = "zoom-inspector-canvas",
+        .kind = .pinch_end,
+        .x = 10,
+        .y = 20,
+    } });
+    try std.testing.expectEqual(@as(u64, 2), app_state.model.window_id);
+    try std.testing.expectEqualStrings("zoom-inspector-canvas", app_state.model.label);
+    // Both gestures compounded the one model's zoom (1.25 * 0.5,
+    // binary-exact) and every phase was heard.
+    try std.testing.expectEqual(@as(f32, 0.625), app_state.model.scale);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.begins);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.ends);
 }

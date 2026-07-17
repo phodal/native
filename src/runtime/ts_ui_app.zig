@@ -367,7 +367,10 @@ pub fn TsUiApp(comptime core: type) type {
         }
 
         /// `Options.on_pinch` over the core's `pinchMsg(pinch)` export:
-        /// the emitted PinchEvent record — `phase` (the declared
+        /// the emitted PinchEvent record — `windowId`/`label` (the
+        /// source identity: `x`/`y` are view-local, so a coordinate
+        /// without its view is not a position; multi-window cores tell
+        /// pinches apart by these), `phase` (the declared
         /// begin/change/end alias, matched by member name), `scale` (the
         /// magnification DELTA on "change"; cumulative gesture scale is
         /// the product of `1 + scale`), and the `x`/`y` pointer anchor
@@ -381,10 +384,11 @@ pub fn TsUiApp(comptime core: type) type {
             const PinchArg = params[0].type.?;
             comptime {
                 const fields = @typeInfo(PinchArg).@"struct".fields;
-                if (fields.len != 4 or !@hasField(PinchArg, "phase") or !@hasField(PinchArg, "scale") or
+                if (fields.len != 6 or !@hasField(PinchArg, "windowId") or !@hasField(PinchArg, "label") or
+                    !@hasField(PinchArg, "phase") or !@hasField(PinchArg, "scale") or
                     !@hasField(PinchArg, "x") or !@hasField(PinchArg, "y"))
                 {
-                    @compileError("TsUiApp: pinchMsg's PinchEvent must be exactly { phase: \"begin\" | \"change\" | \"end\"; scale: number; x: number; y: number }");
+                    @compileError("TsUiApp: pinchMsg's PinchEvent must be exactly { windowId: number; label: string; phase: \"begin\" | \"change\" | \"end\"; scale: number; x: number; y: number }");
                 }
                 const Phase = @FieldType(PinchArg, "phase");
                 const phase_info = @typeInfo(Phase);
@@ -399,6 +403,12 @@ pub fn TsUiApp(comptime core: type) type {
             arg.phase = switch (pinch.phase) {
                 inline else => |phase| @field(Phase, @tagName(phase)),
             };
+            // The label slice stays borrowed exactly through the core
+            // call, like the Zig channel's contract: a Msg built from it
+            // commits (copies) on dispatch like every routed bytes
+            // payload.
+            arg.windowId = channelNum(@FieldType(PinchArg, "windowId"), @floatFromInt(pinch.window_id));
+            arg.label = pinch.label;
             arg.scale = channelNum(@FieldType(PinchArg, "scale"), pinch.scale);
             arg.x = channelNum(@FieldType(PinchArg, "x"), pinch.x);
             arg.y = channelNum(@FieldType(PinchArg, "y"), pinch.y);

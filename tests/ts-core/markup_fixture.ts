@@ -46,6 +46,12 @@ export interface Model {
   /// The pinch channel's cumulative zoom: the product of (1 + delta)
   /// across change events — the timeline-zoom derivation shape.
   readonly zoom: number;
+  /// The pinch channel's source-identity mirrors: the windowId of the
+  /// last zoom and whether its label named this fixture's canvas view
+  /// (x/y are view-local, so a coordinate without its view is not a
+  /// position — multi-window cores tell pinches apart by these).
+  readonly zoomWindowId: number;
+  readonly zoomFromBoard: boolean;
   /// The appearance channel's scheme mirror.
   readonly dark: boolean;
   /// The chrome channel's titlebar band mirror.
@@ -62,7 +68,7 @@ export type Msg =
   | { readonly kind: "stamped"; readonly at: number }
   | { readonly kind: "draft_edit"; readonly edit: TextInputEvent }
   | { readonly kind: "canvas_resized"; readonly width: number }
-  | { readonly kind: "zoomed"; readonly factor: number }
+  | { readonly kind: "zoomed"; readonly factor: number; readonly windowId: number; readonly fromBoard: boolean }
   | { readonly kind: "appearance_changed"; readonly colorScheme: ColorScheme; readonly reduceMotion: boolean; readonly highContrast: boolean }
   | { readonly kind: "chrome_changed"; readonly insets: ChromeInsets; readonly buttons: ChromeButtons; readonly tabsProjected: boolean }
   | { readonly kind: "banner_set"; readonly value: Uint8Array };
@@ -86,10 +92,12 @@ export function keyMsg(key: KeyEvent): Msg | null {
 
 /// The pinch channel gates on the change phase (begin/end carry no
 /// delta): the model compounds the cumulative zoom as the product of
-/// (1 + delta), the documented gesture-scale semantics.
+/// (1 + delta), the documented gesture-scale semantics. The source
+/// identity rides into the Msg so the model can pin which window and
+/// view the gesture happened on.
 export function pinchMsg(pinch: PinchEvent): Msg | null {
   if (pinch.phase !== "change" || pinch.scale === 0) return null;
-  return { kind: "zoomed", factor: 1 + pinch.scale };
+  return { kind: "zoomed", factor: 1 + pinch.scale, windowId: pinch.windowId, fromBoard: pinch.label === "ts-markup-canvas" };
 }
 
 export const appearanceMsg = "appearance_changed";
@@ -108,6 +116,8 @@ export function initialModel(): Model {
     draft: new Uint8Array(0),
     canvasWidth: 0,
     zoom: 1,
+    zoomWindowId: 0,
+    zoomFromBoard: false,
     dark: false,
     chromeTop: 0,
   };
@@ -173,7 +183,7 @@ export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
     case "canvas_resized":
       return { ...model, canvasWidth: msg.width };
     case "zoomed":
-      return { ...model, zoom: model.zoom * msg.factor };
+      return { ...model, zoom: model.zoom * msg.factor, zoomWindowId: msg.windowId, zoomFromBoard: msg.fromBoard };
     case "appearance_changed":
       return { ...model, dark: msg.colorScheme === "dark" };
     case "chrome_changed":

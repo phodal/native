@@ -1611,6 +1611,14 @@ pub const PinchPhase = enum {
 /// deliberately: it is a view-global gesture (timeline/canvas zoom), the
 /// `on_key`-fallback shape rather than a widget-targeted event.
 pub const PinchEvent = struct {
+    /// Source identity: which window and gpu-surface view the gesture
+    /// happened on (the `GpuFrame` identity shape, because `x`/`y` are
+    /// view-local — a coordinate without its view is not a position).
+    /// Multi-window and multi-view apps tell pinches apart by these.
+    /// `label` is borrowed for the callback, like every event slice:
+    /// a model that keeps it must copy.
+    window_id: WindowId = 1,
+    label: []const u8 = "",
     phase: PinchPhase,
     /// Magnification DELTA for this event (NSEvent.magnification
     /// semantics): nonzero only on `.change`, 0 on begin/end. The

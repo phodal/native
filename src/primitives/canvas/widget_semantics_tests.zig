@@ -872,6 +872,174 @@ test "widget image emits draw image and exposes image semantics" {
     try std.testing.expect(display_list.commands[2] == .pop_clip);
 }
 
+test "widget media surface cover fit emits the image widget's rectangular clip" {
+    // Cover fit expands the drawn texture past the widget frame on one
+    // axis; emitImageWidget crops the overflow with a rectangular clip.
+    // The media surface draws through the same image pipeline and must
+    // carry the SAME clip: its draw-level radius mask is nothing at
+    // radius zero, so hosts that only mask radii (the AppKit packet
+    // draw) painted a zero-radius cover surface outside its bounds,
+    // over its siblings.
+    const surface_id: u64 = 5;
+    const row_children = [_]Widget{
+        .{
+            .id = 21,
+            .kind = .media_surface,
+            .frame = geometry.RectF.init(0, 0, 80, 48),
+            .image_id = surface_id,
+            .image_fit = .cover,
+        },
+        .{
+            .id = 22,
+            .kind = .image,
+            .frame = geometry.RectF.init(0, 0, 40, 48),
+            .image_id = 42,
+        },
+    };
+    const root = Widget{ .id = 20, .kind = .row, .children = &row_children };
+
+    var nodes: [3]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(root, geometry.RectF.init(0, 0, 160, 48), &nodes);
+    var commands: [8]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+    const display_list = builder.displayList();
+    try std.testing.expectEqual(@as(usize, 5), display_list.commandCount());
+    const media_frame = geometry.RectF.init(0, 0, 80, 48);
+    switch (display_list.commands[0]) {
+        .fill_rounded_rect => |fill| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(21, 1)), fill.id);
+            try expectRect(media_frame, fill.rect);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[1]) {
+        .push_clip => |clip| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(21, 3)), clip.id);
+            try expectRect(media_frame, clip.rect);
+            // A rectangular bounds crop, exactly like the image
+            // widget's — rounding stays on the draw's own mask.
+            try std.testing.expectEqual(@as(f32, 0), clip.radius.top_left);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    switch (display_list.commands[2]) {
+        .draw_image => |draw| {
+            try std.testing.expectEqual(@as(ObjectId, widgetPartId(21, 2)), draw.id);
+            try std.testing.expectEqual(canvas.mediaSurfaceTextureImageId(surface_id), draw.image_id);
+            try std.testing.expectEqual(ImageFit.cover, draw.fit);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // The clip closes BEFORE the sibling paints: the sibling's own draw
+    // is never cropped by the media surface's frame.
+    try std.testing.expect(display_list.commands[3] == .pop_clip);
+    switch (display_list.commands[4]) {
+        .draw_image => |draw| try std.testing.expectEqual(@as(ObjectId, widgetPartId(22, 1)), draw.id),
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Non-cover fits expand nothing and emit no clip — unchanged.
+    const contained = Widget{
+        .id = 21,
+        .kind = .media_surface,
+        .frame = media_frame,
+        .image_id = surface_id,
+        .image_fit = .stretch,
+    };
+    var contained_nodes: [1]WidgetLayoutNode = undefined;
+    const contained_layout = try layoutWidgetTree(contained, media_frame, &contained_nodes);
+    var contained_commands: [4]CanvasCommand = undefined;
+    var contained_builder = Builder.init(&contained_commands);
+    try contained_layout.emitDisplayList(&contained_builder, .{});
+    try std.testing.expectEqual(@as(usize, 2), contained_builder.displayList().commandCount());
+
+    // The rounded cover case keeps its draw-level radius mask AND gains
+    // the same bounds crop (the mask lies inside the rect, so pixels
+    // are unchanged where the radius already masked).
+    const rounded = Widget{
+        .id = 21,
+        .kind = .media_surface,
+        .frame = media_frame,
+        .image_id = surface_id,
+        .image_fit = .cover,
+        .style = .{ .radius = 12 },
+    };
+    var rounded_nodes: [1]WidgetLayoutNode = undefined;
+    const rounded_layout = try layoutWidgetTree(rounded, media_frame, &rounded_nodes);
+    var rounded_commands: [4]CanvasCommand = undefined;
+    var rounded_builder = Builder.init(&rounded_commands);
+    try rounded_layout.emitDisplayList(&rounded_builder, .{});
+    const rounded_list = rounded_builder.displayList();
+    try std.testing.expectEqual(@as(usize, 4), rounded_list.commandCount());
+    try std.testing.expect(rounded_list.commands[1] == .push_clip);
+    switch (rounded_list.commands[2]) {
+        .draw_image => |draw| try std.testing.expectEqual(@as(f32, 12), draw.radius.top_left),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(rounded_list.commands[3] == .pop_clip);
+}
+
+test "a composited cover media texture is byte-contained in the reference render" {
+    // Containment pin for the deterministic path: the render planner
+    // already crops every draw to its requested `dst` (command bounds),
+    // so reference renders — goldens, screenshots — were contained
+    // before the cover clip and must stay byte-identical with it. The
+    // clip COMMAND itself (pinned in the test above) is what protects
+    // packet hosts, which replay the display list and expand cover at
+    // draw time without the planner's bounds. The reference renderer
+    // skips presentation-only media textures by policy; feeding the
+    // texture in as an ordinary resource under the media-derived id
+    // exercises the draw geometry itself.
+    const surface_id: u64 = 5;
+    const media_frame = geometry.RectF.init(8, 4, 8, 16);
+    const widget = Widget{
+        .id = 9,
+        .kind = .media_surface,
+        .frame = media_frame,
+        .image_id = surface_id,
+        .image_fit = .cover,
+    };
+    var nodes: [1]WidgetLayoutNode = undefined;
+    const layout = try layoutWidgetTree(widget, media_frame, &nodes);
+    var commands: [4]CanvasCommand = undefined;
+    var builder = Builder.init(&commands);
+    try layout.emitDisplayList(&builder, .{});
+
+    // A square texture in a 1:2 frame: cover expands the draw to
+    // (4,4,16,16) — four columns past BOTH vertical edges of the frame,
+    // where a sibling would sit.
+    const texture_pixels = [_]u8{
+        255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255,
+    };
+    const images = [_]ReferenceImage{.{
+        .id = canvas.mediaSurfaceTextureImageId(surface_id),
+        .width = 2,
+        .height = 2,
+        .pixels = &texture_pixels,
+    }};
+
+    var render_commands: [8]RenderCommand = undefined;
+    const plan = try builder.displayList().renderPlan(&render_commands);
+    var pixels: [32 * 24 * 4]u8 = undefined;
+    @memset(&pixels, 0);
+    const surface = (try ReferenceRenderSurface.init(32, 24, &pixels)).withImages(&images);
+    try surface.renderPass(.{
+        .commands = plan.commands,
+        .surface_size = geometry.SizeF.init(32, 24),
+        .full_repaint = true,
+    }, Color.rgb8(0, 0, 0));
+
+    // Inside the frame: the texture (cover fills the whole frame).
+    try support.expectPixelRgba8(.{ 255, 255, 255, 255 }, surface, 12, 12);
+    // The fit-expanded bleed columns — left (x in [4,8)) and right
+    // (x in [16,20)) of the frame — stay background: the emitted clip
+    // contains the draw to the widget's bytes.
+    try support.expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 5, 12);
+    try support.expectPixelRgba8(.{ 0, 0, 0, 255 }, surface, 18, 12);
+}
+
 test "widget text fields expose textbox semantics and render focused chrome" {
     const text_field = Widget{
         .id = 8,

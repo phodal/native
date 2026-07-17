@@ -1166,6 +1166,13 @@ fn emitMediaSurfaceWidget(builder: *Builder, widget: Widget) Error!void {
         .radius = radius,
         .fill = colorFill(mediaSurfacePlaceholderColor(widget.image_id)),
     });
+    // Cover fit expands the drawn texture past the widget frame on one
+    // axis; the rectangular clip is what crops the overflow — exactly
+    // emitImageWidget's cover clip. The draw's own radius mask below is
+    // NOT a substitute: hosts that only mask radii paint a zero-radius
+    // cover surface outside its bounds, over its siblings.
+    const clips_image = widget.image_fit == .cover;
+    if (clips_image) try builder.pushClip(.{ .id = widgetPartId(widget.id, 3), .rect = widget.frame });
     try builder.drawImage(.{
         .id = widgetPartId(widget.id, 2),
         .image_id = canvas.mediaSurfaceTextureImageId(widget.image_id),
@@ -1178,6 +1185,7 @@ fn emitMediaSurfaceWidget(builder: *Builder, widget: Widget) Error!void {
         // surface masks on the draw itself (the avatar convention).
         .radius = radius,
     });
+    if (clips_image) try builder.popClip();
 }
 
 fn emitAvatarWidget(builder: *Builder, widget: Widget, tokens: DesignTokens) Error!void {

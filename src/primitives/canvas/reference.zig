@@ -53,13 +53,28 @@ const font_ttf = @import("font_ttf.zig");
 /// this builder actually receives when a composite renders). The
 /// budgets are currently equal, so the max is 1408 either way; the
 /// derivation keeps capacity honest if they ever diverge. Stack shape:
-/// at 28 B per element this is ~39 KiB in `drawGlyphOutline`, next to
-/// the ~80 KiB edge accumulator `vector.fillPath` already stacks below
-/// it — one glyph is inked at a time, so neither multiplies.
+/// at 28 B per element this is ~39 KiB in `drawGlyphOutline`; the edge
+/// accumulator below it is the per-thread heap-resident
+/// `vector.GlyphRasterizer` (see `reference_glyph_raster_scratch`), so
+/// the builder is the only glyph raster state on the stack.
 const reference_glyph_path_capacity: usize = @max(
     font_ttf.max_glyph_points + 3 * font_ttf.max_glyph_contours,
     font_ttf.max_composite_points + 3 * font_ttf.max_composite_contours,
 );
+
+/// Per-thread rasterizer for glyph fills: `vector.GlyphRasterizer`'s
+/// derived budgets guarantee every outline the font registration gate
+/// admits rasterizes (never a block fallback), which sizes it at
+/// ~508 KiB — a per-thread heap slot behind one TLS pointer (the
+/// lazy_tls pattern), not a stack temporary and not static TLS. Only
+/// threads that ink a glyph through the reference renderer allocate it.
+/// The array carries no default and stays uninitialized, exactly like
+/// the stack `Rasterizer` it replaces; `vector.fillGlyphPath` resets it
+/// per glyph.
+const ReferenceGlyphRasterScratch = struct {
+    raster: vector.GlyphRasterizer,
+};
+const reference_glyph_raster_scratch = @import("lazy_tls.zig").LazyTls(ReferenceGlyphRasterScratch);
 
 const referenceBlurKernel = reference_blur.referenceBlurKernel;
 const referenceBlurSampleWithKernel = reference_blur.referenceBlurSampleWithKernel;
@@ -785,9 +800,12 @@ pub const ReferenceRenderSurface = struct {
 
     /// Paint one glyph: the real Geist outline through the vector core
     /// when the codepoint resolves, the historical block rect otherwise
-    /// (unmapped codepoints, glyphs beyond the outline budgets, or draws
-    /// carrying no text bytes). Layout is untouched — the pen position
-    /// and advance still come from the deterministic estimator.
+    /// (unmapped codepoints, glyphs of hostile faces whose `maxp`
+    /// under-declares — the per-glyph parse backstops — or draws
+    /// carrying no text bytes; never a gate-admitted glyph, whose raster
+    /// budgets are derived from the registration gate). Layout is
+    /// untouched — the pen position and advance still come from the
+    /// deterministic estimator.
     fn drawGlyphBox(
         self: ReferenceRenderSurface,
         command: RenderCommand,
@@ -852,8 +870,14 @@ pub const ReferenceRenderSurface = struct {
             .coverage_blend = .srgb,
         };
         // The outline is already in device space; TrueType interiorness
-        // is the nonzero rule.
-        vector.fillPath(
+        // is the nonzero rule. The glyph raster budgets are derived from
+        // the registration gate's outline budgets, so a gate-admitted
+        // face never trips `VectorPathTooComplex` here — the remaining
+        // fallback triggers are a clip band wider than
+        // `max_raster_width` (surface-shaped, not font-shaped) and
+        // nothing else.
+        vector.fillGlyphPath(
+            &reference_glyph_raster_scratch.get().raster,
             builder.slice(),
             Affine.identity(),
             .nonzero,

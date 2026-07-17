@@ -767,6 +767,191 @@ test "declaredGlyphMaxima reads the bundled faces' true maxima" {
     try std.testing.expectEqual(@as(?font_ttf.GlyphMaxima, null), font_ttf.declaredGlyphMaxima("not a font"));
 }
 
+// --------------------------------------------------------------------
+// Glyph raster budgets: the registration gate admits faces up to the
+// outline budgets, and the vector core's glyph-fill budgets are DERIVED
+// from them (vector.zig's glyph budget block), so a gate-admitted glyph
+// must rasterize — never `VectorPathTooComplex`, never a block fallback.
+// The zigzag fixtures below are the truthful adversarial maxima.
+
+/// Append a single-contour zigzag glyph: `point_count` points marching x
+/// one font unit per point, y alternating 0 and `height`. With
+/// `on_curve` every point is an on-curve corner — ~one scanline crossing
+/// per point, the crossing-budget worst case. Without it every point is
+/// an off-curve control (TrueType implies on-curve midpoints), so the
+/// contour is one full-height quad per point — the flattening
+/// worst case: at large sizes every quad clamps at
+/// `vector.max_glyph_curve_segments`, which is the edge-budget maximum.
+fn appendZigzagGlyph(glyf: *ByteBuilder, point_count: u16, height: i16, on_curve: bool) void {
+    glyf.appendI16(1); // one contour
+    glyf.appendZeros(8); // bbox: unread by the parser
+    glyf.appendU16(point_count - 1);
+    glyf.appendU16(0); // no instructions
+    var index: usize = 0;
+    while (index < point_count) : (index += 1) glyf.appendU8(if (on_curve) 0x01 else 0x00);
+    // X deltas: start at 0, then +1 unit per point.
+    glyf.appendI16(0);
+    index = 1;
+    while (index < point_count) : (index += 1) glyf.appendI16(1);
+    // Y deltas: alternate 0 -> height -> 0 -> ...
+    glyf.appendI16(0);
+    index = 1;
+    while (index < point_count) : (index += 1) glyf.appendI16(if (index % 2 == 1) height else -height);
+}
+
+/// The truthful budget-maximal zigzag face: glyph 1 ('A') the on-curve
+/// line zigzag, glyph 2 ('B') the all-off-curve quad zigzag, both at
+/// exactly `max_glyph_points` in one contour, `maxp` declaring the
+/// truth — the registration gate admits this face.
+fn buildZigzagFont() ByteBuilder {
+    var glyf = ByteBuilder{};
+    var loca: [4]u32 = undefined;
+    loca[0] = 0;
+    loca[1] = 0; // glyph 0: empty
+    appendZigzagGlyph(&glyf, @intCast(font_ttf.max_glyph_points), 1000, true);
+    loca[2] = @intCast(glyf.len);
+    appendZigzagGlyph(&glyf, @intCast(font_ttf.max_glyph_points), 1000, false);
+    loca[3] = @intCast(glyf.len);
+    return buildSyntheticFont(
+        .{ .points = @intCast(font_ttf.max_glyph_points), .contours = 1 },
+        glyf.slice(),
+        &loca,
+    );
+}
+
+test "glyph raster budgets stay lockstep with the outline budgets they derive from" {
+    // The derivation chain in vector.zig, pinned against the source
+    // constants (vector.zig cannot import font_ttf.zig — the import
+    // runs the other way): quads <= points + contours over both glyph
+    // forms the gate admits, edges <= quads * clamp + close edges,
+    // crossings <= edges (an edge crosses a scanline at most once).
+    const quads = @max(
+        font_ttf.max_glyph_points + font_ttf.max_glyph_contours,
+        font_ttf.max_composite_points + font_ttf.max_composite_contours,
+    );
+    const closes = @max(font_ttf.max_glyph_contours, font_ttf.max_composite_contours);
+    try std.testing.expectEqual(quads * vector.max_glyph_curve_segments + closes, vector.max_glyph_fill_edges);
+    try std.testing.expectEqual(vector.max_glyph_fill_edges, vector.max_glyph_scanline_crossings);
+}
+
+test "truthful budget-maximal zigzag glyphs pass the gate and rasterize at the max raster size" {
+    const font = buildZigzagFont();
+    // The registration gate (`registerCanvasFont` routes every face
+    // through this parse) ADMITS the truthful declaration...
+    const face = try font_ttf.Face.parse(font.slice());
+
+    // ...so both zigzags must rasterize at the largest sweep the core
+    // serves (`max_raster_width` = an 8192-px em; the clamp makes the
+    // budgets size-independent above it). The band clip sits at ~30% of
+    // the em, where the line zigzag crosses one edge per point (~1024
+    // crossings — the old shared 256-crossing cap refused this) and the
+    // quad zigzag's ~1025 full-height quads each flatten to the 16-
+    // segment clamp (~16,400 edges — the old shared 4096-edge cap
+    // refused that).
+    const InkCounter = struct {
+        covered: usize = 0,
+        pub fn pixel(self: *@This(), x: i32, y: i32, coverage: f32) void {
+            _ = x;
+            _ = y;
+            if (coverage > 0) self.covered += 1;
+        }
+    };
+    const size: f32 = @floatFromInt(vector.max_raster_width);
+    const scale = size / face.units_per_em;
+    const raster = try std.testing.allocator.create(vector.GlyphRasterizer);
+    defer std.testing.allocator.destroy(raster);
+    const band_y0: i32 = @intFromFloat(size - 700 * scale);
+    for ([_]u21{ 'A', 'B' }) |codepoint| {
+        const glyph = face.glyphIndex(codepoint);
+        try std.testing.expect(glyph != 0);
+        var builder = vector.PathBuilder(font_ttf.max_glyph_points + 3 * font_ttf.max_glyph_contours){};
+        try face.glyphOutline(glyph, .{ .a = scale, .b = 0, .c = 0, .d = -scale, .tx = 0, .ty = size }, &builder);
+        var counter = InkCounter{};
+        try vector.fillGlyphPath(
+            raster,
+            builder.slice(),
+            Affine.identity(),
+            .nonzero,
+            vector.default_tolerance,
+            .{ .x0 = 0, .y0 = band_y0, .x1 = @intCast(vector.max_raster_width), .y1 = band_y0 + 32 },
+            &counter,
+        );
+        try std.testing.expect(counter.covered > 0);
+    }
+}
+
+test "a gate-admitted zigzag face inks outlines on both reference text paths, never the block fallback" {
+    // End to end through the reference renderer at the max raster size,
+    // on BOTH `drawTextLine` branches: the per-cluster pen walk (plain
+    // text) and the shaped-glyph branch (the glyph array the atlas plan
+    // keys glyphs by). The block fallback is a solid cell; the zigzag
+    // outline alternates inked slivers with background every few
+    // pixels, so a mid-glyph row must show many ink transitions —
+    // a solid run (block) shows at most two.
+    const reference = @import("reference.zig");
+    const render_model = @import("render.zig");
+    const frame_model = @import("frame.zig");
+    const text_model = @import("text.zig");
+
+    const font = buildZigzagFont();
+    const face = try font_ttf.Face.parse(font.slice());
+
+    const width: usize = vector.max_raster_width;
+    const height: usize = 32;
+    const size: f32 = @floatFromInt(vector.max_raster_width);
+    // Put the surface band at ~30% of the em: baseline sits below the
+    // surface, the zigzag's strokes cross every visible row.
+    const baseline: f32 = @as(f32, @floatFromInt(height / 2)) + 0.3 * size;
+
+    const pixels = try std.testing.allocator.alloc(u8, width * height * 4);
+    defer std.testing.allocator.free(pixels);
+
+    const fonts = [_]reference.ReferenceFont{.{ .id = 64, .face = &face }};
+    const shaped = [_]text_model.Glyph{.{ .id = 1, .x = 0, .y = 0, .text_start = 0, .text_len = 1 }};
+    const bounds = geometry.RectF.init(0, 0, @floatFromInt(width), @floatFromInt(height));
+
+    for ([_]bool{ false, true }) |use_shaped_glyphs| {
+        const glyph_slice: []const text_model.Glyph = if (use_shaped_glyphs) &shaped else &.{};
+        const commands = [_]render_model.RenderCommand{.{
+            .command = .{ .draw_text = .{
+                .id = 1,
+                .font_id = 64,
+                .size = size,
+                .origin = geometry.PointF.init(0, baseline),
+                .color = drawing.Color.rgb8(255, 255, 255),
+                .text = "A",
+                .glyphs = glyph_slice,
+            } },
+            .local_bounds = bounds,
+            .bounds = bounds,
+        }};
+        const surface = (try reference.ReferenceRenderSurface.init(width, height, pixels)).withFonts(&fonts);
+        try surface.renderPass(frame_model.CanvasRenderPass{
+            .surface_size = geometry.SizeF.init(@floatFromInt(width), @floatFromInt(height)),
+            .full_repaint = true,
+            .commands = &commands,
+        }, drawing.Color.rgba8(0, 0, 0, 0));
+
+        // Mid-band row: count inked pixels and ink<->background
+        // transitions. The outline's ~8-px slivers produce hundreds of
+        // transitions; the block fallback would be one solid run.
+        const row = height / 2;
+        var inked: usize = 0;
+        var transitions: usize = 0;
+        var previous_inked = false;
+        var x: usize = 0;
+        while (x < width) : (x += 1) {
+            const alpha = pixels[(row * width + x) * 4 + 3];
+            const is_inked = alpha > 0;
+            if (is_inked) inked += 1;
+            if (is_inked != previous_inked) transitions += 1;
+            previous_inked = is_inked;
+        }
+        try std.testing.expect(inked > 0);
+        try std.testing.expect(transitions > 100);
+    }
+}
+
 test "font_coverage answers identically to the face's cmap" {
     // The std-only coverage module (markup tofu guard) re-reads the
     // same embedded bytes with its own minimal cmap walk; it must never

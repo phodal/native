@@ -5772,7 +5772,11 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
 // Pinch input: the shared input-emit shape (converted point, top-left
 // origin flip, host timestamp, modifier flags) with the magnification
 // delta riding the event's `scale` field — unused (zero) on every other
-// input kind, so the runtime reads it unconditionally.
+// input kind, so the runtime reads it unconditionally. The x/y point is
+// the POINTER anchor: AppKit reports gesture events at locationInWindow
+// (the pointer location), never a midpoint between the fingers — NSTouch
+// positions are trackpad-normalized and have no view-space meaning, and
+// zoom-at-cursor is the anchoring apps want.
 - (void)emitPinchInputEventWithKind:(NSInteger)kind event:(NSEvent *)event magnification:(double)magnification {
     if (!self.host || self.surfaceLabel.length == 0 || !event) return;
     NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];

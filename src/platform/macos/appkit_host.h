@@ -79,7 +79,9 @@ typedef enum {
     /* Trackpad pinch phases (magnifyWithEvent:). The event's `scale`
      * field carries the per-event magnification DELTA on PINCH_CHANGE
      * (NSEvent.magnification semantics; cumulative gesture scale is the
-     * product of (1 + delta)); 0 on begin/end. Centroid rides x/y. */
+     * product of (1 + delta)); 0 on begin/end. The pointer anchor rides
+     * x/y (the event's locationInWindow — gesture events report the
+     * pointer location, not a midpoint between the fingers). */
     NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_BEGIN = 12,
     NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_CHANGE = 13,
     NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_END = 14,

@@ -370,8 +370,8 @@ pub fn TsUiApp(comptime core: type) type {
         /// the emitted PinchEvent record — `phase` (the declared
         /// begin/change/end alias, matched by member name), `scale` (the
         /// magnification DELTA on "change"; cumulative gesture scale is
-        /// the product of `1 + scale`), and the `x`/`y` centroid in
-        /// view-local canvas points. The core's return gates the channel
+        /// the product of `1 + scale`), and the `x`/`y` pointer anchor
+        /// in view-local canvas points. The core's return gates the channel
         /// exactly like a Zig `on_pinch` (null drops the event).
         fn pinchMsgAdapter(pinch: platform.PinchEvent) ?Msg {
             const params = @typeInfo(@TypeOf(core.pinchMsg)).@"fn".params;

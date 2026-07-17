@@ -101,7 +101,7 @@ pub const Action = enum {
     /// `pinch_begin`/`pinch_change`/`pinch_end` platform events, with
     /// one change carrying `scale - 1` so the cumulative gesture scale
     /// (the product of `1 + delta`) lands exactly on `<scale>`. The
-    /// centroid defaults to the view center.
+    /// anchor point defaults to the view center.
     widget_pinch,
     menu_command,
     shortcut,

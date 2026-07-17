@@ -544,8 +544,9 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
             /// app-level concern), delivered phase-explicit (`begin`,
             /// `change`, `end`) with the per-event magnification DELTA
             /// on `change` — the cumulative gesture scale is the running
-            /// product of `(1 + scale)` — and the centroid in view-local
-            /// canvas points. Only hosts with a pinch source emit these
+            /// product of `(1 + scale)` — and the pointer anchor in
+            /// view-local canvas points (`x`/`y`, the zoom-at-cursor
+            /// anchor). Only hosts with a pinch source emit these
             /// (macOS today); everywhere else the channel simply never
             /// fires.
             on_pinch: ?*const fn (pinch: platform.PinchEvent) ?MsgT = null,

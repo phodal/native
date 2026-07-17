@@ -4051,8 +4051,8 @@ const ZoomModel = struct {
     scale: f32 = 1,
     begins: u32 = 0,
     ends: u32 = 0,
-    centroid_x: f32 = 0,
-    centroid_y: f32 = 0,
+    anchor_x: f32 = 0,
+    anchor_y: f32 = 0,
 };
 
 const ZoomMsg = union(enum) {
@@ -4066,8 +4066,8 @@ fn zoomUpdate(model: *ZoomModel, msg: ZoomMsg) void {
         .pinch => |pinch| switch (pinch.phase) {
             .begin => {
                 model.begins += 1;
-                model.centroid_x = pinch.x;
-                model.centroid_y = pinch.y;
+                model.anchor_x = pinch.x;
+                model.anchor_y = pinch.y;
             },
             .change => model.scale *= (1 + pinch.scale),
             .end => model.ends += 1,
@@ -4114,7 +4114,7 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
     try std.testing.expect(app_state.installed);
 
     // begin -> change -> change -> change -> end, the host's phase
-    // stream: the model hears every phase, the centroid rides x/y, and
+    // stream: the model hears every phase, the pointer anchor rides x/y, and
     // the cumulative scale is the PRODUCT of (1 + delta) — two +25%
     // steps land on 1.5625, never the 1.45 a sum-of-deltas would
     // produce.
@@ -4126,8 +4126,8 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
         .y = 80,
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.model.begins);
-    try std.testing.expectEqual(@as(f32, 120), app_state.model.centroid_x);
-    try std.testing.expectEqual(@as(f32, 80), app_state.model.centroid_y);
+    try std.testing.expectEqual(@as(f32, 120), app_state.model.anchor_x);
+    try std.testing.expectEqual(@as(f32, 80), app_state.model.anchor_y);
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = canvas_label,
@@ -4202,7 +4202,7 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
     try std.testing.expectEqual(@as(u32, 2), app_state.model.begins);
 
     // The automation verb drives the same real events: one full gesture
-    // whose change carries scale - 1, centroid defaulting to the view
+    // whose change carries scale - 1, anchor defaulting to the view
     // center, so tests and users can pinch without a trackpad.
     app_state.model = .{};
     var command_buffer: [96]u8 = undefined;
@@ -4211,16 +4211,16 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
     try std.testing.expectEqual(@as(u32, 1), app_state.model.begins);
     try std.testing.expectEqual(@as(u32, 1), app_state.model.ends);
     try std.testing.expectEqual(@as(f32, 1.5), app_state.model.scale);
-    try std.testing.expectEqual(@as(f32, 200), app_state.model.centroid_x);
-    try std.testing.expectEqual(@as(f32, 150), app_state.model.centroid_y);
+    try std.testing.expectEqual(@as(f32, 200), app_state.model.anchor_x);
+    try std.testing.expectEqual(@as(f32, 150), app_state.model.anchor_y);
 
-    // An explicit centroid rides through; the cumulative scale keeps
+    // An explicit anchor point rides through; the cumulative scale keeps
     // compounding across gestures exactly as deltas compound within one.
     const pinch_at = try std.fmt.bufPrint(&command_buffer, "widget-pinch {s} 0.5 40 60", .{canvas_label});
     try harness.runtime.dispatchAutomationCommand(app, pinch_at);
     try std.testing.expectEqual(@as(f32, 0.75), app_state.model.scale);
-    try std.testing.expectEqual(@as(f32, 40), app_state.model.centroid_x);
-    try std.testing.expectEqual(@as(f32, 60), app_state.model.centroid_y);
+    try std.testing.expectEqual(@as(f32, 40), app_state.model.anchor_x);
+    try std.testing.expectEqual(@as(f32, 60), app_state.model.anchor_y);
 
     // A malformed scale is loud driver misuse, not a dispatched gesture
     // (the product of 1 + delta can never reach a non-positive scale).

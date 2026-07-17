@@ -1735,7 +1735,7 @@ export function update(model: Model, msg: Msg): Model {
   assert.match(zig, /zoom: f64/);
   assert.match(zig, /pub fn pinchMsg/);
 
-  // The bad shape (missing centroid fields) is a taught NS1033.
+  // The bad shape (missing anchor fields) is a taught NS1033.
   const bad_pinch = transpile(`
 export type PinchPhase = "begin" | "change" | "end";
 export interface PinchEvent { readonly phase: PinchPhase; readonly scale: number; }

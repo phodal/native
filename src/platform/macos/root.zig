@@ -2257,7 +2257,8 @@ test "mac gpu surface input maps pinch phases and carries the magnification delt
     try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.pinch_begin, gpuSurfaceInputEventFromAppKitEvent(&event).kind);
 
     // The magnification delta rides the ABI event's `scale` field with
-    // the centroid on x/y (the host's converted, top-left-origin point).
+    // the pointer anchor on x/y (the host's converted, top-left-origin
+    // pointer location).
     event.input_kind = 13;
     event.x = 160;
     event.y = 120;

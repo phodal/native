@@ -504,7 +504,7 @@ export class IntInference {
         }
         // The pinch channel's parameter record is intrinsically
         // fractional: magnification deltas are ~0.01..0.3 per event and
-        // the centroid is sub-point, so its number fields are HOST
+        // the pointer anchor is sub-point, so its number fields are HOST
         // values, never provable integers. Marking them boundary-fed
         // keeps a core's `pinch.scale === 0` comparison from
         // int-claiming the slot (which would round every zoom product

@@ -1581,8 +1581,12 @@ pub const GpuSurfaceInputEvent = struct {
     /// Pinch magnification DELTA for this event (NSEvent.magnification
     /// semantics): nonzero only on `pinch_change`, 0 on begin/end. The
     /// cumulative gesture scale is the running product of `(1 + scale)`
-    /// across the gesture's change events. The gesture centroid rides
-    /// `x`/`y` (view-local, same space as pointer events).
+    /// across the gesture's change events. The pointer anchor rides
+    /// `x`/`y` (view-local, same space as pointer events) — the pointer
+    /// location during the gesture, NOT a midpoint between the fingers:
+    /// hosts report gesture events at the pointer (AppKit's
+    /// `locationInWindow`), and zoom-at-cursor is the anchoring apps
+    /// want.
     scale: f32 = 0,
 };
 
@@ -1613,7 +1617,12 @@ pub const PinchEvent = struct {
     /// cumulative gesture scale is the running product of `(1 + scale)`
     /// across the gesture's change events.
     scale: f32 = 0,
-    /// Gesture centroid, view-local canvas points (the pointer-event space).
+    /// The pointer anchor, view-local canvas points (the pointer-event
+    /// space): where the zoom should anchor. This is the POINTER
+    /// location during the gesture (AppKit reports gesture events at
+    /// `locationInWindow`), not a midpoint between the fingers — raw
+    /// touch positions are trackpad-normalized and never reach view
+    /// space, and zoom-at-cursor is what apps want anyway.
     x: f32 = 0,
     y: f32 = 0,
 };

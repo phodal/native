@@ -63,8 +63,9 @@ pub const AutomationWidgetKey = struct {
 /// scale (1.5 zooms in 50%, 0.5 zooms out to half) — the dispatch
 /// synthesizes begin, one change carrying `scale - 1`, and end, so the
 /// product of `(1 + delta)` lands exactly on `scale`. The optional
-/// centroid is view-local canvas points; omitted, it defaults to the
-/// view center.
+/// anchor point is view-local canvas points (where the zoom anchors,
+/// like the pointer position under a real pinch); omitted, it defaults
+/// to the view center.
 pub const AutomationWidgetPinch = struct {
     view_label: []const u8,
     scale: f32,

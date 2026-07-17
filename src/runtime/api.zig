@@ -384,6 +384,14 @@ pub fn App(comptime Runtime: type) type {
 
 pub const Options = struct {
     platform: platform.Platform,
+    /// Allocator for the runtime's on-demand registrations (registered
+    /// canvas font bytes — sized per file at registration, so a runtime
+    /// with no registered fonts allocates nothing; the fixed-capacity
+    /// per-view storage stays embedded in the Runtime struct). The
+    /// default suits process-lifetime runtimes; embedders that create
+    /// and destroy runtimes in one process (tests, the docs wasm
+    /// preview host) pass their own and call `Runtime.deinit`.
+    allocator: std.mem.Allocator = std.heap.page_allocator,
     trace_sink: ?trace.Sink = null,
     log_path: ?[]const u8 = null,
     extensions: ?extensions.ModuleRegistry = null,

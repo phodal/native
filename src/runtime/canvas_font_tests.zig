@@ -89,6 +89,39 @@ test "canvas font registry validates ids, bytes, and capacity" {
     try std.testing.expectEqual(registered_font_id, resources[0].id);
 }
 
+test "a fresh runtime allocates zero font bytes until a registration happens" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: RegistryApp = .{};
+
+    // Count every runtime-allocator call: construction, startup, and
+    // frames perform NONE — font byte storage is on-demand at
+    // registration, so a fontless runtime carries zero font bytes. (The
+    // regression pinned here: a reservation-shaped slot pool at the
+    // 24 MiB CJK bound embedded 192 MiB in every Runtime, doubling the
+    // docs wasm preview host's per-tile memory before any font existed.)
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    harness.runtime.options.allocator = counting.allocator();
+    try harness.start(app_state.app());
+    try std.testing.expectEqual(@as(usize, 0), counting.allocations);
+
+    // Even an allocator that refuses everything leaves the runtime
+    // fully operational until a registration demands memory — and that
+    // failure is loud and recoverable, never a partial slot.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    harness.runtime.options.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, harness.runtime.registerCanvasFont(registered_font_id, mono_bytes));
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.registeredCanvasFontCount());
+
+    // Registration is the first allocation: exactly one, exactly the
+    // file's size (freed by Runtime.deinit through harness.destroy —
+    // the leak-checked test allocator backs it).
+    harness.runtime.options.allocator = counting.allocator();
+    try harness.runtime.registerCanvasFont(registered_font_id, mono_bytes);
+    try std.testing.expectEqual(@as(usize, 1), counting.allocations);
+    try std.testing.expectEqual(mono_bytes.len, counting.allocated_bytes);
+}
+
 test "hostile and truncated font files fail loud at registration and never corrupt the registry" {
     const harness = try startedGpuHarness(std.testing.allocator);
     defer harness.destroy(std.testing.allocator);

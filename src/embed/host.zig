@@ -757,6 +757,9 @@ pub const MobileHostApp = struct {
 
     pub fn destroy(self: *MobileHostApp) void {
         disableAutomation(self);
+        // Registered canvas fonts are heap-owned by the embedded
+        // runtime; return them before the host storage goes.
+        self.embedded.runtime.deinit();
         std.heap.page_allocator.destroy(self);
     }
 

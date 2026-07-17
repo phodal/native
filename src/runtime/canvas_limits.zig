@@ -122,12 +122,17 @@ pub const max_registered_canvas_image_pixel_bytes: usize = 1024 * 1024;
 // Sans JP), 10.4 (KR), 11.9 (TC), 13.6 (Noto Serif JP), and 17.8 (Noto
 // Sans SC), so 24 MiB covers the largest measured with ~1.4x headroom.
 // Latin UI faces stay a few hundred KB (the bundled faces are 71/116 KB).
-// Memory is fixed-capacity address space in the Runtime: 8 x 24 MiB =
-// 192 MiB, pages touched only as fonts register (and only as many pages
-// as the file fills); oversized files and a ninth font fail loudly
-// (`error.FontTooLarge` / `error.FontRegistryFull`). The gpu-surface
-// registration side-channel bound
-// (`platform.max_gpu_surface_font_bytes`) pins the same value.
+// Both bounds are VALIDATION bounds, not storage reservations: the
+// registry heap-allocates each font's exact file size from the
+// runtime's `options.allocator` at registration (canvas_fonts.zig), so
+// a runtime with no registered fonts carries zero font bytes. An
+// embedded slot pool at this bound would put 8 x 24 MiB = 192 MiB in
+// EVERY Runtime — measured on the docs wasm preview host (one Runtime
+// per component tile, wasm linear memory never overcommits) as 137.5 ->
+// 313.5 MB per instance before any font registered. Oversized files and
+// a ninth font fail loudly (`error.FontTooLarge` /
+// `error.FontRegistryFull`). The gpu-surface registration side-channel
+// bound (`platform.max_gpu_surface_font_bytes`) pins the same value.
 pub const max_registered_canvas_fonts: usize = 8;
 pub const max_registered_canvas_font_bytes: usize = 24 * 1024 * 1024;
 

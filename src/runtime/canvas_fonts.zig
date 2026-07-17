@@ -45,8 +45,18 @@
 //! retained caches. Re-using a registered id fails with
 //! `error.FontIdInUse`; there is deliberately no unregister.
 //!
-//! Capacities follow `canvas_limits`: `max_registered_canvas_fonts` slots
-//! of `max_registered_canvas_font_bytes` each, overflow is
+//! Byte storage is on-demand: registration copies the file into an
+//! exact-size heap allocation from the runtime's `options.allocator`, so
+//! a runtime with no registered fonts carries zero font bytes (embedding
+//! hosts create a Runtime per surface — a reservation-shaped pool at the
+//! 24 MiB CJK bound would embed 192 MiB in every one). Permanence makes
+//! ownership trivial: the bytes live until `Runtime.deinit`, and the
+//! parsed `Face` views, the gpu-surface host copy, and the measure
+//! provider all borrow them for exactly that lifetime.
+//!
+//! Capacities follow `canvas_limits` as VALIDATION bounds, not storage
+//! reservations: at most `max_registered_canvas_fonts` registrations of
+//! at most `max_registered_canvas_font_bytes` each, overflow is
 //! `error.FontRegistryFull` / `error.FontTooLarge` — never silent.
 
 const std = @import("std");
@@ -57,12 +67,13 @@ const canvas_limits = @import("canvas_limits.zig");
 pub const max_registered_canvas_fonts = canvas_limits.max_registered_canvas_fonts;
 pub const max_registered_canvas_font_bytes = canvas_limits.max_registered_canvas_font_bytes;
 
-/// One registered font's metadata; the bytes live in the runtime's slot
-/// pool and the parsed face view in the parallel face array at the same
-/// index.
+/// One registered font: its id and the exact-size heap copy of its
+/// TrueType bytes (owned by the runtime's `options.allocator`, freed at
+/// `Runtime.deinit`); the parsed face view lives in the parallel face
+/// array at the same index and points into these bytes.
 pub const CanvasFontEntry = struct {
     id: canvas.FontId = 0,
-    byte_len: usize = 0,
+    bytes: []const u8 = &.{},
 };
 
 /// Placeholder measure fn for the runtime's font-aware provider field
@@ -88,12 +99,12 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
         /// `error.InvalidFontId` (id 0 is the "inherit run font"
         /// sentinel), `error.ReservedFontId` (below
         /// `canvas.min_registered_font_id` — reserved for built-in
-        /// faces), `error.FontTooLarge` (over the per-slot bound
+        /// faces), `error.FontTooLarge` (over the per-font bound
         /// `canvas_limits.max_registered_canvas_font_bytes`),
         /// `error.FontIdInUse` (ids are permanent; see the module doc),
         /// `error.FontRegistryFull` (all
-        /// `canvas_limits.max_registered_canvas_fonts` slots hold other
-        /// ids), `error.FontParseFailed` (not a parseable TrueType face —
+        /// `canvas_limits.max_registered_canvas_fonts` registrations
+        /// hold other ids), `error.FontParseFailed` (not a parseable TrueType face —
         /// `canvas.font_ttf.parseFailureReason(ttf)` names what is wrong),
         /// `error.FontExceedsGlyphBudgets` (the face's `maxp` declares
         /// glyphs denser than `canvas.font_ttf`'s outline budgets, so its
@@ -110,7 +121,13 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
             if (self.canvas_font_count >= max_registered_canvas_fonts) return error.FontRegistryFull;
 
             const index = self.canvas_font_count;
-            const pooled = self.canvas_font_bytes[index][0..ttf.len];
+            // Exact-size heap copy, owned by the runtime until deinit
+            // (registration is permanent — no unregister — so this is
+            // the only allocation and the only free the registry ever
+            // makes). On-demand allocation instead of a slot pool keeps
+            // a fontless Runtime at zero font bytes.
+            const pooled = try self.options.allocator.alloc(u8, ttf.len);
+            errdefer self.options.allocator.free(pooled);
             @memcpy(pooled, ttf);
             const face = canvas.font_ttf.Face.parse(pooled) catch |err| switch (err) {
                 // The registration-time glyph-budget gate: refusing the
@@ -137,7 +154,7 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
             };
 
             self.canvas_font_faces[index] = face;
-            self.canvas_font_entries[index] = .{ .id = id, .byte_len = ttf.len };
+            self.canvas_font_entries[index] = .{ .id = id, .bytes = pooled };
             self.canvas_font_count = index + 1;
             // Bind the font-aware measure provider on first registration.
             // The runtime address is stable from here on (registration
@@ -155,9 +172,9 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
         }
 
         /// The registered set as the `ReferenceFont` slice both renderers
-        /// consume, rebuilt into runtime scratch (faces are borrowed from
-        /// the slot pool; with no unregister they stay valid for the
-        /// runtime's lifetime).
+        /// consume, rebuilt into runtime scratch (faces borrow each
+        /// entry's heap-owned bytes; with no unregister they stay valid
+        /// for the runtime's lifetime).
         pub fn registeredCanvasFonts(self: *Runtime) []const canvas.ReferenceFont {
             for (self.canvas_font_entries[0..self.canvas_font_count], 0..) |entry, index| {
                 self.canvas_font_resources_scratch[index] = .{

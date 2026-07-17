@@ -2,6 +2,11 @@
 //! bundled Geist Regular face: table parsing, cmap lookup, advances,
 //! and glyph outlines (simple and composite) rasterized through the
 //! vector core with pixel goldens in the reference conventions.
+//!
+//! The synthetic-font fixtures at the bottom build TrueType bytes
+//! in-test (dense CJK-shaped glyphs, composite chains, over- and
+//! under-declaring `maxp` tables) to prove both sides of the
+//! registration-time glyph-budget gate without shipping font binaries.
 
 const std = @import("std");
 const geometry = @import("geometry");
@@ -264,6 +269,431 @@ test "out of range glyph ids error instead of reading wild" {
     const face = &font_ttf.geist_regular;
     var builder = vector.PathBuilder(256){};
     try std.testing.expectError(error.FontParseFailed, face.glyphOutline(60000, Affine.identity(), &builder));
+}
+
+// --------------------------------------------------------------------
+// Synthetic fonts: in-test TrueType bytes with caller-controlled `maxp`
+// declarations and glyph payloads. Just enough of the format for the
+// parser's seven required tables; hostile fidelity (checksums, search
+// ranges) is deliberately absent because the parser never reads it.
+
+/// Fixed-buffer big-endian byte builder for synthetic tables.
+const ByteBuilder = struct {
+    bytes: [32768]u8 = undefined,
+    len: usize = 0,
+
+    fn appendU8(self: *ByteBuilder, value: u8) void {
+        self.bytes[self.len] = value;
+        self.len += 1;
+    }
+
+    fn appendU16(self: *ByteBuilder, value: u16) void {
+        self.appendU8(@intCast(value >> 8));
+        self.appendU8(@intCast(value & 0xFF));
+    }
+
+    fn appendI16(self: *ByteBuilder, value: i16) void {
+        self.appendU16(@bitCast(value));
+    }
+
+    fn appendU32(self: *ByteBuilder, value: u32) void {
+        self.appendU16(@intCast(value >> 16));
+        self.appendU16(@intCast(value & 0xFFFF));
+    }
+
+    fn appendZeros(self: *ByteBuilder, count: usize) void {
+        @memset(self.bytes[self.len .. self.len + count], 0);
+        self.len += count;
+    }
+
+    fn slice(self: *const ByteBuilder) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+/// Append a simple glyph of `contour_count` closed square rings, each
+/// with `points_per_contour` on-curve points (must be divisible by 4)
+/// walking the ring's perimeter, rings spread along x. All flags are
+/// plain on-curve with 16-bit deltas, so the outline emitted for ring
+/// points p0..pn is exactly moveTo(p0), lineTo(p1..pn), close.
+fn appendSimpleGlyph(glyf: *ByteBuilder, contour_count: u16, points_per_contour: u16) void {
+    std.debug.assert(points_per_contour % 4 == 0);
+    const side = points_per_contour / 4;
+    glyf.appendI16(@intCast(contour_count));
+    glyf.appendZeros(8); // bbox: unread by the parser
+    var contour: u16 = 0;
+    while (contour < contour_count) : (contour += 1) {
+        glyf.appendU16((contour + 1) * points_per_contour - 1);
+    }
+    glyf.appendU16(0); // no instructions
+    const total = @as(usize, contour_count) * points_per_contour;
+    var index: usize = 0;
+    while (index < total) : (index += 1) glyf.appendU8(0x01); // on-curve, long deltas
+    // Coordinates: point k of contour c walks a `side`-unit square at
+    // x offset c * (side + 4).
+    const point = struct {
+        fn at(c: u16, k: u16, s: u16) [2]i16 {
+            const quarter = k / s;
+            const step: i16 = @intCast(k % s);
+            const size: i16 = @intCast(s);
+            const base: i16 = @intCast(@as(u32, c) * (@as(u32, s) + 4));
+            return switch (quarter) {
+                0 => .{ base + step, 0 },
+                1 => .{ base + size, step },
+                2 => .{ base + size - step, size },
+                else => .{ base, size - step },
+            };
+        }
+    }.at;
+    // X deltas then Y deltas, accumulated across the whole glyph.
+    var previous: i16 = 0;
+    contour = 0;
+    while (contour < contour_count) : (contour += 1) {
+        var k: u16 = 0;
+        while (k < points_per_contour) : (k += 1) {
+            const p = point(contour, k, side);
+            glyf.appendI16(p[0] - previous);
+            previous = p[0];
+        }
+    }
+    previous = 0;
+    contour = 0;
+    while (contour < contour_count) : (contour += 1) {
+        var k: u16 = 0;
+        while (k < points_per_contour) : (k += 1) {
+            const p = point(contour, k, side);
+            glyf.appendI16(p[1] - previous);
+            previous = p[1];
+        }
+    }
+}
+
+const Component = struct { glyph: u16, dx: i16, dy: i16 };
+
+/// Append a composite glyph placing each component by XY offset.
+fn appendCompositeGlyph(glyf: *ByteBuilder, components: []const Component) void {
+    glyf.appendI16(-1);
+    glyf.appendZeros(8); // bbox: unread by the parser
+    for (components, 0..) |component, index| {
+        const more: u16 = if (index + 1 < components.len) 0x0020 else 0;
+        glyf.appendU16(0x0001 | 0x0002 | more); // words + xy offsets
+        glyf.appendU16(component.glyph);
+        glyf.appendI16(component.dx);
+        glyf.appendI16(component.dy);
+    }
+}
+
+/// Append a composite glyph placed by POINT MATCHING (the placement
+/// form the renderer refuses per glyph and `maxp` cannot describe).
+fn appendPointMatchedComposite(glyf: *ByteBuilder, child: u16) void {
+    glyf.appendI16(-1);
+    glyf.appendZeros(8);
+    glyf.appendU16(0x0001); // words, but NOT xy offsets: point numbers
+    glyf.appendU16(child);
+    glyf.appendI16(0);
+    glyf.appendI16(0);
+}
+
+const DeclaredMaxima = struct {
+    points: u16,
+    contours: u16,
+    component_elements: u16 = 0,
+    component_depth: u16 = 0,
+    maxp_version: u32 = 0x00010000,
+};
+
+/// Assemble a whole font: the seven required tables around `glyf_bytes`
+/// whose per-glyph offsets are `loca_offsets` (one per glyph plus the
+/// final end; glyph 0 stays empty when its two offsets are equal). The
+/// cmap maps 'A' + n to glyph 1 + n.
+fn buildSyntheticFont(declared: DeclaredMaxima, glyf_bytes: []const u8, loca_offsets: []const u32) ByteBuilder {
+    const num_glyphs: u16 = @intCast(loca_offsets.len - 1);
+    var font = ByteBuilder{};
+    font.appendU32(0x00010000);
+    font.appendU16(7);
+    font.appendZeros(6); // searchRange/entrySelector/rangeShift: unread
+    const off_head: u32 = 12 + 7 * 16;
+    const off_maxp = off_head + 54;
+    const off_hhea = off_maxp + 32;
+    const off_hmtx = off_hhea + 36;
+    const off_cmap = off_hmtx + 4 * @as(u32, num_glyphs);
+    const off_loca = off_cmap + 44;
+    const off_glyf = off_loca + 4 * (@as(u32, num_glyphs) + 1);
+    const record = struct {
+        fn append(builder: *ByteBuilder, tag: *const [4]u8, offset: u32, length: u32) void {
+            for (tag) |byte| builder.appendU8(byte);
+            builder.appendU32(0); // checksum: unread
+            builder.appendU32(offset);
+            builder.appendU32(length);
+        }
+    }.append;
+    record(&font, "head", off_head, 54);
+    record(&font, "maxp", off_maxp, 32);
+    record(&font, "hhea", off_hhea, 36);
+    record(&font, "hmtx", off_hmtx, 4 * @as(u32, num_glyphs));
+    record(&font, "cmap", off_cmap, 44);
+    record(&font, "loca", off_loca, 4 * (@as(u32, num_glyphs) + 1));
+    record(&font, "glyf", off_glyf, @intCast(glyf_bytes.len));
+
+    // head: unitsPerEm at +18, indexToLocFormat at +50 (long loca).
+    std.debug.assert(font.len == off_head);
+    font.appendZeros(18);
+    font.appendU16(1000);
+    font.appendZeros(30);
+    font.appendI16(1);
+    font.appendI16(0);
+
+    // maxp v1.0 with the declared maxima under test.
+    std.debug.assert(font.len == off_maxp);
+    font.appendU32(declared.maxp_version);
+    font.appendU16(num_glyphs);
+    font.appendU16(declared.points);
+    font.appendU16(declared.contours);
+    font.appendZeros(18); // composite points/contours, zones..instruction sizes
+    font.appendU16(declared.component_elements);
+    font.appendU16(declared.component_depth);
+
+    // hhea: ascender +4, descender +6, numberOfHMetrics +34.
+    std.debug.assert(font.len == off_hhea);
+    font.appendZeros(4);
+    font.appendI16(800);
+    font.appendI16(-200);
+    font.appendZeros(26);
+    font.appendU16(num_glyphs);
+
+    // hmtx: one long metric per glyph.
+    std.debug.assert(font.len == off_hmtx);
+    var glyph: u16 = 0;
+    while (glyph < num_glyphs) : (glyph += 1) {
+        font.appendU16(500);
+        font.appendI16(0);
+    }
+
+    // cmap: one format-4 subtable, 'A' + n -> glyph 1 + n.
+    std.debug.assert(font.len == off_cmap);
+    font.appendU16(0);
+    font.appendU16(1);
+    font.appendU16(3);
+    font.appendU16(1);
+    font.appendU32(12);
+    font.appendU16(4); // format
+    font.appendU16(32); // subtable length
+    font.appendU16(0); // language
+    font.appendU16(4); // segCountX2
+    font.appendZeros(6); // searchRange/entrySelector/rangeShift: unread
+    font.appendU16(0x41 + num_glyphs - 2); // endCode[0]
+    font.appendU16(0xFFFF); // endCode[1]
+    font.appendU16(0); // reservedPad
+    font.appendU16(0x41); // startCode[0]
+    font.appendU16(0xFFFF); // startCode[1]
+    font.appendU16(@as(u16, 1) -% @as(u16, 0x41)); // idDelta[0]: 'A' -> glyph 1
+    font.appendU16(1); // idDelta[1]: 0xFFFF -> glyph 0
+    font.appendU16(0); // idRangeOffset[0]
+    font.appendU16(0); // idRangeOffset[1]
+
+    // loca (long form).
+    std.debug.assert(font.len == off_loca);
+    for (loca_offsets) |offset| font.appendU32(offset);
+
+    std.debug.assert(font.len == off_glyf);
+    @memcpy(font.bytes[font.len .. font.len + glyf_bytes.len], glyf_bytes);
+    font.len += glyf_bytes.len;
+    return font;
+}
+
+test "synthetic dense glyphs beyond the old Latin-sized budgets parse and outline correctly" {
+    // CJK-shaped density, truthfully declared: 84 rings x 12 points
+    // (1008 points — the measured Noto Sans JP contour high-water is 84,
+    // and dense kanji far exceed the old 128-point budget) plus a
+    // single-contour glyph at exactly the point budget.
+    var glyf = ByteBuilder{};
+    var loca: [4]u32 = undefined;
+    loca[0] = 0;
+    loca[1] = 0; // glyph 0: empty
+    appendSimpleGlyph(&glyf, 84, 12);
+    loca[2] = @intCast(glyf.len);
+    appendSimpleGlyph(&glyf, 1, @intCast(font_ttf.max_glyph_points));
+    loca[3] = @intCast(glyf.len);
+    const font = buildSyntheticFont(
+        .{ .points = font_ttf.max_glyph_points, .contours = 84 },
+        glyf.slice(),
+        &loca,
+    );
+
+    const face = try font_ttf.Face.parse(font.slice());
+    try std.testing.expectEqual(@as(u16, 3), face.num_glyphs);
+    try std.testing.expectEqual(@as(u16, 1), face.glyphIndex('A'));
+    try std.testing.expectEqual(@as(u16, 2), face.glyphIndex('B'));
+
+    // The dense glyph outlines completely: every on-curve ring is
+    // moveTo + 12 lineTo (the walk returns to the start point) + close,
+    // so 84 * 14 elements, starting at the first ring's origin.
+    var builder = vector.PathBuilder(2048){};
+    try face.glyphOutline(1, Affine.identity(), &builder);
+    try std.testing.expectEqual(@as(usize, 84 * 14), builder.slice().len);
+    const first = builder.slice()[0];
+    try std.testing.expectEqual(drawing.PathVerb.move_to, first.verb);
+    try std.testing.expectEqual(@as(f32, 0), first.points[0].x);
+    try std.testing.expectEqual(@as(f32, 0), first.points[0].y);
+
+    // A glyph at exactly the point budget parses and outlines too.
+    builder.reset();
+    try face.glyphOutline(2, Affine.identity(), &builder);
+    try std.testing.expectEqual(@as(usize, font_ttf.max_glyph_points + 2), builder.slice().len);
+
+    // And the dense outline rasterizes through the vector core within
+    // the edge budget.
+    var grid = Grid{};
+    const scale: f32 = 16.0 / face.units_per_em;
+    const transform = Affine{ .a = scale, .b = 0, .c = 0, .d = -scale, .tx = 2, .ty = 20 };
+    builder.reset();
+    try face.glyphOutline(1, transform, &builder);
+    try vector.fillPath(builder.slice(), Affine.identity(), .nonzero, vector.default_tolerance, fullClip(), &grid);
+}
+
+test "synthetic composites at the depth and component budgets parse and outline" {
+    // Glyph 1: a simple ring. Glyphs 2..5: a composite chain nested to
+    // exactly `max_composite_depth`. Glyph 6: one composite carrying
+    // exactly `max_composite_components` offset copies of the ring.
+    var glyf = ByteBuilder{};
+    var loca: [8]u32 = undefined;
+    loca[0] = 0;
+    loca[1] = 0;
+    appendSimpleGlyph(&glyf, 1, 4);
+    loca[2] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 1, .dx = 10, .dy = 0 }});
+    loca[3] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 2, .dx = 10, .dy = 0 }});
+    loca[4] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 3, .dx = 10, .dy = 0 }});
+    loca[5] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 4, .dx = 10, .dy = 0 }});
+    loca[6] = @intCast(glyf.len);
+    var components: [font_ttf.max_composite_components]Component = undefined;
+    for (&components, 0..) |*component, index| {
+        component.* = .{ .glyph = 1, .dx = @intCast(index * 8), .dy = 0 };
+    }
+    appendCompositeGlyph(&glyf, &components);
+    loca[7] = @intCast(glyf.len);
+    const font = buildSyntheticFont(.{
+        .points = 4,
+        .contours = 1,
+        .component_elements = font_ttf.max_composite_components,
+        .component_depth = font_ttf.max_composite_depth,
+    }, glyf.slice(), &loca);
+
+    const face = try font_ttf.Face.parse(font.slice());
+
+    // The chain bottoms out at the simple ring (moveTo + 4 lineTo +
+    // close), its XY offsets summed.
+    var builder = vector.PathBuilder(64){};
+    try face.glyphOutline(5, Affine.identity(), &builder);
+    try std.testing.expectEqual(@as(usize, 6), builder.slice().len);
+    try std.testing.expectEqual(@as(f32, 40), builder.slice()[0].points[0].x);
+
+    // The full component fan emits one ring per component.
+    builder.reset();
+    try face.glyphOutline(6, Affine.identity(), &builder);
+    try std.testing.expectEqual(@as(usize, 6 * font_ttf.max_composite_components), builder.slice().len);
+}
+
+test "a face declaring maxima beyond the budgets is refused at parse with a teaching" {
+    var glyf = ByteBuilder{};
+    var loca: [3]u32 = undefined;
+    loca[0] = 0;
+    loca[1] = 0;
+    appendSimpleGlyph(&glyf, 1, 4);
+    loca[2] = @intCast(glyf.len);
+
+    const over_budget = [_]DeclaredMaxima{
+        .{ .points = font_ttf.max_glyph_points + 1, .contours = 1 },
+        .{ .points = 4, .contours = font_ttf.max_glyph_contours + 1 },
+        .{ .points = 4, .contours = 1, .component_elements = font_ttf.max_composite_components + 1 },
+        .{ .points = 4, .contours = 1, .component_depth = font_ttf.max_composite_depth + 1 },
+    };
+    for (over_budget) |declared| {
+        const font = buildSyntheticFont(declared, glyf.slice(), &loca);
+        try std.testing.expectError(error.FontGlyphTooComplex, font_ttf.Face.parse(font.slice()));
+        // The teaching machinery names the refusal and the maxima stay
+        // readable for callers that format the face's numbers.
+        const reason = font_ttf.parseFailureReason(font.slice()).?;
+        try std.testing.expect(std.mem.indexOf(u8, reason, "budgets") != null);
+        const maxima = font_ttf.declaredGlyphMaxima(font.slice()).?;
+        try std.testing.expect(!maxima.withinBudgets());
+    }
+
+    // The same font declared truthfully parses: the gate reads maxima,
+    // not vibes.
+    const honest = buildSyntheticFont(.{ .points = 4, .contours = 1 }, glyf.slice(), &loca);
+    _ = try font_ttf.Face.parse(honest.slice());
+    try std.testing.expectEqual(@as(?[]const u8, null), font_ttf.parseFailureReason(honest.slice()));
+
+    // A maxp that is not the version-1.0 glyf form is a parse failure
+    // with its own teaching.
+    const wrong_version = buildSyntheticFont(.{ .points = 4, .contours = 1, .maxp_version = 0x00005000 }, glyf.slice(), &loca);
+    try std.testing.expectError(error.FontParseFailed, font_ttf.Face.parse(wrong_version.slice()));
+    const version_reason = font_ttf.parseFailureReason(wrong_version.slice()).?;
+    try std.testing.expect(std.mem.indexOf(u8, version_reason, "maxp") != null);
+}
+
+test "a face that under-declares its maxp hits the per-glyph backstops, never wild reads" {
+    // Glyph 1 really carries more contours than the budget; glyph 2 is
+    // a composite chain one level past the depth budget; glyph 3 places
+    // its component by point matching. maxp declares none of it.
+    var glyf = ByteBuilder{};
+    var loca: [10]u32 = undefined;
+    loca[0] = 0;
+    loca[1] = 0;
+    appendSimpleGlyph(&glyf, @intCast(font_ttf.max_glyph_contours + 1), 4);
+    loca[2] = @intCast(glyf.len);
+    appendSimpleGlyph(&glyf, 1, 4);
+    loca[3] = @intCast(glyf.len);
+    // Five nested composites: the deepest simple child sits one level
+    // past `max_composite_depth`.
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 2, .dx = 0, .dy = 0 }});
+    loca[4] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 3, .dx = 0, .dy = 0 }});
+    loca[5] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 4, .dx = 0, .dy = 0 }});
+    loca[6] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 5, .dx = 0, .dy = 0 }});
+    loca[7] = @intCast(glyf.len);
+    appendCompositeGlyph(&glyf, &.{.{ .glyph = 6, .dx = 0, .dy = 0 }});
+    loca[8] = @intCast(glyf.len);
+    appendPointMatchedComposite(&glyf, 2);
+    loca[9] = @intCast(glyf.len);
+    const font = buildSyntheticFont(.{ .points = 4, .contours = 1, .component_depth = 1, .component_elements = 1 }, glyf.slice(), &loca);
+
+    // The lie passes the gate (declared maxima are tiny)...
+    const face = try font_ttf.Face.parse(font.slice());
+
+    // ...and the per-glyph backstops catch the reality, recoverably.
+    var builder = vector.PathBuilder(2048){};
+    try std.testing.expectError(error.FontGlyphTooComplex, face.glyphOutline(1, Affine.identity(), &builder));
+    builder.reset();
+    try std.testing.expectError(error.FontGlyphTooComplex, face.glyphOutline(7, Affine.identity(), &builder));
+    builder.reset();
+    try std.testing.expectError(error.FontGlyphTooComplex, face.glyphOutline(8, Affine.identity(), &builder));
+}
+
+test "declaredGlyphMaxima reads the bundled faces' true maxima" {
+    // Pins the measured ground truth the budget constants document.
+    const regular = font_ttf.declaredGlyphMaxima(font_ttf.geist_regular_bytes).?;
+    try std.testing.expectEqual(@as(u16, 96), regular.points);
+    try std.testing.expectEqual(@as(u16, 16), regular.contours);
+    try std.testing.expectEqual(@as(u16, 4), regular.component_elements);
+    try std.testing.expectEqual(@as(u16, 3), regular.component_depth);
+    try std.testing.expect(regular.withinBudgets());
+
+    const mono = font_ttf.declaredGlyphMaxima(font_ttf.geist_mono_bytes).?;
+    try std.testing.expectEqual(@as(u16, 116), mono.points);
+    try std.testing.expectEqual(@as(u16, 16), mono.contours);
+    try std.testing.expectEqual(@as(u16, 3), mono.component_elements);
+    try std.testing.expectEqual(@as(u16, 1), mono.component_depth);
+    try std.testing.expect(mono.withinBudgets());
+
+    // Not-a-font blobs answer null instead of erroring.
+    try std.testing.expectEqual(@as(?font_ttf.GlyphMaxima, null), font_ttf.declaredGlyphMaxima("not a font"));
 }
 
 test "font_coverage answers identically to the face's cmap" {

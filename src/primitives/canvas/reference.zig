@@ -44,9 +44,14 @@ const render_fingerprints = @import("render_fingerprints.zig");
 const vector = @import("vector.zig");
 const font_ttf = @import("font_ttf.zig");
 
-/// Element budget for one glyph outline: the bundled face's densest
-/// glyphs stay well under this (maxp: 96 points per simple glyph).
-const reference_glyph_path_capacity: usize = 256;
+/// Element budget for one glyph outline, derived from the parser's
+/// glyph budgets so every glyph a parsed face maps fits: a contour
+/// emits at most one element per point plus a move, a closing quad, and
+/// a close (points + 3*contours = 1408). Stack shape: at 28 B per
+/// element this is ~39 KiB in `drawGlyphOutline`, next to the ~80 KiB
+/// edge accumulator `vector.fillPath` already stacks below it — one
+/// glyph is inked at a time, so neither multiplies.
+const reference_glyph_path_capacity: usize = font_ttf.max_glyph_points + 3 * font_ttf.max_glyph_contours;
 
 const referenceBlurKernel = reference_blur.referenceBlurKernel;
 const referenceBlurSampleWithKernel = reference_blur.referenceBlurSampleWithKernel;

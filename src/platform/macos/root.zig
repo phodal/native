@@ -2248,6 +2248,33 @@ test "mac gpu surface input maps pointer cancel" {
     try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.pointer_cancel, input.kind);
 }
 
+test "mac gpu surface input maps pinch phases and carries the magnification delta" {
+    const label = "timeline-canvas";
+    var event = std.mem.zeroes(AppKitEvent);
+    event.view_label = label.ptr;
+    event.view_label_len = label.len;
+    event.input_kind = 12;
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.pinch_begin, gpuSurfaceInputEventFromAppKitEvent(&event).kind);
+
+    // The magnification delta rides the ABI event's `scale` field with
+    // the centroid on x/y (the host's converted, top-left-origin point).
+    event.input_kind = 13;
+    event.x = 160;
+    event.y = 120;
+    event.scale = 0.25;
+    const change = gpuSurfaceInputEventFromAppKitEvent(&event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.pinch_change, change.kind);
+    try std.testing.expectEqual(@as(f32, 0.25), change.scale);
+    try std.testing.expectEqual(@as(f32, 160), change.x);
+    try std.testing.expectEqual(@as(f32, 120), change.y);
+
+    event.input_kind = 14;
+    event.scale = 0;
+    const end = gpuSurfaceInputEventFromAppKitEvent(&event);
+    try std.testing.expectEqual(platform_mod.GpuSurfaceInputKind.pinch_end, end.kind);
+    try std.testing.expectEqual(@as(f32, 0), end.scale);
+}
+
 test "mac appearance event maps color scheme" {
     try std.testing.expectEqual(platform_mod.ColorScheme.light, appKitColorScheme(0));
     try std.testing.expectEqual(platform_mod.ColorScheme.dark, appKitColorScheme(1));

@@ -114,8 +114,9 @@ pub const max_registered_canvas_image_pixel_bytes: usize = 1024 * 1024;
 // fails loudly (`error.MediaSurfaceChannelsExhausted`). Both bounds are
 // VALIDATION bounds plus per-USE allocation sizes, never Runtime-struct
 // reservations: an ADOPTED texture's buffer is one lazy frame-budget
-// allocation from the runtime's `options.allocator` at the entry's
-// first adoption (freed by `Runtime.deinit`), so a runtime with no
+// allocation from the runtime's `owned_allocator` (frozen from
+// `Options.allocator` at init) at the entry's first adoption (freed by
+// `Runtime.deinit`), so a runtime with no
 // media producers carries zero media-texture bytes — an embedded pool
 // at this bound put 4 x 8 MiB = 32 MiB in EVERY Runtime, measured on
 // the docs wasm preview host (one Runtime per component tile, wasm

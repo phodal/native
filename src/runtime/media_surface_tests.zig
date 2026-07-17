@@ -883,12 +883,28 @@ test "docs example: the typed producer callback is writable against the public e
 
 // -------------------------------------------------- lazy texture buffers
 
-test "a fresh runtime allocates zero media-texture bytes until an adoption happens" {
-    const harness = try startedGpuHarness(std.testing.allocator);
-    defer harness.destroy(std.testing.allocator);
-    var app_state: ProbeApp = .{};
-    const app = app_state.app();
+/// A started GPU harness whose runtime froze `runtime_allocator` at
+/// init. The runtime's `owned_allocator` captures `Options.allocator`
+/// in `initAt` and mutating `options.allocator` on a live runtime
+/// deliberately retargets nothing, so a test allocator must be injected
+/// through the real capture site: re-initialize the runtime in place
+/// with the harness's own platform and trace wiring (nothing is
+/// heap-owned yet, so the re-init leaks nothing).
+fn startedGpuHarnessWithRuntimeAllocator(gpa: std.mem.Allocator, runtime_allocator: std.mem.Allocator) !*TestHarness() {
+    const harness = try startedGpuHarness(gpa);
+    errdefer harness.destroy(gpa);
+    core.Runtime.initAt(&harness.runtime, .{
+        .platform = harness.null_platform.platform(),
+        .trace_sink = harness.trace_sink.sink(),
+        .allocator = runtime_allocator,
+        .environ = std.testing.environ,
+    });
+    // Match TestHarness().init: tests fail loud on handler/update errors.
+    harness.runtime.dispatch_error_policy = .propagate;
+    return harness;
+}
 
+test "a fresh runtime allocates zero media-texture bytes until an adoption happens" {
     // Count every runtime-allocator call: construction, startup, frames,
     // and even a live CLAIM with staged pushes perform NONE — texture
     // buffer storage is on-demand at first adoption. (The regression
@@ -897,7 +913,10 @@ test "a fresh runtime allocates zero media-texture bytes until an adoption happe
     // Runtime per component tile — before any producer existed; the
     // registered-font-pool regression's twin.)
     var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
-    harness.runtime.options.allocator = counting.allocator();
+    const harness = try startedGpuHarnessWithRuntimeAllocator(std.testing.allocator, counting.allocator());
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
     try harness.start(app);
     _ = try harness.runtime.createView(.{
         .window_id = 1,
@@ -913,16 +932,18 @@ test "a fresh runtime allocates zero media-texture bytes until an adoption happe
 
     // Even an allocator that refuses everything leaves the channel
     // operational: the adoption drops THIS frame loudly and the next
-    // one retries — never a torn entry, never a crash.
-    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
-    harness.runtime.options.allocator = failing.allocator();
+    // one retries — never a torn entry, never a crash. The FROZEN
+    // allocator itself turns refusing (ownership never moves; only the
+    // backing behavior changes), because swapping options.allocator
+    // would retarget nothing.
+    counting.fail_index = 0;
     try dispatchFrame(harness, app, 1);
     try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) == null);
 
     // The first adoption is the first allocation: exactly one, exactly
     // the frame budget (freed by Runtime.deinit through
     // harness.destroy — the leak-checked test allocator backs it).
-    harness.runtime.options.allocator = counting.allocator();
+    counting.fail_index = std.math.maxInt(usize);
     const green = solidFrame(.{ 0, 255, 0, 255 });
     try producer.pushFrame(2, 2, &green);
     try dispatchFrame(harness, app, 2);
@@ -936,6 +957,50 @@ test "a fresh runtime allocates zero media-texture bytes until an adoption happe
     try producer.pushFrame(2, 2, &blue);
     try dispatchFrame(harness, app, 3);
     try std.testing.expectEqual(@as(usize, 1), counting.allocations);
+}
+
+test "media buffer ownership freezes at init: a mutated options.allocator sees zero activity" {
+    // The hazard pinned here: `Runtime.options` is public and mutable,
+    // so if the lazy adoption allocation and deinit's free both read
+    // `options.allocator` LIVE, swapping it between adoption and deinit
+    // frees through the wrong allocator — silent UB. Ownership must
+    // freeze into `owned_allocator` at init instead.
+    var frozen = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const harness = try startedGpuHarnessWithRuntimeAllocator(std.testing.allocator, frozen.allocator());
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+    const red = solidFrame(.{ 255, 0, 0, 255 });
+    try producer.pushFrame(2, 2, &red);
+    try dispatchFrame(harness, app, 1);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) != null);
+    try std.testing.expectEqual(@as(usize, 1), frozen.allocations);
+
+    // Sabotage: swap options.allocator AFTER the adoption allocated.
+    // fail_index = 0 poisons the swapped-in allocator (any allocation
+    // through it refuses), and its counters pin that deinit routes
+    // NOTHING here — neither an alloc nor, critically, the free.
+    var poisoned = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    harness.runtime.options.allocator = poisoned.allocator();
+
+    harness.runtime.deinit();
+    try std.testing.expectEqual(@as(usize, 1), frozen.deallocations);
+    try std.testing.expectEqual(canvas_limits.max_media_surface_pixel_bytes, frozen.freed_bytes);
+    try std.testing.expectEqual(@as(usize, 0), poisoned.allocations);
+    try std.testing.expectEqual(@as(usize, 0), poisoned.deallocations);
+    try std.testing.expectEqual(@as(usize, 0), poisoned.freed_bytes);
+    // harness.destroy's second deinit finds the buffers already
+    // returned (deinit resets them to empty) — no double free through
+    // either allocator.
 }
 
 // ------------------------------------------------------- producer wakes

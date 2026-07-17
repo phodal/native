@@ -179,16 +179,17 @@ pub const DispatchErrorPolicy = enum { degrade, propagate };
 
 pub const Runtime = struct {
     options: Options,
-    /// The allocator that owns every runtime-lifetime heap registration
-    /// (today: registered canvas font bytes). Captured from
-    /// `Options.allocator` at init precisely because `options` is public
-    /// and mutable: allocation and free of owned storage can be a whole
-    /// runtime lifetime apart, and they must resolve through ONE
-    /// allocator identity. Mutating `options.allocator` on a live
-    /// runtime does not retarget this — bytes are always returned to the
-    /// allocator that made them. Every on-demand owner (registration
-    /// allocs, refusal-path frees, the `deinit` frees) goes through this
-    /// field, never through `options.allocator`.
+    /// The allocator that owns every runtime-lifetime heap allocation
+    /// (registered canvas font bytes, adopted media-surface texture
+    /// buffers). Captured from `Options.allocator` at init precisely
+    /// because `options` is public and mutable: allocation and free of
+    /// owned storage can be a whole runtime lifetime apart, and they
+    /// must resolve through ONE allocator identity. Mutating
+    /// `options.allocator` on a live runtime does not retarget this —
+    /// bytes are always returned to the allocator that made them. Every
+    /// on-demand owner (registration and adoption allocs, refusal-path
+    /// frees, the `deinit` frees) goes through this field, never
+    /// through `options.allocator`.
     owned_allocator: std.mem.Allocator,
     surface: platform.Surface,
     appearance: platform.Appearance = .{},
@@ -371,8 +372,8 @@ pub const Runtime = struct {
     canvas_image_resources_scratch: [canvas_limits.max_registered_canvas_images + canvas_limits.max_media_surface_channels]canvas.ReferenceImage = undefined,
     /// Adopted media-surface textures (see media_surface.zig): entry
     /// metadata and the per-channel pixel buffers the loop thread owns.
-    /// Each buffer is ONE lazy frame-budget allocation from
-    /// `options.allocator` at the entry's first adoption (freed only by
+    /// Each buffer is ONE lazy frame-budget allocation from the frozen
+    /// `owned_allocator` at the entry's first adoption (freed only by
     /// `deinit`) — zero media use costs zero bytes, where an embedded
     /// pool at the budget would put 4 x 8 MiB = 32 MiB in EVERY Runtime
     /// (the registered-font-pool regression's twin, measured on the
@@ -426,7 +427,7 @@ pub const Runtime = struct {
         self.options = options;
         // Freeze the ownership allocator now (see the field doc):
         // `options` stays publicly mutable, but the identity that owns
-        // on-demand registrations must not move under live allocations.
+        // on-demand storage must not move under live allocations.
         self.owned_allocator = options.allocator;
         self.surface = options.platform.surface();
         // The profile rings exceed the small-default copy bound above;
@@ -450,16 +451,17 @@ pub const Runtime = struct {
     }
 
     /// Release the runtime's heap-owned on-demand storage (registered
-    /// canvas font bytes and adopted media-surface texture buffers) and
-    /// disarm the media-surface wake bindings (a producer thread must
-    /// never wake a dead host). Ends the runtime's life: parsed faces,
-    /// atlas keys, measure providers, adopted textures, and the
-    /// resource slices built over them are invalid past this point.
-    /// Process-lifetime embeddings (the app runner) may skip it — the
-    /// default allocator's pages die with the process, and the run
-    /// loop's exit defer already disarms the wakes — but embedders that
-    /// create and destroy runtimes in one process (tests, the docs wasm
-    /// preview host) call it to return the storage.
+    /// canvas font bytes and adopted media-surface texture buffers,
+    /// allocated from the init-frozen `owned_allocator`) and disarm the
+    /// media-surface wake bindings (a producer thread must never wake a
+    /// dead host). Ends the runtime's life: parsed faces, atlas keys,
+    /// measure providers, adopted textures, and the resource slices
+    /// built over them are invalid past this point. Process-lifetime
+    /// embeddings (the app runner) may skip it — the default
+    /// allocator's pages die with the process, and the run loop's exit
+    /// defer already disarms the wakes — but embedders that create and
+    /// destroy runtimes in one process (tests, the docs wasm preview
+    /// host) call it to return the storage.
     pub fn deinit(self: *Runtime) void {
         self.disarmMediaSurfaceWakes();
         for (self.canvas_font_entries[0..self.canvas_font_count]) |entry| {
@@ -471,7 +473,7 @@ pub const Runtime = struct {
         }
         self.canvas_font_count = 0;
         for (&self.media_surface_pixels) |*buffer| {
-            if (buffer.len != 0) self.options.allocator.free(buffer.*);
+            if (buffer.len != 0) self.owned_allocator.free(buffer.*);
             buffer.* = &.{};
         }
         self.media_surface_entries = [_]runtime_media_surface.MediaSurfaceTextureEntry{.{}} ** canvas_limits.max_media_surface_channels;

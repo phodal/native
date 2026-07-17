@@ -228,8 +228,10 @@ var media_surface_tag_counter = std.atomic.Value(u64).init(1);
 
 /// Adopted-texture entry on the RUNTIME (the loop-thread half); pixels
 /// live in the runtime's lazily allocated per-entry buffer at the same
-/// index (`media_surface_pixels`, one frame-budget block from
-/// `options.allocator` at first adoption, freed by `Runtime.deinit`).
+/// index (`media_surface_pixels`, one frame-budget block at first
+/// adoption from the runtime's `owned_allocator` — the ownership
+/// identity frozen from `Options.allocator` at init — freed by
+/// `Runtime.deinit`).
 pub const MediaSurfaceTextureEntry = struct {
     surface_id: u64 = 0,
     width: usize = 0,
@@ -502,12 +504,16 @@ pub fn RuntimeMediaSurfaces(comptime Runtime: type) type {
                 if (self.media_surface_pixels[entry_index].len == 0) {
                     // The entry's texture buffer, allocated LAZILY at
                     // first adoption (one frame-budget block from the
-                    // runtime's allocator, freed by `Runtime.deinit`):
-                    // a runtime that never adopts a producer frame
-                    // carries zero media-texture bytes — an embedded
-                    // pool at this budget was 32 MiB in every Runtime,
-                    // the registered-font-pool regression's twin.
-                    self.media_surface_pixels[entry_index] = self.options.allocator.alloc(u8, max_media_surface_pixel_bytes) catch {
+                    // runtime's FROZEN `owned_allocator` — never the
+                    // live `options.allocator`, which is public and
+                    // mutable, so a swap between this allocation and
+                    // `Runtime.deinit`'s free must not split the
+                    // alloc/free pair across allocators): a runtime
+                    // that never adopts a producer frame carries zero
+                    // media-texture bytes — an embedded pool at this
+                    // budget was 32 MiB in every Runtime, the
+                    // registered-font-pool regression's twin.
+                    self.media_surface_pixels[entry_index] = self.owned_allocator.alloc(u8, max_media_surface_pixel_bytes) catch {
                         // OOM degrades like the saturated registry:
                         // this frame drops loudly, the channel stays
                         // healthy, the next adoption retries. An entry

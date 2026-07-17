@@ -140,6 +140,12 @@ pub fn canvasWidgetPointerEventFromGpuInput(input_event: GpuSurfaceInputEvent) ?
         .ime_set_composition,
         .ime_commit_composition,
         .ime_cancel_composition,
+        // Pinch is not a widget pointer gesture: it reaches the app as
+        // the raw `gpu_surface_input` event (timeline/canvas zoom is an
+        // app-level concern, not a widget press/scroll).
+        .pinch_begin,
+        .pinch_change,
+        .pinch_end,
         => return null,
     };
     return .{
@@ -163,6 +169,9 @@ pub fn canvasWidgetInputBatchesDisplayListRefresh(kind: platform.GpuSurfaceInput
         .ime_set_composition,
         .ime_commit_composition,
         .ime_cancel_composition,
+        .pinch_begin,
+        .pinch_change,
+        .pinch_end,
         => true,
     };
 }
@@ -181,6 +190,9 @@ pub fn canvasWidgetKeyboardEventFromGpuInput(input_event: GpuSurfaceInputEvent, 
         .ime_set_composition,
         .ime_commit_composition,
         .ime_cancel_composition,
+        .pinch_begin,
+        .pinch_change,
+        .pinch_end,
         => return null,
     };
     return .{
@@ -221,6 +233,9 @@ fn canvasWidgetTextEditEventFromGpuInput(input_event: GpuSurfaceInputEvent) ?can
         .pointer_move,
         .pointer_drag,
         .scroll,
+        .pinch_begin,
+        .pinch_change,
+        .pinch_end,
         => null,
     };
 }

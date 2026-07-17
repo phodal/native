@@ -46,7 +46,7 @@
 //!
 //! Coverage note: automation driving is fully journaled. Verbs that
 //! synthesize PLATFORM events (widget-click/hold/context-press/drag/
-//! wheel/key, resize, menu-command, shortcut, tray-action) journal
+//! wheel/key/pinch, resize, menu-command, shortcut, tray-action) journal
 //! those events; every widget-action verb — including the direct-
 //! surface ones (focus, select, set_selection, set_text, and the
 //! composition edits) — journals as the outer-wins
@@ -75,8 +75,11 @@ pub const magic = "NSDKSJNL";
 /// composition verbs (`set_composition`/`commit_composition`/
 /// `cancel_composition`, codes 11-13) to the accessibility-action
 /// record's verb enum — a v3 reader hitting one of those codes would
-/// have reported the file corrupt instead of refusing the skew.
-pub const format_version: u32 = 4;
+/// have reported the file corrupt instead of refusing the skew; v5
+/// added the pinch magnification `scale` field to gpu-surface input
+/// records (a layout change every v4 reader would misparse) plus the
+/// `pinch_begin`/`pinch_change`/`pinch_end` input kinds (codes 12-14).
+pub const format_version: u32 = 5;
 
 // ------------------------------------------------------------- budgets
 //
@@ -530,6 +533,8 @@ pub fn encodeEvent(event: platform.Event, buffer: []u8) JournalError![]const u8 
                 try cursor.writeInt(u64, @intCast(composition_cursor));
             }
             try writeModifiers(&cursor, input.modifiers);
+            // v5: the pinch magnification delta (0 on non-pinch kinds).
+            try cursor.writeF32(input.scale);
         },
         .gpu_surface_scroll_driver => |driver| {
             try cursor.writeEnum(EventTag.gpu_surface_scroll_driver);
@@ -756,6 +761,8 @@ pub fn decodeEvent(bytes: []const u8, storage: *EventDecodeStorage) JournalError
                 .text = text,
                 .composition_cursor = composition_cursor,
                 .modifiers = try readModifiers(&cursor),
+                // v5: the pinch magnification delta (0 on non-pinch kinds).
+                .scale = try cursor.readF32(),
             } };
         },
         .gpu_surface_scroll_driver => blk: {
@@ -1230,6 +1237,26 @@ test "event codec round-trips every payload variant" {
         try testing.expectEqualStrings("7", decoded.gpu_surface_input.text);
         try testing.expectEqual(@as(?usize, 3), decoded.gpu_surface_input.composition_cursor);
         try testing.expect(decoded.gpu_surface_input.modifiers.control);
+        try testing.expectEqual(@as(f32, 0), decoded.gpu_surface_input.scale);
+    }
+    {
+        // v5: pinch records carry the magnification delta and the
+        // gesture kinds appended at codes 12-14.
+        const decoded = try roundTripEvent(.{ .gpu_surface_input = .{
+            .label = "timeline-canvas",
+            .kind = .pinch_change,
+            .timestamp_ns = 6,
+            .x = 160,
+            .y = 120,
+            .scale = 0.25,
+        } });
+        try testing.expectEqual(platform.GpuSurfaceInputKind.pinch_change, decoded.gpu_surface_input.kind);
+        try testing.expectEqual(@as(f32, 0.25), decoded.gpu_surface_input.scale);
+        try testing.expectEqual(@as(f32, 160), decoded.gpu_surface_input.x);
+        const begin = try roundTripEvent(.{ .gpu_surface_input = .{ .label = "timeline-canvas", .kind = .pinch_begin } });
+        try testing.expectEqual(platform.GpuSurfaceInputKind.pinch_begin, begin.gpu_surface_input.kind);
+        const end = try roundTripEvent(.{ .gpu_surface_input = .{ .label = "timeline-canvas", .kind = .pinch_end } });
+        try testing.expectEqual(platform.GpuSurfaceInputKind.pinch_end, end.gpu_surface_input.kind);
     }
     {
         const decoded = try roundTripEvent(.{ .widget_accessibility_action = .{

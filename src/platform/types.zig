@@ -1550,6 +1550,16 @@ pub const GpuSurfaceInputKind = enum {
     ime_set_composition,
     ime_commit_composition,
     ime_cancel_composition,
+    // Trackpad gestures are phase-explicit (every source models phases:
+    // NSEvent.phase on macOS, GTK GestureZoom begin/scale-changed/end,
+    // Windows precision-touchpad gesture messages), and the family stays
+    // open for rotate/smart-zoom later. Only the macOS host emits these
+    // today; Windows (precision touchpad) and Linux (GTK GestureZoom)
+    // are staged follow-ups — on those platforms the kinds simply never
+    // arrive.
+    pinch_begin,
+    pinch_change,
+    pinch_end,
 };
 
 pub const GpuSurfaceInputEvent = struct {
@@ -1568,6 +1578,40 @@ pub const GpuSurfaceInputEvent = struct {
     text: []const u8 = "",
     composition_cursor: ?usize = null,
     modifiers: ShortcutModifiers = .{},
+    /// Pinch magnification DELTA for this event (NSEvent.magnification
+    /// semantics): nonzero only on `pinch_change`, 0 on begin/end. The
+    /// cumulative gesture scale is the running product of `(1 + scale)`
+    /// across the gesture's change events. The gesture centroid rides
+    /// `x`/`y` (view-local, same space as pointer events).
+    scale: f32 = 0,
+};
+
+/// Pinch gesture phase for the app-level pinch channel (`Options.on_pinch`
+/// / the TS core's `pinchMsg` export). Every source is phase-explicit
+/// (NSEvent phases, GTK GestureZoom, Windows precision-touchpad gestures);
+/// a host-cancelled gesture folds into `.end` — pinch delivers incremental
+/// deltas the app applies as they arrive, so there is no transient state
+/// to roll back the way `pointer_cancel` rolls back an in-flight press.
+pub const PinchPhase = enum {
+    begin,
+    change,
+    end,
+};
+
+/// The pinch channel's app-facing record, derived from the raw
+/// `gpu_surface_input` pinch events. Pinch bypasses the widget pipeline
+/// deliberately: it is a view-global gesture (timeline/canvas zoom), the
+/// `on_key`-fallback shape rather than a widget-targeted event.
+pub const PinchEvent = struct {
+    phase: PinchPhase,
+    /// Magnification DELTA for this event (NSEvent.magnification
+    /// semantics): nonzero only on `.change`, 0 on begin/end. The
+    /// cumulative gesture scale is the running product of `(1 + scale)`
+    /// across the gesture's change events.
+    scale: f32 = 0,
+    /// Gesture centroid, view-local canvas points (the pointer-event space).
+    x: f32 = 0,
+    y: f32 = 0,
 };
 
 /// Upper bound on native scroll drivers per gpu-surface view (one per

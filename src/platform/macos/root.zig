@@ -906,6 +906,9 @@ fn gpuSurfaceInputEventFromAppKitEvent(event: *const AppKitEvent) platform_mod.G
         .text = event.input_text[0..event.input_text_len],
         .composition_cursor = if (event.has_composition_cursor != 0) event.composition_cursor else null,
         .modifiers = shortcutModifiersFromFlags(event.shortcut_modifiers),
+        // The pinch magnification delta rides the ABI event's `scale`
+        // field (zero on every non-pinch input emission).
+        .scale = @floatCast(event.scale),
     };
 }
 
@@ -1813,6 +1816,9 @@ fn gpuSurfaceInputKindFromInt(value: c_int) platform_mod.GpuSurfaceInputKind {
         9 => .ime_commit_composition,
         10 => .ime_cancel_composition,
         11 => .pointer_cancel,
+        12 => .pinch_begin,
+        13 => .pinch_change,
+        14 => .pinch_end,
         else => .pointer_move,
     };
 }

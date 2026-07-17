@@ -76,6 +76,13 @@ typedef enum {
     NATIVE_SDK_APPKIT_GPU_INPUT_IME_COMMIT_COMPOSITION = 9,
     NATIVE_SDK_APPKIT_GPU_INPUT_IME_CANCEL_COMPOSITION = 10,
     NATIVE_SDK_APPKIT_GPU_INPUT_POINTER_CANCEL = 11,
+    /* Trackpad pinch phases (magnifyWithEvent:). The event's `scale`
+     * field carries the per-event magnification DELTA on PINCH_CHANGE
+     * (NSEvent.magnification semantics; cumulative gesture scale is the
+     * product of (1 + delta)); 0 on begin/end. Centroid rides x/y. */
+    NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_BEGIN = 12,
+    NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_CHANGE = 13,
+    NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_END = 14,
 } native_sdk_appkit_gpu_input_kind_t;
 
 typedef enum {

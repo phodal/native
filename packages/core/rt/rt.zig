@@ -1052,12 +1052,16 @@ pub fn Kernel(comptime opts: Options) type {
         //              [path_len u32 LE][path][url_len u32 LE][url]
         //              [cache_len u32 LE][cache_path][expected_bytes f64 LE]
         //   audio_ctl  [op 0x0F][key_len u8][key bytes][verb u8][value f64 LE]
+        //   image_load [op 0x10][id f64 LE][event_tag u8]
+        //              [path_len u32 LE][path][url_len u32 LE][url]
+        //              [cache_len u32 LE][cache_path][expected_bytes f64 LE]
         //
         // v2 is additive over v1: the 0x01-0x03 records are byte-identical to v1,
         // so a v1 effect log replays under a v2 reader unchanged. The named-op
         // records 0x07-0x0C are additive within v2 the same way, and so are the
-        // streaming records 0x0D-0x0F: no existing record's bytes change, new
-        // opcodes only.
+        // streaming records 0x0D-0x0F and the image record 0x10: no existing
+        // record's bytes change, new opcodes only (a host predating an opcode
+        // refuses it loudly, naming this version).
         //
         // `method` is the closed HTTP verb set in declaration order of `CmdFetchMethod`
         // (GET 0, POST 1, PUT 2, DELETE 3, PATCH 4, HEAD 5). `timeout_ms` 0 means
@@ -1168,6 +1172,24 @@ pub fn Kernel(comptime opts: Options) type {
         //               magnitudes, all zeros outside `.spectrum` events).
         //               Failure is never silent: an unplayable source is one
         //               `.failed` event, a refused command one `.rejected`.
+        //   image_load  a routed one-shot image load, keyed by the app's own
+        //               numeric ImageId (`id`, an f64-carried positive integer
+        //               — the SAME model-owned id markup binds via
+        //               <image image="{id}"/> / <avatar image="{id}"/>):
+        //               resolve the source cascade (local `path` first, then a
+        //               verified cache entry at `cache_path`, then `url` —
+        //               audio_play's resolution order; `expected_bytes` is the
+        //               cache integrity gate, 0 = unknown), decode through the
+        //               platform codec, register the pixels under the id, and
+        //               dispatch exactly ONE `event_tag` arm — a four-field
+        //               record built by name: `state` (an enum whose members
+        //               are exactly the fourteen image outcome names, matched
+        //               by member NAME), width and height (numbers, the
+        //               decoded dimensions on "loaded"), and status (number,
+        //               the HTTP status for url sources). One load per id at
+        //               a time: a duplicate live id dispatches "rejected"
+        //               (the spawn discipline — a load in flight is never
+        //               replaced implicitly).
         //   audio_ctl   drive the open stream's playback in place, by verb
         //               (`CmdAudioVerb` declaration order): pause 0, resume
         //               1, stop 2, seek 3 (`value` = position ms), volume 4
@@ -1230,6 +1252,7 @@ pub fn Kernel(comptime opts: Options) type {
             spawn = 0x0D,
             audio_play = 0x0E,
             audio_ctl = 0x0F,
+            image_load = 0x10,
         };
 
         /// The spawn record's "no line routing" sentinel: a `line_tag` of
@@ -1508,6 +1531,29 @@ pub fn Kernel(comptime opts: Options) type {
             @memcpy(out[2..][0..key.len], key);
             out[2 + key.len] = @intFromEnum(verb);
             std.mem.writeInt(u64, out[2 + key.len + 1 ..][0..8], @bitCast(value), .little);
+            return out;
+        }
+
+        pub fn cmdImageLoad(
+            id: f64,
+            event_tag: u8,
+            path: []const u8,
+            url: []const u8,
+            cache_path: []const u8,
+            expected_bytes: f64,
+        ) Cmd {
+            std.debug.assert(path.len <= std.math.maxInt(u32));
+            std.debug.assert(url.len <= std.math.maxInt(u32));
+            std.debug.assert(cache_path.len <= std.math.maxInt(u32));
+            const out = frameAlloc(u8, 1 + 8 + 1 + 4 + path.len + 4 + url.len + 4 + cache_path.len + 8);
+            out[0] = @intFromEnum(CmdOp.image_load);
+            std.mem.writeInt(u64, out[1..][0..8], @bitCast(id), .little);
+            out[9] = event_tag;
+            var off: usize = 10;
+            off = writeLongBytes(out, off, path);
+            off = writeLongBytes(out, off, url);
+            off = writeLongBytes(out, off, cache_path);
+            std.mem.writeInt(u64, out[off..][0..8], @bitCast(expected_bytes), .little);
             return out;
         }
 

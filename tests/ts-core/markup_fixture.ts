@@ -95,10 +95,17 @@ export function keyMsg(key: KeyEvent): Msg | null {
 /// (1 + delta), the documented gesture-scale semantics. The source
 /// identity rides into the Msg so the model can pin which window and
 /// view the gesture happened on.
-export function pinchMsg(pinch: PinchEvent): Msg | null {
+///
+/// Exported by LIST on purpose: the un-renamed entry exports the
+/// declaration itself, so the wiring and the boundary-float classing
+/// must treat this spelling exactly like the inline modifier — the
+/// fractional deltas below (0.25 per change) must survive as f64 for
+/// the zoom product to land on 1.5625.
+function pinchMsg(pinch: PinchEvent): Msg | null {
   if (pinch.phase !== "change" || pinch.scale === 0) return null;
   return { kind: "zoomed", factor: 1 + pinch.scale, windowId: pinch.windowId, fromBoard: pinch.label === "ts-markup-canvas" };
 }
+export { pinchMsg };
 
 export const appearanceMsg = "appearance_changed";
 export const chromeMsg = "chrome_changed";

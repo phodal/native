@@ -23,7 +23,7 @@
 // into a slot some use forces to be an integer — that is a conflict reported
 // as a teaching error (NS1016), never a downstream Zig type error.
 
-import { ts, TypedAst } from "./typed_ast.ts";
+import { ts, TypedAst, exportListBindings } from "./typed_ast.ts";
 import { constFunctionValue } from "./ownership.ts";
 import { thrownShapeOf } from "./checker.ts";
 import type { TypeTable } from "./types.ts";
@@ -491,43 +491,60 @@ export class IntInference {
     markType("Msg");
     // Only the ENTRY module's exports face the host ABI (the wiring and
     // markup bind through the entry). An exported function in an imported
-    // module is an ordinary cross-module call, so proof still applies.
+    // module is an ordinary cross-module call, so proof still applies —
+    // unless the entry's export list re-exports it, which puts it on the
+    // entry surface like any other export.
+    //
+    // Both export spellings mark: the inline modifier and an un-renamed
+    // export list entry (`export { pinchMsg }`) export the DECLARATION
+    // itself (the emitter's isExportedDecl seam emits them identically),
+    // so boundary classing must see them identically too. Renamed entries
+    // stay out on purpose: renamed wiring names never reach inference
+    // (the checker fences them, NS1014/NS1047), and a renamed ordinary
+    // function keeps its historical classing.
+    const entryExportedFns = new Set<ts.FunctionDeclaration>();
     for (const stmt of this.files[0].statements) {
       if (ts.isFunctionDeclaration(stmt) && stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
-        for (const p of stmt.parameters) {
-          const slot = this.slots.get(p);
-          if (slot) {
-            slot.external = true;
-            slot.hostBoundary = true;
-            slot.proven = false;
-          }
+        entryExportedFns.add(stmt);
+      }
+    }
+    for (const b of exportListBindings(this.tast, this.files[0])) {
+      if (!b.renamed && b.target && ts.isFunctionDeclaration(b.target)) entryExportedFns.add(b.target);
+    }
+    for (const stmt of entryExportedFns) {
+      for (const p of stmt.parameters) {
+        const slot = this.slots.get(p);
+        if (slot) {
+          slot.external = true;
+          slot.hostBoundary = true;
+          slot.proven = false;
         }
-        // The pinch channel's parameter record is intrinsically
-        // fractional: magnification deltas are ~0.01..0.3 per event and
-        // the pointer anchor is sub-point, so its number fields are HOST
-        // values, never provable integers. Marking them boundary-fed
-        // keeps a core's `pinch.scale === 0` comparison from
-        // int-claiming the slot (which would round every zoom product
-        // to whole numbers); the integer side of such a comparison
-        // widens to f64 instead. The loop marks EVERY field of the
-        // record, so any field the channel grows (windowId, the source
-        // identity, included) is boundary-classed without a new rule.
-        // frameMsg/keyMsg records keep their historical by-usage
-        // classing.
-        if (stmt.name?.text === "pinchMsg") {
-          for (const p of stmt.parameters) {
-            if (!p.type) continue;
-            const t = this.table.resolveTypeNode(p.type);
-            if (t.k !== "struct") continue;
-            const struct = this.table.structs.get(t.name);
-            if (!struct) continue;
-            for (const f of struct.fields) {
-              const slot = this.slots.get(f.decl);
-              if (slot) {
-                slot.external = true;
-                slot.hostBoundary = true;
-                slot.proven = false;
-              }
+      }
+      // The pinch channel's parameter record is intrinsically
+      // fractional: magnification deltas are ~0.01..0.3 per event and
+      // the pointer anchor is sub-point, so its number fields are HOST
+      // values, never provable integers. Marking them boundary-fed
+      // keeps a core's `pinch.scale === 0` comparison from
+      // int-claiming the slot (which would round every zoom product
+      // to whole numbers); the integer side of such a comparison
+      // widens to f64 instead. The loop marks EVERY field of the
+      // record, so any field the channel grows (windowId, the source
+      // identity, included) is boundary-classed without a new rule.
+      // frameMsg/keyMsg records keep their historical by-usage
+      // classing.
+      if (stmt.name?.text === "pinchMsg") {
+        for (const p of stmt.parameters) {
+          if (!p.type) continue;
+          const t = this.table.resolveTypeNode(p.type);
+          if (t.k !== "struct") continue;
+          const struct = this.table.structs.get(t.name);
+          if (!struct) continue;
+          for (const f of struct.fields) {
+            const slot = this.slots.get(f.decl);
+            if (slot) {
+              slot.external = true;
+              slot.hostBoundary = true;
+              slot.proven = false;
             }
           }
         }

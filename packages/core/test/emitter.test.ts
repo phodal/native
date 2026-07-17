@@ -1771,3 +1771,104 @@ export function update(model: Model, msg: Msg): Model {
   assert.equal(legacy_pinch.ok, false);
   assert.ok(legacy_pinch.diagnostics.some((d) => d.id === "NS1033"), JSON.stringify(legacy_pinch.diagnostics));
 });
+
+test("pinchMsg exported via an export list keeps the boundary-float classing", () => {
+  // The export-LIST spelling is first-class for entry points (an
+  // un-renamed entry exports the declaration itself), so it must class
+  // the pinch record's fields exactly like the inline modifier: `scale
+  // === 0` never int-claims the slot. Before the seam covered export
+  // lists, this spelling silently emitted `scale: i64` — every real
+  // magnification delta rounded to 0 and the host adapter's zero gate
+  // dropped the events.
+  const zig = emit(`
+export type PinchPhase = "begin" | "change" | "end";
+export interface PinchEvent { readonly windowId: number; readonly label: string; readonly phase: PinchPhase; readonly scale: number; readonly x: number; readonly y: number; }
+export interface Model { readonly zoom: number; }
+export type Msg =
+  | { readonly kind: "zoomed"; readonly factor: number }
+  | { readonly kind: "noop" };
+function pinchMsg(pinch: PinchEvent): Msg | null {
+  if (pinch.phase !== "change" || pinch.scale === 0 || pinch.windowId === 0) return null;
+  if (pinch.label !== "board-canvas") return null;
+  return { kind: "zoomed", factor: 1 + pinch.scale };
+}
+export { pinchMsg };
+export function initialModel(): Model { return { zoom: 1 }; }
+export function update(model: Model, msg: Msg): Model {
+  switch (msg.kind) {
+    case "zoomed": return { ...model, zoom: model.zoom * msg.factor };
+    case "noop": return model;
+  }
+}
+`);
+  assert.match(zig, /scale: f64/);
+  assert.match(zig, /windowId: f64/);
+  assert.match(zig, /zoom: f64/);
+  assert.match(zig, /pub fn pinchMsg/);
+});
+
+test("frameMsg exported via an export list emits its channel and holds the contract", () => {
+  // The sibling channels go through the same export seam: the list
+  // spelling emits the wired `pub fn` and the NS1033 shape contract
+  // still gates it.
+  const zig = emit(`
+export interface Model { readonly w: number; }
+export interface FrameEvent { readonly width: number; readonly height: number; readonly timestampMs: number; readonly intervalMs: number; }
+export type Msg = { readonly kind: "resized"; readonly w: number } | { readonly kind: "noop" };
+function frameMsg(model: Model, frame: FrameEvent): Msg | null {
+  if (frame.width !== model.w) return { kind: "resized", w: frame.width };
+  return null;
+}
+export { frameMsg };
+export function initialModel(): Model { return { w: 0 }; }
+export function update(model: Model, msg: Msg): Model {
+  switch (msg.kind) { case "resized": return { w: msg.w }; case "noop": return model; }
+}
+`);
+  assert.match(zig, /pub fn frameMsg/);
+
+  const bad_frame = transpile(`
+export interface Model { readonly w: number; }
+export interface FrameEvent { readonly width: number; }
+export type Msg = { readonly kind: "a" } | { readonly kind: "b" };
+function frameMsg(model: Model, frame: FrameEvent): Msg | null { return null; }
+export { frameMsg };
+export function update(model: Model, msg: Msg): Model {
+  switch (msg.kind) { case "a": return model; case "b": return model; }
+}
+`);
+  assert.equal(bad_frame.ok, false);
+  assert.ok(bad_frame.diagnostics.some((d) => d.id === "NS1033"), JSON.stringify(bad_frame.diagnostics));
+});
+
+test("an export-list-exported function's number params are host-boundary", () => {
+  // The general shape of the same seam: `export { scaled }` puts the
+  // function on the entry's host surface exactly like the modifier, so a
+  // `=== 0` comparison must widen instead of int-claiming the parameter
+  // (an i64 signature would truncate host f64 arguments).
+  const zig = emit(`
+function scaled(x: number): number { return x === 0 ? -1 : x * 4; }
+export { scaled };
+`);
+  assert.match(zig, /pub fn scaled\(x: f64\)/);
+});
+
+test("NS1014: a renamed export list entry cannot bind a wiring entry name", () => {
+  // NS1014's fencing is unchanged by the export-list marking: the build
+  // wires the DECLARATION, so a renamed binding over a wiring name is
+  // still taught, never silently wired.
+  const renamed = transpile(`
+export type PinchPhase = "begin" | "change" | "end";
+export interface PinchEvent { readonly windowId: number; readonly label: string; readonly phase: PinchPhase; readonly scale: number; readonly x: number; readonly y: number; }
+export interface Model { readonly zoom: number; }
+export type Msg = { readonly kind: "a" } | { readonly kind: "b" };
+function zoomIn(pinch: PinchEvent): Msg | null { return null; }
+export { zoomIn as pinchMsg };
+export function initialModel(): Model { return { zoom: 1 }; }
+export function update(model: Model, msg: Msg): Model {
+  switch (msg.kind) { case "a": return model; case "b": return model; }
+}
+`);
+  assert.equal(renamed.ok, false);
+  assert.ok(renamed.diagnostics.some((d) => d.id === "NS1014"), JSON.stringify(renamed.diagnostics));
+});

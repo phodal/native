@@ -4226,6 +4226,24 @@ export function bump(n: number): number { return n + OFFSET; }
     ],
   },
   {
+    name: "an export-list entry function's number params stay host-boundary f64",
+    // The un-renamed list spelling puts the declaration on the entry's
+    // host surface exactly like the inline modifier, so a `=== 0`
+    // comparison against an all-integer body must never int-claim the
+    // parameter: the host passes fractional f64s there (an i64 signature
+    // would not even accept the driver's 0.25).
+    src: `
+function scaledOr1(n: number): number { return n === 0 ? -1 : n * 4; }
+export { scaledOr1 };
+`,
+    calls: [
+      { fn: "scaledOr1", args: [f(0.25)] },
+      { fn: "scaledOr1", args: [f(0.3)] },
+      { fn: "scaledOr1", args: [f(0)] },
+      { fn: "scaledOr1", args: [f("-0")] },
+    ],
+  },
+  {
     name: "heterogeneous throws: the thrown union narrows by kind in the catch, chains and callbacks included",
     src: `
 export interface ParseError { readonly kind: "parse"; readonly at: number; }

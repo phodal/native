@@ -5542,6 +5542,12 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     // Change deltas emit uncoalesced (no per-frame queue like scroll):
     // the cumulative gesture scale is the PRODUCT of (1 + delta), and
     // summing coalesced deltas would drift from what the fingers did.
+    //
+    // EVERY magnifyWithEvent: carries the magnification since the
+    // previous event — the terminal (Ended/Cancelled) one included —
+    // so each branch below must forward a nonzero delta as a
+    // PINCH_CHANGE or the cumulative product diverges from what the
+    // OS delivered.
     const NSEventPhase phase = event.phase;
     if (phase & NSEventPhaseBegan) {
         [self emitQueuedPointerMotionInputEvent];
@@ -5567,6 +5573,16 @@ static BOOL NativeSdkCompositeBlurWriteRegion(NSDictionary *command, CGFloat sca
     if (phase & (NSEventPhaseEnded | NSEventPhaseCancelled)) {
         if (!self.pinchGestureActive) return;
         self.pinchGestureActive = NO;
+        // The terminal event's nonzero delta emits as a final
+        // PINCH_CHANGE before the end marker (a zero-delta terminal
+        // event emits only PINCH_END). Cancelled takes the same path
+        // deliberately: our model applies deltas incrementally with no
+        // rollback (see above), so the honest stream reports every
+        // delta the OS measured, then says the gesture is over.
+        const double terminalDelta = event.magnification;
+        if (terminalDelta != 0) {
+            [self emitPinchInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_CHANGE event:event magnification:terminalDelta];
+        }
         [self emitPinchInputEventWithKind:NATIVE_SDK_APPKIT_GPU_INPUT_PINCH_END event:event magnification:0];
         return;
     }

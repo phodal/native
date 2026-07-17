@@ -276,7 +276,7 @@ One rule bridges the registers: **quiet focus on a plain list row routes no keys
 
 ## Trackpad pinch
 
-Pinch-to-zoom reaches the app as a view-global gesture channel — the `on_key` shape, deliberately outside the widget pipeline (timeline and canvas zoom are app-level concerns, not widget presses). The channel is phase-explicit: `begin`, then a stream of `change` events, then `end` (a host-cancelled gesture folds into `end` — pinch delivers incremental deltas the app applies as they arrive, so there is nothing to roll back). Each `change` carries `scale`, the magnification **delta** for that event: the cumulative gesture scale is the running product of `1 + scale`, never the sum. The gesture centroid rides `x`/`y` in view-local canvas points, so a zoom can anchor under the fingers.
+Pinch-to-zoom reaches the app as a view-global gesture channel — the `on_key` shape, deliberately outside the widget pipeline (timeline and canvas zoom are app-level concerns, not widget presses). The channel is phase-explicit: `begin`, then a stream of `change` events, then `end` (a host-cancelled gesture folds into `end` — pinch delivers incremental deltas the app applies as they arrive, so there is nothing to roll back; a terminal host event that still measured a nonzero delta arrives as one last `change` before the `end`, so the cumulative product always matches what the OS reported). Each `change` carries `scale`, the magnification **delta** for that event: the cumulative gesture scale is the running product of `1 + scale`, never the sum. The gesture centroid rides `x`/`y` in view-local canvas points, so a zoom can anchor under the fingers.
 
 ```zig
 // options: .on_pinch = onPinch,

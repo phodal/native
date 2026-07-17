@@ -1592,6 +1592,10 @@ pub const GpuSurfaceInputEvent = struct {
 /// a host-cancelled gesture folds into `.end` — pinch delivers incremental
 /// deltas the app applies as they arrive, so there is no transient state
 /// to roll back the way `pointer_cancel` rolls back an in-flight press.
+/// A terminal host event (Ended or Cancelled) that still measured a
+/// nonzero magnification delivers that delta as a final `.change` before
+/// the `.end`, so the cumulative product always matches what the OS
+/// reported.
 pub const PinchPhase = enum {
     begin,
     change,

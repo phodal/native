@@ -77,7 +77,10 @@ export interface KeyEvent {
 /// matches enum members by name, so this is the `phase` field's type in
 /// `pinchMsg`'s parameter record). A host-cancelled gesture folds into
 /// "end": pinch delivers incremental deltas the app applies as they
-/// arrive, so there is no transient state to roll back.
+/// arrive, so there is no transient state to roll back. A terminal host
+/// event that still measured a nonzero delta delivers it as a final
+/// "change" before the "end", so the cumulative product always matches
+/// what the OS reported.
 export type PinchPhase = "begin" | "change" | "end";
 
 /// The pinch channel's record (`pinchMsg(pinch)`): the trackpad pinch

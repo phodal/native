@@ -4113,10 +4113,11 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
     } });
     try std.testing.expect(app_state.installed);
 
-    // begin -> change -> change -> end, the host's phase stream: the
-    // model hears every phase, the centroid rides x/y, and the
-    // cumulative scale is the PRODUCT of (1 + delta) — two +25% steps
-    // land on 1.5625, never the 1.45 a sum-of-deltas would produce.
+    // begin -> change -> change -> change -> end, the host's phase
+    // stream: the model hears every phase, the centroid rides x/y, and
+    // the cumulative scale is the PRODUCT of (1 + delta) — two +25%
+    // steps land on 1.5625, never the 1.45 a sum-of-deltas would
+    // produce.
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = canvas_label,
@@ -4145,6 +4146,18 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
     } });
     try std.testing.expectEqual(@as(f32, 1.5625), app_state.model.scale);
     try std.testing.expectEqual(@as(u32, 0), app_state.model.ends);
+    // A terminal-delta Ended: AppKit's Ended/Cancelled event still
+    // carries the magnification since the previous event, so the host
+    // forwards it as one last change BEFORE the end marker — the
+    // product folds it in (1.5625 * 1.25 = 1.953125, binary-exact).
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pinch_change,
+        .x = 120,
+        .y = 80,
+        .scale = 0.25,
+    } });
     try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
         .window_id = 1,
         .label = canvas_label,
@@ -4153,8 +4166,29 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
         .y = 80,
     } });
     try std.testing.expectEqual(@as(u32, 1), app_state.model.ends);
+    try std.testing.expectEqual(@as(f32, 1.953125), app_state.model.scale);
     // The dispatched Msgs rebuilt the view from the model.
-    try std.testing.expect(try retainedTextExists(&harness.runtime, "Zoom 1.56"));
+    try std.testing.expect(try retainedTextExists(&harness.runtime, "Zoom 1.95"));
+
+    // A zero-delta Ended is just the end marker: begin then end moves
+    // no scale.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pinch_begin,
+        .x = 120,
+        .y = 80,
+    } });
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+        .window_id = 1,
+        .label = canvas_label,
+        .kind = .pinch_end,
+        .x = 120,
+        .y = 80,
+    } });
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.begins);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.ends);
+    try std.testing.expectEqual(@as(f32, 1.953125), app_state.model.scale);
 
     // Non-pinch raw input never leaks into the channel: a scroll leaves
     // the model untouched.
@@ -4164,8 +4198,8 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
         .kind = .scroll,
         .delta_y = 24,
     } });
-    try std.testing.expectEqual(@as(f32, 1.5625), app_state.model.scale);
-    try std.testing.expectEqual(@as(u32, 1), app_state.model.begins);
+    try std.testing.expectEqual(@as(f32, 1.953125), app_state.model.scale);
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.begins);
 
     // The automation verb drives the same real events: one full gesture
     // whose change carries scale - 1, centroid defaulting to the view

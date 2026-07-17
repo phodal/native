@@ -636,6 +636,20 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "- (void)requestRetainedCanvasFrame" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self requestRetainedCanvasFrame];" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-pinch-terminal-delta", "Verify the macOS pinch stream forwards a terminal Ended/Cancelled magnification as a change before the end marker", &.{
+        // AppKit documents every magnifyWithEvent: as carrying the
+        // magnification since the previous event — the terminal one
+        // included. The Ended/Cancelled branch must forward a nonzero
+        // terminal delta as PINCH_CHANGE before PINCH_END (zero delta:
+        // end only), or the cumulative product of (1 + delta) diverges
+        // from what the OS delivered. Cancelled deliberately shares the
+        // path: pinch applies deltas incrementally with no rollback.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (phase & (NSEventPhaseEnded | NSEventPhaseCancelled)) {" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "const double terminalDelta = event.magnification;" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (terminalDelta != 0) {" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "PINCH_CHANGE event:event magnification:terminalDelta];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "PINCH_END event:event magnification:0];" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-input-paces-retained-canvas", "Verify GPU input frame requests are paced to the display interval", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkRetainedFrameIntervalNanoseconds" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "retainedFrameLastEmitNs" },

@@ -201,6 +201,152 @@ test "the producer channel is loud about ids, dimensions, claims, and exhaustion
     producer.release();
 }
 
+// ----------------------------------------------- video-scale frames e2e
+
+test "the producer frame budget and the host upload bound move in lockstep" {
+    // The upload validation (platform.types.uploadGpuSurfaceImage) is
+    // the one gate in front of every host's image store; if its
+    // media-namespace bound ever drifted below the producer's frame
+    // budget, a frame the producer accepted would be adopted and then
+    // refused at presentation — the silent-downstream failure this pin
+    // exists to prevent.
+    try std.testing.expectEqual(canvas_limits.max_media_surface_pixel_bytes, platform.max_gpu_surface_media_image_pixel_bytes);
+    // The budget's flagship claim: one 1080p RGBA8 frame fits.
+    try std.testing.expect(1920 * 1080 * 4 <= canvas_limits.max_media_surface_pixel_bytes);
+}
+
+fn presentProbeFrame(harness: *TestHarness(), frame_index: u64) !core.CanvasPresentationResult {
+    var gpu_commands: [64]canvas.CanvasGpuCommand = undefined;
+    const packet_json_buffer = try std.testing.allocator.alloc(u8, platform.max_gpu_surface_packet_json_bytes);
+    defer std.testing.allocator.free(packet_json_buffer);
+    const pixels = try std.testing.allocator.alloc(u8, 240 * 140 * 4);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, 240 * 140 * 4);
+    defer std.testing.allocator.free(scratch);
+    return harness.runtime.presentNextCanvasFrame(1, "canvas", .{
+        .frame_index = frame_index,
+        .timestamp_ns = frame_index * 1_000_000,
+        .surface_size = geometry.SizeF.init(240, 140),
+        .scale = 1,
+    }, support.canvasFrameScratchStorage(&harness.runtime), &gpu_commands, packet_json_buffer, pixels, scratch, canvas.Color.rgb8(0, 0, 0), null);
+}
+
+fn setMediaSurfaceDisplayList(harness: *TestHarness(), bound_surface_id: u64) !void {
+    const commands = [_]canvas.CanvasCommand{
+        .{ .fill_rect = .{
+            .id = 1,
+            .rect = geometry.RectF.init(0, 0, 240, 140),
+            .fill = .{ .color = canvas.mediaSurfacePlaceholderColor(bound_surface_id) },
+        } },
+        .{ .draw_image = .{
+            .id = 2,
+            .image_id = canvas.mediaSurfaceTextureImageId(bound_surface_id),
+            .dst = geometry.RectF.init(0, 0, 240, 140),
+        } },
+    };
+    _ = try harness.runtime.setCanvasDisplayList(1, "canvas", .{ .commands = &commands });
+}
+
+test "a real 1080p frame pushes, adopts, and presents through the packet upload path" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+
+    // The budget's headline case, end to end: a full 1920x1080 RGBA8
+    // frame (8,294,400 bytes) — not a synthetic 2x2 — through push,
+    // adoption, and the packet present's host upload.
+    const frame_bytes = 1920 * 1080 * 4;
+    const frame = try std.testing.allocator.alloc(u8, frame_bytes);
+    defer std.testing.allocator.free(frame);
+    @memset(frame, 0);
+    frame[0] = 12;
+    frame[1] = 34;
+    frame[2] = 56;
+    frame[3] = 255;
+    try producer.pushFrame(1920, 1080, frame);
+    try dispatchFrame(harness, app, 1);
+
+    const adopted = harness.runtime.adoptedMediaSurfaceTexture(surface_id).?;
+    try std.testing.expectEqual(@as(usize, 1920), adopted.width);
+    try std.testing.expectEqual(@as(usize, 1080), adopted.height);
+    try std.testing.expectEqual(frame_bytes, adopted.byte_len);
+
+    try setMediaSurfaceDisplayList(harness, surface_id);
+    const result = try presentProbeFrame(harness, 2);
+
+    // The frame PRESENTED — as a packet, never the pixel fallback, and
+    // never an InvalidGpuSurfaceImage refusal after adoption.
+    try std.testing.expectEqual(core.CanvasPresentationMode.gpu_packet, result.mode);
+    try std.testing.expect(result.packet_representable);
+
+    // The full frame rode the binary upload side-channel to the host
+    // store under the derived texture id.
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_image_upload_count);
+    try std.testing.expectEqual(canvas.mediaSurfaceTextureImageId(surface_id), harness.null_platform.gpu_surface_image_upload_id);
+    try std.testing.expectEqual(@as(usize, 1920), harness.null_platform.gpu_surface_image_upload_width);
+    try std.testing.expectEqual(@as(usize, 1080), harness.null_platform.gpu_surface_image_upload_height);
+    try std.testing.expectEqual(frame_bytes, harness.null_platform.gpu_surface_image_upload_byte_len);
+    try std.testing.expectEqualDeep([4]u8{ 12, 34, 56, 255 }, harness.null_platform.gpuSurfaceImage(canvas.mediaSurfaceTextureImageId(surface_id)).?.sample_rgba);
+}
+
+test "the frame budget's boundary is enforced at the producer, never downstream" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+
+    const budget = canvas_limits.max_media_surface_pixel_bytes;
+    const buffer = try std.testing.allocator.alloc(u8, budget + 4);
+    defer std.testing.allocator.free(buffer);
+    @memset(buffer, 200);
+
+    // One pixel past the budget refuses LOUDLY at the producer — the
+    // push boundary is where a too-large frame must die, so nothing
+    // over-budget can ever be staged, adopted, or handed to a host.
+    try std.testing.expectError(error.FrameTooLarge, producer.pushFrame(budget / 4 + 1, 1, buffer));
+    try dispatchFrame(harness, app, 1);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) == null);
+
+    // A frame at EXACTLY the budget passes the whole path: push, adopt,
+    // packet present, host upload of every byte.
+    try producer.pushFrame(2048, 1024, buffer[0..budget]);
+    try dispatchFrame(harness, app, 2);
+    try std.testing.expectEqual(budget, harness.runtime.adoptedMediaSurfaceTexture(surface_id).?.byte_len);
+
+    try setMediaSurfaceDisplayList(harness, surface_id);
+    const result = try presentProbeFrame(harness, 3);
+    try std.testing.expectEqual(core.CanvasPresentationMode.gpu_packet, result.mode);
+    try std.testing.expectEqual(@as(usize, 1), harness.null_platform.gpu_surface_image_upload_count);
+    try std.testing.expectEqual(budget, harness.null_platform.gpu_surface_image_upload_byte_len);
+
+    // The refused frame reached NO downstream layer: the only upload the
+    // host ever saw is the exact-budget frame. (The producer-side check
+    // firing FIRST is what the ordering above pins — the refusal
+    // happened before adoption could stage anything.)
+    try std.testing.expectEqual(canvas.mediaSurfaceTextureImageId(surface_id), harness.null_platform.gpu_surface_image_upload_id);
+}
+
 // ------------------------------------------------------------- widget app
 
 const media_canvas_label = "media-canvas";

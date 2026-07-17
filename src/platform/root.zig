@@ -61,6 +61,7 @@ pub const max_gpu_surface_packet_json_bytes = types.max_gpu_surface_packet_json_
 pub const max_gpu_surface_packet_binary_bytes = types.max_gpu_surface_packet_binary_bytes;
 pub const max_gpu_present_fallback_detail_bytes = types.max_gpu_present_fallback_detail_bytes;
 pub const max_gpu_surface_image_pixel_bytes = types.max_gpu_surface_image_pixel_bytes;
+pub const max_gpu_surface_media_image_pixel_bytes = types.max_gpu_surface_media_image_pixel_bytes;
 pub const max_gpu_surface_font_bytes = types.max_gpu_surface_font_bytes;
 pub const ShortcutModifiers = types.ShortcutModifiers;
 pub const Shortcut = types.Shortcut;

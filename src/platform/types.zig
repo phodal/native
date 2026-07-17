@@ -1,5 +1,6 @@
 const std = @import("std");
 const geometry = @import("geometry");
+const canvas = @import("canvas");
 const security = @import("../security/root.zig");
 
 pub const default_gpu_frame_interval_ns: u64 = 16_666_667;
@@ -256,8 +257,21 @@ pub const max_gpu_surface_packet_binary_bytes: usize = 512 * 1024;
 pub const max_gpu_present_fallback_detail_bytes: usize = 32;
 /// Per-image bound for the binary gpu-surface image upload side-channel;
 /// matches the runtime registry's per-slot bound
-/// (`canvas_limits.max_registered_canvas_image_pixel_bytes`).
+/// (`canvas_limits.max_registered_canvas_image_pixel_bytes`). Applies to
+/// ORDINARY registered-image ids only: the registry refuses anything
+/// larger at registration, so an over-bound upload of a registered image
+/// can only be an engine bug and is refused loudly here rather than
+/// copied into host allocations.
 pub const max_gpu_surface_image_pixel_bytes: usize = 1024 * 1024;
+/// Per-image bound for uploads in the media-surface texture namespace
+/// (ids with `canvas.media_surface_image_id_bit` set — producer-pushed
+/// dynamic textures, structurally disjoint from registered-image ids):
+/// video scale, not avatar scale. Matches the producer channel's
+/// per-frame budget (`canvas_limits.max_media_surface_pixel_bytes`; a
+/// lockstep test in media_surface_tests.zig pins the pair), so a frame
+/// the producer accepted — a full 1920x1080 RGBA8 frame included — can
+/// never be refused between adoption and host presentation.
+pub const max_gpu_surface_media_image_pixel_bytes: usize = 8 * 1024 * 1024;
 /// Per-font bound for the gpu-surface font registration side-channel;
 /// matches the runtime registry's per-slot bound
 /// (`canvas_limits.max_registered_canvas_font_bytes`), sized so full
@@ -2658,7 +2672,19 @@ pub const PlatformServices = struct {
     pub fn uploadGpuSurfaceImage(self: PlatformServices, image: GpuSurfaceImagePixels) anyerror!void {
         const expected = image.expectedByteLen() orelse return error.InvalidGpuSurfaceImage;
         if (image.rgba8.len != expected) return error.InvalidGpuSurfaceImage;
-        if (image.rgba8.len > max_gpu_surface_image_pixel_bytes) return error.InvalidGpuSurfaceImage;
+        // Two honest bounds, keyed by the id namespace: hosts copy every
+        // upload into host-owned allocations (AppKit's NSData + NSImage
+        // store), so each bound teaches the real cost of its id space.
+        // Ordinary registered images are avatar-scale by the registry's
+        // own slot bound; media-surface textures (the reserved high-bit
+        // namespace) are video-scale by the producer channel's frame
+        // budget — the bound the producer already enforced, so nothing a
+        // producer staged can fail here.
+        const bound = if ((image.id & canvas.media_surface_image_id_bit) != 0)
+            max_gpu_surface_media_image_pixel_bytes
+        else
+            max_gpu_surface_image_pixel_bytes;
+        if (image.rgba8.len > bound) return error.InvalidGpuSurfaceImage;
         const upload_fn = self.upload_gpu_surface_image_fn orelse return error.UnsupportedService;
         return upload_fn(self.context, image);
     }

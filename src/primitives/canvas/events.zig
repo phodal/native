@@ -119,6 +119,108 @@ pub fn widgetKeyboardNewlineTextEditEvent(kind: WidgetKind, event: WidgetKeyboar
     return .{ .insert_text = "\n" };
 }
 
+/// The single-line text-entry kinds: their value can never hold a line
+/// break (Enter submits instead of editing — see
+/// `widgetKeyboardNewlineTextEditEvent`), so text inserted into them
+/// sanitizes through `sanitizedSingleLineTextInputEvent`. The textarea is
+/// the one genuinely multi-line editable kind and stays out.
+pub fn widgetKindSingleLineTextEntry(kind: WidgetKind) bool {
+    return kind == .input or kind == .text_field or kind == .search_field or kind == .combobox;
+}
+
+/// Sanitized-edit scratch: the rewritten insert bytes live here until the
+/// next edit that needs rewriting. Sound for the same reason the runtime's
+/// paste buffer is: the event loop is single-threaded, at most one
+/// insert-bearing edit is derived per dispatched input, and every consumer
+/// (retained editor apply, the app's `on_input` Msg, model mirrors) reads
+/// the stamped bytes synchronously within that dispatch. Sized to the
+/// runtime's per-view widget-text budget
+/// (`max_canvas_widget_text_bytes_per_view`), the largest insert the
+/// editor could accept anyway.
+const max_sanitized_text_edit_bytes: usize = 65536;
+const SanitizedTextEditScratch = struct {
+    bytes: [max_sanitized_text_edit_bytes]u8,
+};
+const sanitized_text_edit_scratch = @import("lazy_tls.zig").LazyTls(SanitizedTextEditScratch);
+
+fn textContainsLineBreakByte(text: []const u8) bool {
+    // Raw byte scan is UTF-8 safe: 0x0A/0x0D never appear inside a
+    // multibyte sequence.
+    return std.mem.indexOfAny(u8, text, "\r\n") != null;
+}
+
+/// The ONE sanitization rule for text entering a single-line field, at
+/// the edit-derivation seam every insertion source flows through
+/// (clipboard paste — shortcut and context menu —, typed/automation
+/// `text_input`, IME composition, and the app-side fallback derivation):
+///
+///   line breaks are STRIPPED from inserted text — U+000A and U+000D
+///   removed outright, lines joined with nothing between them.
+///
+/// This is the HTML value sanitization algorithm for single-line inputs
+/// ("Strip newlines from the value",
+/// https://html.spec.whatwg.org/multipage/input.html), which is also what
+/// Chromium does when pasting multi-line text into an `<input>` — the
+/// dominant convention. (WebKit historically substituted spaces; there is
+/// no spec for the paste path itself, so the value-sanitization rule
+/// wins.)
+///
+/// Contracts, in declaration order:
+///   - multi-line kinds (textarea) and non-insert edits pass through
+///     untouched;
+///   - an insert that strips to NOTHING is suppressed (null): pasting
+///     bare newlines inserts nothing and never eats a live selection,
+///     and an Enter whose host stuffed "\r"/"\n" into the key event
+///     stays not-an-insert;
+///   - a composition update strips the same way but an EMPTY result is
+///     kept (an empty preview is meaningful — it clears the previous
+///     one), with the preview cursor shifted left past the removed
+///     bytes, so the IME COMMIT (which lands whatever the preview
+///     holds) can never commit a line break into a single-line field;
+///   - an insert too large for the scratch passes through untouched —
+///     the editor apply rejects over-budget inserts loudly anyway.
+///
+/// Deterministic derivation: the session journal records the RAW
+/// platform event; replaying it re-derives the identical sanitized edit
+/// here, so recorded multi-line pastes replay byte-identically.
+pub fn sanitizedSingleLineTextInputEvent(kind: WidgetKind, event: TextInputEvent) ?TextInputEvent {
+    if (!widgetKindSingleLineTextEntry(kind)) return event;
+    switch (event) {
+        .insert_text => |text| {
+            if (!textContainsLineBreakByte(text)) return event;
+            if (text.len > max_sanitized_text_edit_bytes) return event;
+            const stripped = stripLineBreakBytes(text, &sanitized_text_edit_scratch.get().bytes);
+            if (stripped.len == 0) return null;
+            return .{ .insert_text = stripped };
+        },
+        .set_composition => |composition| {
+            if (!textContainsLineBreakByte(composition.text)) return event;
+            if (composition.text.len > max_sanitized_text_edit_bytes) return event;
+            const cursor = @min(composition.cursor orelse composition.text.len, composition.text.len);
+            var stripped_cursor: usize = cursor;
+            for (composition.text[0..cursor]) |byte| {
+                if (byte == '\n' or byte == '\r') stripped_cursor -= 1;
+            }
+            const stripped = stripLineBreakBytes(composition.text, &sanitized_text_edit_scratch.get().bytes);
+            return .{ .set_composition = .{
+                .text = stripped,
+                .cursor = if (composition.cursor == null and stripped_cursor == stripped.len) null else stripped_cursor,
+            } };
+        },
+        else => return event,
+    }
+}
+
+fn stripLineBreakBytes(text: []const u8, buffer: []u8) []const u8 {
+    var len: usize = 0;
+    for (text) |byte| {
+        if (byte == '\n' or byte == '\r') continue;
+        buffer[len] = byte;
+        len += 1;
+    }
+    return buffer[0..len];
+}
+
 /// The clipboard intent of a key event: cmd+C/X/V on macOS, ctrl+C/X/V
 /// elsewhere (`hasCommandModifier` covers both). Shift/alt variants are
 /// deliberately excluded so shift+ctrl+V-style paste-special chords stay
@@ -693,4 +795,63 @@ pub fn defaultFocusable(widget: Widget) bool {
         .scroll_view, .accordion, .button, .toggle_button, .icon_button, .select, .input, .text_field, .search_field, .combobox, .textarea, .menu_item, .list_item, .data_cell, .segmented_control, .checkbox, .radio, .switch_control, .toggle, .slider, .split_divider => !widget.state.disabled,
         else => false,
     };
+}
+
+test "sanitizedSingleLineTextInputEvent strips line breaks per the HTML value-sanitization rule" {
+    const testing = std.testing;
+    // Interior LF, CR, and CRLF all strip outright — lines join with
+    // nothing between them (the Chromium <input> paste behavior).
+    const pasted = sanitizedSingleLineTextInputEvent(.input, .{ .insert_text = "alpha\nbeta\r\ngamma\r" }).?;
+    try testing.expectEqualStrings("alphabetagamma", pasted.insert_text);
+
+    // Every single-line kind sanitizes; the textarea keeps its breaks.
+    for ([_]WidgetKind{ .input, .text_field, .search_field, .combobox }) |kind| {
+        const stripped = sanitizedSingleLineTextInputEvent(kind, .{ .insert_text = "a\nb" }).?;
+        try testing.expectEqualStrings("ab", stripped.insert_text);
+    }
+    const textarea = sanitizedSingleLineTextInputEvent(.textarea, .{ .insert_text = "a\nb" }).?;
+    try testing.expectEqualStrings("a\nb", textarea.insert_text);
+
+    // Break-free inserts pass through as the SAME slice (zero copy), and
+    // the deliberately-empty insert (cut's delete-selection) survives.
+    const clean: TextInputEvent = .{ .insert_text = "plain" };
+    try testing.expectEqual(clean.insert_text.ptr, sanitizedSingleLineTextInputEvent(.input, clean).?.insert_text.ptr);
+    const cut = sanitizedSingleLineTextInputEvent(.input, .{ .insert_text = "" }).?;
+    try testing.expectEqualStrings("", cut.insert_text);
+
+    // An insert that is ONLY line breaks suppresses: pasting bare
+    // newlines inserts nothing, and an Enter whose host stuffed "\r"
+    // into the key event stays not-an-insert.
+    try testing.expect(sanitizedSingleLineTextInputEvent(.input, .{ .insert_text = "\r\n\n" }) == null);
+
+    // Non-insert edits pass through untouched.
+    const moved = sanitizedSingleLineTextInputEvent(.input, .{ .move_caret = .{ .direction = .end } }).?;
+    try testing.expect(moved.move_caret.direction == .end);
+}
+
+test "sanitizedSingleLineTextInputEvent strips composition text and shifts the preview cursor" {
+    const testing = std.testing;
+    // "ab\ncd" with the cursor after "cd" (offset 5): the stripped
+    // preview is "abcd" with the cursor at 4.
+    const preview = sanitizedSingleLineTextInputEvent(.combobox, .{ .set_composition = .{ .text = "ab\ncd", .cursor = 5 } }).?;
+    try testing.expectEqualStrings("abcd", preview.set_composition.text);
+    try testing.expectEqual(@as(usize, 4), preview.set_composition.cursor.?);
+
+    // A cursor BEFORE the break does not shift.
+    const early = sanitizedSingleLineTextInputEvent(.search_field, .{ .set_composition = .{ .text = "ab\ncd", .cursor = 2 } }).?;
+    try testing.expectEqual(@as(usize, 2), early.set_composition.cursor.?);
+
+    // A null cursor (end-of-preview) stays null.
+    const tail = sanitizedSingleLineTextInputEvent(.input, .{ .set_composition = .{ .text = "a\r\nb" } }).?;
+    try testing.expectEqualStrings("ab", tail.set_composition.text);
+    try testing.expect(tail.set_composition.cursor == null);
+
+    // An all-breaks preview is KEPT as the empty preview (it clears the
+    // previous one) rather than suppressed.
+    const cleared = sanitizedSingleLineTextInputEvent(.input, .{ .set_composition = .{ .text = "\n" } }).?;
+    try testing.expectEqualStrings("", cleared.set_composition.text);
+
+    // A textarea preview keeps its newline.
+    const multi = sanitizedSingleLineTextInputEvent(.textarea, .{ .set_composition = .{ .text = "a\nb" } }).?;
+    try testing.expectEqualStrings("a\nb", multi.set_composition.text);
 }

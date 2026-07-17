@@ -1877,7 +1877,21 @@ pub fn RuntimeCanvasWidgetEvents(comptime Runtime: type) type {
             const index = runtimeFindViewIndex(self, keyboard_event.window_id, keyboard_event.view_label) orelse return;
             if (self.views[index].kind != .gpu_surface) return;
             const target = keyboard_event.target orelse return;
-            const edit = self.views[index].canvasWidgetKeyboardTextEdit(target, keyboard_event.keyboard) orelse return;
+            const derived = self.views[index].canvasWidgetKeyboardTextEdit(target, keyboard_event.keyboard) orelse return;
+            // Single-line sanitization happens HERE — after derivation,
+            // BEFORE the stamp — so the retained editor and the app's
+            // `on_input` mirror hear byte-identical sanitized inserts
+            // (clipboard paste from both entry points, typed and
+            // automation text_input, IME composition — every insertion
+            // source flows through this one seam). A suppressed edit (an
+            // insert that was ONLY line breaks) also clears any raw
+            // pre-stamped paste so the app can never hear bytes the
+            // editor refused; the app-side fallback derivation applies
+            // the same sanitize rule, so both derivations still agree.
+            const edit = canvas.sanitizedSingleLineTextInputEvent(target.kind, derived) orelse {
+                keyboard_event.keyboard.edit = null;
+                return;
+            };
             keyboard_event.keyboard.edit = edit;
 
             const dirty = try self.views[index].applyCanvasWidgetTextEdit(target.id, edit) orelse return;

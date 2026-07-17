@@ -1170,7 +1170,18 @@ pub fn Ui(comptime Msg: type) type {
                     else
                         canvas.widgetKeyboardNewlineTextEditEvent(widget.kind, keyboard) orelse keyboard.textEditEvent();
                     if (edit) |text_edit| {
-                        if (self.msgForTextEdit(target_id, text_edit)) |msg| return msg;
+                        // Single-line kinds sanitize the edit with the
+                        // SAME rule the runtime seam applies before
+                        // stamping (strip line breaks; suppress inserts
+                        // that strip to nothing), so the fallback
+                        // derivation for events that never crossed the
+                        // runtime can never feed a model mirror bytes
+                        // the retained editor would refuse. Stamped
+                        // edits are already sanitized and pass through
+                        // untouched.
+                        if (canvas.sanitizedSingleLineTextInputEvent(widget.kind, text_edit)) |sanitized| {
+                            if (self.msgForTextEdit(target_id, sanitized)) |msg| return msg;
+                        }
                     }
                 }
                 return null;

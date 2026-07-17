@@ -219,6 +219,14 @@ const Harness = struct {
     }
 };
 
+fn findKindIn(widget: canvas.Widget, kind: canvas.WidgetKind) ?canvas.Widget {
+    if (widget.kind == kind) return widget;
+    for (widget.children) |child| {
+        if (findKindIn(child, kind)) |found| return found;
+    }
+    return null;
+}
+
 fn findKindText(widget: canvas.Widget, kind: canvas.WidgetKind, text: []const u8) ?canvas.ObjectId {
     if (widget.kind == kind and std.mem.eql(u8, widget.text, text)) return widget.id;
     for (widget.children) |child| {
@@ -246,6 +254,12 @@ test "markup binds the transpiled model: lists, optionals, enums, and the TS fie
     // `{nextId}` — markup binds the model's field names exactly as the
     // TS source wrote them.
     try std.testing.expect(h.hasText("ready filter all next 1"));
+
+    // The media surface declared in TS markup reaches the retained tree
+    // bound to the model's surface id — the element is fully declarable
+    // from the TS tier (producers stay Zig-tier extensions).
+    const surface_widget = findKindIn(h.app_state.tree.?.root, .media_surface).?;
+    try std.testing.expectEqual(@as(canvas.ImageId, 5), surface_widget.image_id);
     try std.testing.expect(h.hasText("done 0"));
     try std.testing.expect(h.hasText("no tasks"));
     try std.testing.expect(!h.hasText("picked"));
@@ -307,6 +321,7 @@ test "the runtime markup interpreter builds the emitted model exactly like the c
         .zoomFromBoard = false,
         .dark = false,
         .chromeTop = 0,
+        .previewSurface = 5,
     };
 
     const BoardUi = canvas.Ui(board.Msg);

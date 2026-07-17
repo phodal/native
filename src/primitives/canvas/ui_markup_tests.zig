@@ -698,6 +698,32 @@ test "the avatar image attribute validates as one binding, avatar-only" {
     }
 }
 
+test "the media-surface surface attribute validates as one binding, required, media-surface-only" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // One {binding} on media-surface is the whole grammar.
+    var parser = markup.Parser.init(arena, "<row>\n  <media-surface surface=\"{preview}\" label=\"Preview\" />\n</row>");
+    try testing.expectEqual(@as(?markup.MarkupErrorInfo, null), markup.validate(try parser.parse()));
+
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        // Surface ids are model data, never markup literals.
+        .{ .source = "<row>\n  <media-surface surface=\"7\" label=\"Preview\" />\n</row>", .message = markup.media_surface_surface_message },
+        .{ .source = "<row>\n  <media-surface surface=\"{a == b}\" label=\"Preview\" />\n</row>", .message = markup.media_surface_surface_message },
+        // Scoped to media-surface: anywhere else it would be inert.
+        .{ .source = "<row>\n  <panel surface=\"{preview}\" />\n</row>", .message = markup.media_surface_surface_element_message },
+        // ...and required: an unbound surface is statically dead markup.
+        .{ .source = "<row>\n  <media-surface label=\"Preview\" />\n</row>", .message = markup.media_surface_missing_surface_message },
+    };
+    for (cases) |case| {
+        var case_parser = markup.Parser.init(arena, case.source);
+        const info = markup.validate(try case_parser.parse()) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(case.message, info.message);
+        try testing.expectEqual(@as(usize, 2), info.line);
+    }
+}
+
 test "wrap and issue-link-base validate as vocabulary with teaching errors" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

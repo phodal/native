@@ -56,6 +56,9 @@ export interface Model {
   readonly dark: boolean;
   /// The chrome channel's titlebar band mirror.
   readonly chromeTop: number;
+  /// The media surface's producer rendezvous: the u64 surface id a
+  /// Zig-tier producer targets (model data, bound by the markup).
+  readonly previewSurface: number;
 }
 
 export type Msg =
@@ -127,6 +130,7 @@ export function initialModel(): Model {
     zoomFromBoard: false,
     dark: false,
     chromeTop: 0,
+    previewSurface: 5,
   };
 }
 

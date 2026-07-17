@@ -559,7 +559,9 @@ pub const ControlMetricTokens = struct {
     /// is part of the tooltip register's identity, not the motion
     /// ladder. 600ms is shadcn's Base UI-backed default trigger delay.
     tooltip_show_delay_ms: u32 = 600,
-    /// The shared warm window after ANY anchored tooltip hides: moving
+    /// The shared warm window after a pointer-hovered tooltip hides on
+    /// pointer leave (focus departure, Escape, presses, and view blur
+    /// deliberately do not warm): moving
     /// to another tooltip trigger within this many milliseconds shows
     /// its tooltip immediately (no delay) and re-warms on the next
     /// hide — the skip-delay polish that makes sweeping a toolbar of

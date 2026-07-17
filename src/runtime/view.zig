@@ -445,7 +445,8 @@ pub const RuntimeView = struct {
     /// presentation chrome; the model never hears hover. `armed` is
     /// the tooltip whose trigger is hovered while its show delay runs;
     /// `shown` is the tooltip currently painted; `warm_until` is the
-    /// shared warm window after ANY tooltip hides (reaching another
+    /// shared warm window after a pointer-hovered tooltip hides on
+    /// pointer leave (reaching another
     /// trigger before it passes shows that tooltip immediately, the
     /// dense-toolbar polish). Every timestamp lives on the RECORDED
     /// input/frame clock (`canvasRenderAnimationStartNsForView` at

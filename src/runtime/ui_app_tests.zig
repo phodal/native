@@ -4239,6 +4239,27 @@ test "trackpad pinch reaches the app through on_pinch with product-of-deltas sca
     const pinch_bad = try std.fmt.bufPrint(&command_buffer, "widget-pinch {s} 0", .{canvas_label});
     try std.testing.expectError(error.InvalidCommand, harness.runtime.dispatchAutomationCommand(app, pinch_bad));
     try std.testing.expectEqual(@as(u32, 2), app_state.model.begins);
+
+    // The f32 wire can betray the parser's `scale > 0` guard: a tiny
+    // positive scale rounds `scale - 1` to exactly -1 — factor 0 on the
+    // wire — so the dispatch refuses it with the wire-minimum teaching
+    // instead of emitting a zoom through zero scale. Nothing dispatches:
+    // no begin, no journaled partial gesture.
+    const pinch_tiny = try std.fmt.bufPrint(&command_buffer, "widget-pinch {s} 1e-20", .{canvas_label});
+    try std.testing.expectError(error.PinchScaleBelowWireMinimum, harness.runtime.dispatchAutomationCommand(app, pinch_tiny));
+    try std.testing.expectEqual(@as(u32, 2), app_state.model.begins);
+    try std.testing.expectEqual(@as(f32, 0.75), app_state.model.scale);
+
+    // The smallest accepted scale — the first f32 above 2^-25 — round-
+    // trips with a positive factor: its delta rounds to -1 + 2^-24, so
+    // the factor is exactly 2^-24 and the model's product stays > 0
+    // (0.75 * 2^-24 = 0x1.8p-25, binary-exact).
+    const pinch_min = try std.fmt.bufPrint(&command_buffer, "widget-pinch {s} 2.9802326e-8", .{canvas_label});
+    try harness.runtime.dispatchAutomationCommand(app, pinch_min);
+    try std.testing.expectEqual(@as(u32, 3), app_state.model.begins);
+    try std.testing.expectEqual(@as(u32, 3), app_state.model.ends);
+    try std.testing.expect(app_state.model.scale > 0);
+    try std.testing.expectEqual(@as(f32, 0x1.8p-25), app_state.model.scale);
 }
 
 const zoom_pair_main_views = [_]app_manifest.ShellView{

@@ -1449,7 +1449,11 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
                 return self.failKey(node, "key does not name a field on the item");
             };
             return switch (value) {
-                .integer => |int| canvas.uiKey(@as(u64, @intCast(int))),
+                // Keys are identity, not quantities: a negative integer
+                // id (an i64 database id, a -1 sentinel) is a distinct,
+                // legitimate identity, so it maps bijectively into the
+                // u64 key space instead of trapping in a signed cast.
+                .integer => |int| canvas.uiKey(@as(u64, @bitCast(int))),
                 .string => |text| canvas.uiKey(text),
                 else => self.failKey(node, "key fields must be integers or strings"),
             };
@@ -1576,8 +1580,14 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             const typed = markup.attrTyped(attribute);
             if (typed != .binding) return self.failVoid(node, markup.avatar_image_message);
             const value = try self.evalBinding(scope, node, typed.binding, true);
+            // Range-checked before the u64 cast: expression values are
+            // i64, so a signed model field (`image: i64 = -1`) can
+            // deliver a negative — the teaching failure, never a trap.
             options.image = switch (value) {
-                .integer => |int| @intCast(int),
+                .integer => |int| if (int < 0)
+                    return self.failVoid(node, markup.avatar_image_message)
+                else
+                    @intCast(int),
                 else => return self.failVoid(node, markup.avatar_image_message),
             };
         }
@@ -1594,8 +1604,14 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
             const typed = markup.attrTyped(attribute);
             if (typed != .binding) return self.failVoid(node, markup.media_surface_surface_message);
             const value = try self.evalBinding(scope, node, typed.binding, true);
+            // Range-checked before the u64 cast: expression values are
+            // i64, so a signed model field (`surface: i64 = -1`) can
+            // deliver a negative — the teaching failure, never a trap.
             options.image = switch (value) {
-                .integer => |int| @intCast(int),
+                .integer => |int| if (int < 0)
+                    return self.failVoid(node, markup.media_surface_surface_message)
+                else
+                    @intCast(int),
                 else => return self.failVoid(node, markup.media_surface_surface_message),
             };
         }
@@ -1724,7 +1740,9 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
         fn attrKey(self: *Self, scope: *Scope, node: markup.MarkupNode, attribute: markup.MarkupAttr) BuildError!canvas.UiKey {
             const value = try self.evalAttrExpression(scope, node, attribute);
             return switch (value) {
-                .integer => |int| canvas.uiKey(@as(u64, @intCast(int))),
+                // Bijective like itemKey: a negative integer key is a
+                // distinct identity, never a trap.
+                .integer => |int| canvas.uiKey(@as(u64, @bitCast(int))),
                 .string => |text| canvas.uiKey(text),
                 else => self.failKey(node, "keys must be integers or strings"),
             };
@@ -1828,8 +1846,17 @@ pub fn MarkupView(comptime ModelT: type, comptime MsgT: type) type {
 
         fn coerce(self: *Self, comptime T: type, node: markup.MarkupNode, value: Value) BuildError!T {
             return switch (@typeInfo(T)) {
+                // Range-checked against the payload's own integer type
+                // before the cast (the option-attribute pattern): a
+                // binding's i64 can deliver a negative to an unsigned
+                // payload or overflow a small one — the teaching
+                // failure, never a trap. Signed payloads keep their
+                // negative range (minInt is the honest lower bound).
                 .int => switch (value) {
-                    .integer => |int| @intCast(int),
+                    .integer => |int| if (int < std.math.minInt(T) or int > std.math.maxInt(T))
+                        self.failCoerce(T, node)
+                    else
+                        @intCast(int),
                     else => self.failCoerce(T, node),
                 },
                 .float => switch (value) {

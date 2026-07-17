@@ -2369,6 +2369,9 @@ pub const AvatarModel = struct {
     /// `fx.registerImageBytes`.
     user_image: canvas.ImageId = 0,
     user_name: []const u8 = "Casey Torres",
+    /// A signed id field: bindings evaluate as i64, so a negative must
+    /// reach the image seam as a value, never trap in the u64 cast.
+    stale_image: i64 = -1,
 
     /// A pub fn producing an ImageId binds like a field.
     pub fn teammateImage(model: *const AvatarModel) canvas.ImageId {
@@ -2380,6 +2383,14 @@ pub const avatar_markup_source =
     \\<row gap="8" cross="center">
     \\  <avatar image="{user_image}" label="{user_name}">CT</avatar>
     \\  <avatar image="{teammateImage}">NS</avatar>
+    \\</row>
+;
+
+/// A negative model value into avatar's u64 image seam: both engines
+/// must fail the build with the avatar teaching, never trap.
+pub const avatar_negative_markup_source =
+    \\<row>
+    \\  <avatar image="{stale_image}">CT</avatar>
     \\</row>
 ;
 
@@ -2454,6 +2465,12 @@ test "avatar image misuse fails the build with the teaching messages" {
             .message = canvas.ui_markup.avatar_image_message,
         },
         .{
+            // A negative integer can never be a u64 ImageId: the
+            // teaching failure, not an @intCast trap.
+            .source = avatar_negative_markup_source,
+            .message = canvas.ui_markup.avatar_image_message,
+        },
+        .{
             // Scoped to avatar: the other image elements stay Zig views.
             .source = "<row>\n  <badge image=\"{user_image}\">3</badge>\n</row>",
             .message = canvas.ui_markup.avatar_image_element_message,
@@ -2466,6 +2483,58 @@ test "avatar image misuse fails the build with the teaching messages" {
         try testing.expectEqualStrings(case.message, view.diagnostic.message);
         try testing.expect(view.diagnostic.line > 0);
     }
+}
+
+// -------------------------------------------- media-surface id binding
+
+pub const SurfaceMsg = union(enum) { refresh };
+
+pub const SurfaceModel = struct {
+    preview: u64 = 5,
+    /// A signed id field: bindings evaluate as i64, so a negative must
+    /// reach the surface seam as a value, never trap in the u64 cast.
+    stale_surface: i64 = -3,
+};
+
+pub const surface_markup_source =
+    \\<column>
+    \\  <media-surface surface="{preview}" label="Preview" />
+    \\</column>
+;
+
+/// A negative model value into media-surface's u64 surface seam: both
+/// engines must fail the build with the surface teaching, never trap.
+pub const surface_negative_markup_source =
+    \\<column>
+    \\  <media-surface surface="{stale_surface}" label="Preview" />
+    \\</column>
+;
+
+pub const SurfaceUi = canvas.Ui(SurfaceMsg);
+
+test "the media-surface surface binding resolves the model id; negatives fail the build" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const SurfaceMarkup = markup_view.MarkupView(SurfaceModel, SurfaceMsg);
+    const model = SurfaceModel{};
+
+    // The u64 model id rides options.image into the widget's image_id
+    // (the media surface's surface-id channel).
+    var view = try SurfaceMarkup.init(arena, surface_markup_source);
+    var ui = SurfaceUi.init(arena);
+    const tree = try ui.finalize(try view.build(&ui, &model));
+    const surface = tree.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.media_surface, surface.kind);
+    try testing.expectEqual(@as(canvas.ImageId, 5), surface.image_id);
+
+    // A negative integer can never be a u64 surface id: the teaching
+    // failure, not an @intCast trap.
+    var negative_view = try SurfaceMarkup.init(arena, surface_negative_markup_source);
+    var negative_ui = SurfaceUi.init(arena);
+    try testing.expectError(error.MarkupBuild, negative_view.build(&negative_ui, &model));
+    try testing.expectEqualStrings(canvas.ui_markup.media_surface_surface_message, negative_view.diagnostic.message);
+    try testing.expect(negative_view.diagnostic.line > 0);
 }
 
 // ------------------------------------- text alignment and grid columns

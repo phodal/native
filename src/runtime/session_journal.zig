@@ -78,8 +78,14 @@ pub const magic = "NSDKSJNL";
 /// have reported the file corrupt instead of refusing the skew; v5
 /// added the pinch magnification `scale` field to gpu-surface input
 /// records (a layout change every v4 reader would misparse) plus the
-/// `pinch_begin`/`pinch_change`/`pinch_end` input kinds (codes 12-14).
-pub const format_version: u32 = 5;
+/// `pinch_begin`/`pinch_change`/`pinch_end` input kinds (codes 12-14);
+/// v6 added the `.image` effect-result kind (code 11) with its
+/// outcome/dimension fields and the blob-store content address
+/// (`image_blob_hash`/`image_blob_len`) appended to every effect
+/// record — a v5 reader would have called an image record's kind code
+/// corrupt and misparsed the longer layout, so it refuses the skew at
+/// the preamble instead.
+pub const format_version: u32 = 6;
 
 // ------------------------------------------------------------- budgets
 //
@@ -844,6 +850,13 @@ pub fn encodeEffect(record: EffectResultRecord, buffer: []u8) JournalError![]con
     try cursor.writeBool(record.audio_playing);
     try cursor.writeBool(record.audio_buffering);
     try cursor.writeBytes(&record.audio_bands);
+    // v6: image terminals — outcome, decoded dimensions, and the blob
+    // store content address of the journaled source bytes.
+    try cursor.writeEnum(record.image_outcome);
+    try cursor.writeInt(u64, record.image_width);
+    try cursor.writeInt(u64, record.image_height);
+    try cursor.writeBytes(&record.image_blob_hash);
+    try cursor.writeInt(u64, record.image_blob_len);
     return buffer[0..cursor.len];
 }
 
@@ -876,6 +889,12 @@ pub fn decodeEffect(bytes: []const u8) JournalError!EffectResultRecord {
         .audio_buffering = try cursor.readBool(),
     };
     @memcpy(&record.audio_bands, try cursor.readBytes(record.audio_bands.len));
+    // v6: image terminals.
+    record.image_outcome = try cursor.readEnum(runtime_effects.EffectImageOutcome);
+    record.image_width = try cursor.readInt(u64);
+    record.image_height = try cursor.readInt(u64);
+    @memcpy(&record.image_blob_hash, try cursor.readBytes(record.image_blob_hash.len));
+    record.image_blob_len = try cursor.readInt(u64);
     if (!cursor.done()) return error.JournalCorrupt;
     return record;
 }

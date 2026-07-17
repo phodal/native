@@ -1081,6 +1081,82 @@ test "cross-thread pushes stage safely and the loop adopts the newest" {
     try std.testing.expectEqualSlices(u8, &final, resources[0].pixels);
 }
 
+test "two runtimes with full retained tables adopt concurrently without deadlock" {
+    // The retained-entry reclaim scan reads slot ownership LOCK-FREE
+    // (media_surface.mediaSurfaceHasActiveSlot); before that, it locked
+    // OTHER mailbox slots while the adoption loop held the drained one:
+    // self-deadlock the moment one runtime's table filled (the spin
+    // mutex is not reentrant), ABBA between two runtimes draining
+    // different slots and scanning each other's. This stress drives
+    // exactly that shape — two runtimes, both texture tables FULL, both
+    // reclaiming on every adoption, concurrently on real threads — for
+    // a bounded iteration count. Completion is the deadlock assertion;
+    // the SpinMutex debug lock-discipline assertion (no thread ever
+    // holds two media-surface mutexes) turns any reintroduced nesting
+    // into an instant loud failure in ANY debug test run, so the fix
+    // cannot regress silently between stress runs.
+    const gpa = std.testing.allocator;
+
+    var harnesses: [2]*TestHarness() = undefined;
+    harnesses[0] = try TestHarness().create(gpa, .{ .size = geometry.SizeF.init(64, 64) });
+    defer harnesses[0].destroy(gpa);
+    harnesses[1] = try TestHarness().create(gpa, .{ .size = geometry.SizeF.init(64, 64) });
+    defer harnesses[1].destroy(gpa);
+
+    // Fill each runtime's texture table with RETAINED entries (claim ->
+    // push -> adopt -> release, rotating ids), so every raced adoption
+    // below finds the table full and runs the reclaim scan while it
+    // holds the drained slot's mutex.
+    for (harnesses, 0..) |harness, harness_index| {
+        var rotation: usize = 0;
+        while (rotation < canvas_limits.max_media_surface_channels) : (rotation += 1) {
+            const seed_id: u64 = 10_000 * (@as(u64, harness_index) + 1) + rotation;
+            const producer = try harness.runtime.acquireMediaSurfaceProducer(seed_id);
+            const shade: u8 = @intCast(rotation + 1);
+            const frame = solidFrame(.{ shade, shade, shade, 255 });
+            try producer.pushFrame(2, 2, &frame);
+            harness.runtime.adoptMediaSurfaceFrames();
+            producer.release();
+        }
+        try std.testing.expectEqual(canvas_limits.max_media_surface_channels, harness.runtime.media_surface_count);
+    }
+
+    const iterations: usize = 200;
+    const Driver = struct {
+        fn drive(harness: *TestHarness(), id_base: u64) !void {
+            var iteration: usize = 0;
+            while (iteration < iterations) : (iteration += 1) {
+                // Each thread is its own runtime's only driver, so the
+                // loop-thread-only calls (acquire, adopt) are honest;
+                // the SLOTS are process-wide shared state, which is the
+                // contention under test. Two threads hold at most one
+                // claim each — four slots never exhaust.
+                const rotating_id = id_base + iteration;
+                const producer = try harness.runtime.acquireMediaSurfaceProducer(rotating_id);
+                defer producer.release();
+                const shade: u8 = @truncate(iteration +% 1);
+                const frame = solidFrame(.{ shade, @truncate(id_base), shade, 255 });
+                try producer.pushFrame(2, 2, &frame);
+                // Table full + fresh surface id = reclaim scan while
+                // the drained slot's data mutex is held, every time.
+                harness.runtime.adoptMediaSurfaceFrames();
+                if (harness.runtime.adoptedMediaSurfaceTexture(rotating_id) == null) return error.AdoptionLost;
+            }
+        }
+
+        fn run(harness: *TestHarness(), id_base: u64, failed: *std.atomic.Value(bool)) void {
+            drive(harness, id_base) catch failed.store(true, .release);
+        }
+    };
+
+    var failed = std.atomic.Value(bool).init(false);
+    const first = try std.Thread.spawn(.{}, Driver.run, .{ harnesses[0], @as(u64, 20_000), &failed });
+    const second = try std.Thread.spawn(.{}, Driver.run, .{ harnesses[1], @as(u64, 30_000), &failed });
+    first.join();
+    second.join();
+    try std.testing.expect(!failed.load(.acquire));
+}
+
 test "a producer outliving its runtime pushes into inert process-lived memory" {
     const gpa = std.testing.allocator;
 

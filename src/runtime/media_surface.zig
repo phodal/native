@@ -279,7 +279,8 @@ pub fn RuntimeMediaSurfaces(comptime Runtime: type) type {
                     slot.mutex.unlock();
                     continue;
                 }
-                const entry_index = mediaSurfaceEntryIndex(self, slot.surface_id) orelse {
+                var reclaimed_texture_id: u64 = 0;
+                const entry_index = mediaSurfaceEntryIndex(self, slot.surface_id, slot, &reclaimed_texture_id) orelse {
                     // Registry saturated by retained textures of
                     // released channels; loud, never silent.
                     slot.staged = false;
@@ -310,6 +311,13 @@ pub fn RuntimeMediaSurfaces(comptime Runtime: type) type {
                 };
                 slot.staged = false;
                 slot.mutex.unlock();
+                // The reclaimed texture's host-side removal runs OUTSIDE
+                // the slot lock: guarded sections stay bounded memcpys
+                // (the thread contract), never platform calls a pushing
+                // producer would spin behind.
+                if (reclaimed_texture_id != 0) {
+                    self.options.platform.services.removeGpuSurfaceImage(reclaimed_texture_id) catch {};
+                }
                 changed = true;
             }
             if (changed) {
@@ -356,7 +364,20 @@ pub fn RuntimeMediaSurfaces(comptime Runtime: type) type {
         /// When every entry is live, entries whose surface no longer has
         /// an ACTIVE slot on this runtime are reclaimed oldest-first (a
         /// released player's retained last frame yields to a live one).
-        fn mediaSurfaceEntryIndex(self: *Runtime, surface_id: u64) ?usize {
+        /// `held_slot` is the mailbox slot the adoption loop currently
+        /// holds locked (the one being drained); the active-slot scan
+        /// must read it lock-free — its spin mutex is not reentrant.
+        /// When a retained entry is reclaimed, `reclaimed_texture_id`
+        /// receives its derived texture id so the CALLER can remove the
+        /// host-side image after the slot lock drops (hosts that retain
+        /// copied side-channel textures — the AppKit NSImage store —
+        /// hold one per uploaded id, and this reclaim is the only
+        /// live-runtime path where a retained texture's id leaves the
+        /// resource set for good: without the removal the host store
+        /// grows unboundedly as surface ids rotate, and a widget still
+        /// drawing the reclaimed id could resolve the stale host image
+        /// instead of its placeholder).
+        fn mediaSurfaceEntryIndex(self: *Runtime, surface_id: u64, held_slot: *MediaSurfaceSlot, reclaimed_texture_id: *u64) ?usize {
             for (self.media_surface_entries[0..self.media_surface_count], 0..) |entry, index| {
                 if (entry.surface_id == surface_id) return index;
             }
@@ -367,7 +388,14 @@ pub fn RuntimeMediaSurfaces(comptime Runtime: type) type {
                 return index;
             }
             for (self.media_surface_entries[0..self.media_surface_count], 0..) |entry, index| {
-                if (!mediaSurfaceHasActiveSlot(self.media_surface_runtime_tag, entry.surface_id)) {
+                if (!mediaSurfaceHasActiveSlot(self.media_surface_runtime_tag, entry.surface_id, held_slot)) {
+                    // Mirror unregisterCanvasImage's teardown: hand the
+                    // reclaimed texture id up for a best-effort host
+                    // removal (hosts without the seam report
+                    // UnsupportedService, hosts that never uploaded the
+                    // id treat it as a no-op — both are swallowed at
+                    // the call, exactly like unregister).
+                    reclaimed_texture_id.* = canvas.mediaSurfaceTextureImageId(entry.surface_id);
                     self.media_surface_entries[index] = .{ .surface_id = surface_id };
                     return index;
                 }
@@ -375,8 +403,19 @@ pub fn RuntimeMediaSurfaces(comptime Runtime: type) type {
             return null;
         }
 
-        fn mediaSurfaceHasActiveSlot(tag: u64, surface_id: u64) bool {
+        /// Whether `surface_id` has a live claim on this runtime.
+        /// `held_slot` is read WITHOUT taking its mutex: the caller (the
+        /// adoption loop, via `mediaSurfaceEntryIndex`) already holds it,
+        /// and the spin mutex is not reentrant — relocking it here was a
+        /// self-deadlock the moment the entry table first filled, which
+        /// the synthetic battery never did.
+        fn mediaSurfaceHasActiveSlot(tag: u64, surface_id: u64, held_slot: *MediaSurfaceSlot) bool {
             for (&media_surface_slots) |*slot| {
+                if (slot == held_slot) {
+                    // Stable under the caller's own lock.
+                    if (slot.active and slot.owner_tag == tag and slot.surface_id == surface_id) return true;
+                    continue;
+                }
                 slot.mutex.lock();
                 const live = slot.active and slot.owner_tag == tag and slot.surface_id == surface_id;
                 slot.mutex.unlock();

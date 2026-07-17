@@ -536,6 +536,157 @@ test "the surface's a11y line is producer-independent, so fingerprints exclude t
     try std.testing.expectEqual(before, harness.runtime.sessionStateFingerprint());
 }
 
+// ------------------------------------------------------- entry reclaim
+
+test "reclaiming a retained texture removes the host image and the widget serves the placeholder" {
+    const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 220) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(MediaApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = MediaApp.init(std.testing.allocator, .{}, mediaOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try mediaAppFrame(harness, app, 1);
+
+    const pixel_size = try harness.runtime.canvasScreenshotPixelSize(1, media_canvas_label, null);
+    const pixels = try std.testing.allocator.alloc(u8, pixel_size.byte_len);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, pixel_size.byte_len);
+    defer std.testing.allocator.free(scratch);
+    const before = try mediaScreenshot(harness, pixels, scratch);
+    const golden = try std.testing.allocator.dupe(u8, before.rgba8);
+    defer std.testing.allocator.free(golden);
+
+    // A producer pushes; the app's frame presents the packet, so the
+    // texture rides the upload side-channel into the HOST-WIDE store —
+    // the store AppKit's packet draw resolves images from.
+    const texture_id = canvas.mediaSurfaceTextureImageId(surface_id);
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    const magenta = solidFrame(.{ 255, 0, 255, 255 });
+    try producer.pushFrame(2, 2, &magenta);
+    try mediaAppFrame(harness, app, 2);
+    try std.testing.expect(harness.null_platform.gpuSurfaceImage(texture_id) != null);
+
+    // Release retains the last adopted frame (a paused player keeps its
+    // final picture): the entry, the resource, and the host copy all
+    // stay — release is NOT a reclaim.
+    producer.release();
+    try mediaAppFrame(harness, app, 3);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) != null);
+    try std.testing.expect(harness.null_platform.gpuSurfaceImage(texture_id) != null);
+    try std.testing.expectEqual(@as(usize, 0), harness.null_platform.gpu_surface_image_remove_count);
+
+    // Fill every runtime texture entry with LIVE channels, then adopt
+    // one more: the retained entry is the only inactive one, so it is
+    // reclaimed — and the host-side image must go with it.
+    var live: [canvas_limits.max_media_surface_channels]media_surface.MediaSurfaceProducer = undefined;
+    for (&live, 0..) |*extra, index| {
+        extra.* = try harness.runtime.acquireMediaSurfaceProducer(101 + index);
+        const shade: u8 = @intCast(index + 1);
+        const frame = solidFrame(.{ shade, shade, shade, 255 });
+        try extra.pushFrame(2, 2, &frame);
+    }
+    defer for (live) |extra| extra.release();
+    try mediaAppFrame(harness, app, 4);
+
+    // The reclaim removed the host texture through the platform seam.
+    try std.testing.expect(harness.null_platform.gpu_surface_image_remove_count >= 1);
+    try std.testing.expectEqual(texture_id, harness.null_platform.gpu_surface_image_remove_id);
+    try std.testing.expect(harness.null_platform.gpuSurfaceImage(texture_id) == null);
+
+    // Both engines now resolve the id to NOTHING: the runtime resource
+    // set no longer carries it (packet hosts skip the draw — no stale
+    // store image left to resolve), and the reference render of the
+    // still-bound widget is byte-identical to the placeholder golden.
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) == null);
+    for (harness.runtime.registeredCanvasImages()) |resource| {
+        try std.testing.expect(resource.id != texture_id);
+    }
+    try mediaAppFrame(harness, app, 5);
+    const after = try mediaScreenshot(harness, pixels, scratch);
+    try std.testing.expectEqualSlices(u8, golden, after.rgba8);
+}
+
+test "reclaim is safe on hosts without the upload seam" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    // Model a platform that never wired image uploads: the reclaim's
+    // best-effort removal must swallow UnsupportedService, exactly like
+    // unregisterCanvasImage does.
+    harness.null_platform.gpu_surface_image_uploads = false;
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+
+    const retained = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    const first = solidFrame(.{ 1, 1, 1, 255 });
+    try retained.pushFrame(2, 2, &first);
+    try dispatchFrame(harness, app, 1);
+    retained.release();
+
+    var live: [canvas_limits.max_media_surface_channels]media_surface.MediaSurfaceProducer = undefined;
+    for (&live, 0..) |*extra, index| {
+        extra.* = try harness.runtime.acquireMediaSurfaceProducer(301 + index);
+        const shade: u8 = @intCast(index + 1);
+        const frame = solidFrame(.{ shade, 0, 0, 255 });
+        try extra.pushFrame(2, 2, &frame);
+    }
+    defer for (live) |extra| extra.release();
+    // The adoption reclaims the retained entry; the platform refuses the
+    // removal with UnsupportedService and adoption proceeds anyway.
+    try dispatchFrame(harness, app, 2);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) == null);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(301) != null);
+}
+
+test "surface-id rotation never grows the host image store" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+
+    // The rotating-player shape: every rotation binds a NEW surface id,
+    // pushes a frame, presents it (uploading the texture to the host
+    // store), and releases. Ids rotate far past the channel budget; the
+    // host store must stay bounded by it — before the reclaim removed
+    // host images, every rotation left one stale NSImage-analog behind.
+    const rotations: usize = canvas_limits.max_media_surface_channels * 3;
+    var rotation: usize = 0;
+    while (rotation < rotations) : (rotation += 1) {
+        const rotating_id: u64 = 400 + rotation;
+        const producer = try harness.runtime.acquireMediaSurfaceProducer(rotating_id);
+        const shade: u8 = @intCast(rotation + 1);
+        const frame = solidFrame(.{ shade, shade, 0, 255 });
+        try producer.pushFrame(2, 2, &frame);
+        try setMediaSurfaceDisplayList(harness, rotating_id);
+        try dispatchFrame(harness, app, rotation + 1);
+        _ = try presentProbeFrame(harness, rotation + 1);
+        try std.testing.expect(harness.null_platform.gpu_surface_image_count <= canvas_limits.max_media_surface_channels);
+        producer.release();
+    }
+
+    // Every rotation past the entry budget reclaimed one retained
+    // texture and removed its host image; the store ends bounded.
+    try std.testing.expectEqual(rotations - canvas_limits.max_media_surface_channels, harness.null_platform.gpu_surface_image_remove_count);
+    try std.testing.expect(harness.null_platform.gpu_surface_image_count <= canvas_limits.max_media_surface_channels);
+}
+
 // ------------------------------------------------------- record / replay
 
 const JournalBuffer = struct {

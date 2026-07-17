@@ -75,7 +75,10 @@ export const navSections: NavSection[] = [
   },
   {
     title: "Mobile & Embedding",
-    items: [{ name: "Embedded App", href: "/embed" }],
+    items: [
+      { name: "Embedded App", href: "/embed" },
+      { name: "Media Producers", href: "/media-producers" },
+    ],
   },
   {
     title: "Web Content",

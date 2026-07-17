@@ -46,7 +46,8 @@
 //! `error.FontIdInUse`; there is deliberately no unregister.
 //!
 //! Byte storage is on-demand: registration copies the file into an
-//! exact-size heap allocation from the runtime's `options.allocator`, so
+//! exact-size heap allocation from the runtime's init-frozen
+//! `owned_allocator` (captured from `Options.allocator`), so
 //! a runtime with no registered fonts carries zero font bytes (embedding
 //! hosts create a Runtime per surface — a reservation-shaped pool at the
 //! 24 MiB CJK bound would embed 192 MiB in every one). Permanence makes
@@ -68,9 +69,9 @@ pub const max_registered_canvas_fonts = canvas_limits.max_registered_canvas_font
 pub const max_registered_canvas_font_bytes = canvas_limits.max_registered_canvas_font_bytes;
 
 /// One registered font: its id and the exact-size heap copy of its
-/// TrueType bytes (owned by the runtime's `options.allocator`, freed at
-/// `Runtime.deinit`); the parsed face view lives in the parallel face
-/// array at the same index and points into these bytes.
+/// TrueType bytes (owned by the runtime's init-frozen `owned_allocator`,
+/// freed at `Runtime.deinit`); the parsed face view lives in the parallel
+/// face array at the same index and points into these bytes.
 pub const CanvasFontEntry = struct {
     id: canvas.FontId = 0,
     bytes: []const u8 = &.{},
@@ -126,8 +127,13 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
             // the only allocation and the only free the registry ever
             // makes). On-demand allocation instead of a slot pool keeps
             // a fontless Runtime at zero font bytes.
-            const pooled = try self.options.allocator.alloc(u8, ttf.len);
-            errdefer self.options.allocator.free(pooled);
+            // Alloc and every free (the refusal paths below, the deinit
+            // free) go through the runtime's init-frozen ownership
+            // allocator: `options.allocator` is publicly mutable and a
+            // swap between registration and teardown must never split
+            // the alloc/free identity.
+            const pooled = try self.owned_allocator.alloc(u8, ttf.len);
+            errdefer self.owned_allocator.free(pooled);
             @memcpy(pooled, ttf);
             const face = canvas.font_ttf.Face.parse(pooled) catch |err| switch (err) {
                 // The registration-time glyph-budget gate: refusing the

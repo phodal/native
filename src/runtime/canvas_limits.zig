@@ -124,7 +124,8 @@ pub const max_registered_canvas_image_pixel_bytes: usize = 1024 * 1024;
 // Latin UI faces stay a few hundred KB (the bundled faces are 71/116 KB).
 // Both bounds are VALIDATION bounds, not storage reservations: the
 // registry heap-allocates each font's exact file size from the
-// runtime's `options.allocator` at registration (canvas_fonts.zig), so
+// allocator the runtime froze at init (`Options.allocator`, captured
+// into `Runtime.owned_allocator`) at registration (canvas_fonts.zig), so
 // a runtime with no registered fonts carries zero font bytes. An
 // embedded slot pool at this bound would put 8 x 24 MiB = 192 MiB in
 // EVERY Runtime — measured on the docs wasm preview host (one Runtime

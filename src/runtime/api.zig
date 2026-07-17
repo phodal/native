@@ -390,7 +390,10 @@ pub const Options = struct {
     /// per-view storage stays embedded in the Runtime struct). The
     /// default suits process-lifetime runtimes; embedders that create
     /// and destroy runtimes in one process (tests, the docs wasm
-    /// preview host) pass their own and call `Runtime.deinit`.
+    /// preview host) pass their own and call `Runtime.deinit`. The
+    /// runtime captures this into its `owned_allocator` at init:
+    /// mutating `options.allocator` on a live runtime retargets
+    /// nothing — pick the owning allocator here, before init.
     allocator: std.mem.Allocator = std.heap.page_allocator,
     trace_sink: ?trace.Sink = null,
     log_path: ?[]const u8 = null,

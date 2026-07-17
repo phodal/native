@@ -100,26 +100,62 @@ test "a fresh runtime allocates zero font bytes until a registration happens" {
     // regression pinned here: a reservation-shaped slot pool at the
     // 24 MiB CJK bound embedded 192 MiB in every Runtime, doubling the
     // docs wasm preview host's per-tile memory before any font existed.)
+    // The ownership allocator is frozen at init, so the test re-freezes
+    // the field directly — equivalent to constructing with the counting
+    // allocator, and safe exactly because no owned bytes exist yet.
     var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
-    harness.runtime.options.allocator = counting.allocator();
+    harness.runtime.owned_allocator = counting.allocator();
     try harness.start(app_state.app());
     try std.testing.expectEqual(@as(usize, 0), counting.allocations);
 
     // Even an allocator that refuses everything leaves the runtime
     // fully operational until a registration demands memory — and that
-    // failure is loud and recoverable, never a partial slot.
+    // failure is loud and recoverable, never a partial slot. (Still
+    // nothing owned, so re-freezing stays equivalent to init capture.)
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
-    harness.runtime.options.allocator = failing.allocator();
+    harness.runtime.owned_allocator = failing.allocator();
     try std.testing.expectError(error.OutOfMemory, harness.runtime.registerCanvasFont(registered_font_id, mono_bytes));
     try std.testing.expectEqual(@as(usize, 0), harness.runtime.registeredCanvasFontCount());
 
     // Registration is the first allocation: exactly one, exactly the
     // file's size (freed by Runtime.deinit through harness.destroy —
     // the leak-checked test allocator backs it).
-    harness.runtime.options.allocator = counting.allocator();
+    harness.runtime.owned_allocator = counting.allocator();
     try harness.runtime.registerCanvasFont(registered_font_id, mono_bytes);
     try std.testing.expectEqual(@as(usize, 1), counting.allocations);
     try std.testing.expectEqual(mono_bytes.len, counting.allocated_bytes);
+}
+
+test "deinit frees font bytes through the init-frozen allocator even after options.allocator is mutated" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: RegistryApp = .{};
+    try harness.start(app_state.app());
+
+    // Freeze a counting allocator as the runtime's owner (equivalent to
+    // constructing with it — nothing is owned yet) and register a face
+    // through it.
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    harness.runtime.owned_allocator = counting.allocator();
+    try harness.runtime.registerCanvasFont(registered_font_id, mono_bytes);
+    try std.testing.expectEqual(@as(usize, 1), counting.allocations);
+    try std.testing.expectEqual(@as(usize, 0), counting.deallocations);
+
+    // The hazard under test: `Runtime.options` is public and mutable, so
+    // an embedder can swap `options.allocator` AFTER fonts registered.
+    // Ownership must not retarget — the deinit free has to hit the
+    // allocator that made the bytes, not whatever the option points at
+    // by teardown time.
+    var mutated = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    harness.runtime.options.allocator = mutated.allocator();
+    harness.runtime.deinit();
+
+    // Counts balance on the original identity; the mutated allocator
+    // saw zero activity in either direction.
+    try std.testing.expectEqual(counting.allocations, counting.deallocations);
+    try std.testing.expectEqual(counting.allocated_bytes, counting.freed_bytes);
+    try std.testing.expectEqual(@as(usize, 0), mutated.allocations);
+    try std.testing.expectEqual(@as(usize, 0), mutated.deallocations);
 }
 
 test "hostile and truncated font files fail loud at registration and never corrupt the registry" {

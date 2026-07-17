@@ -99,7 +99,11 @@ test "embedded app deinit returns registered font bytes across create-destroy cy
             .source = platform.WebViewSource.html("<p>Fonts</p>"),
         }, null_platform.platform());
         defer embedded.deinit();
-        embedded.runtime.options.allocator = std.testing.allocator;
+        // Ownership is frozen at init (`Runtime.owned_allocator`;
+        // mutating `options.allocator` retargets nothing), so the test
+        // re-freezes the field itself — equivalent to constructing with
+        // the leak-checked allocator, safe while nothing is owned yet.
+        embedded.runtime.owned_allocator = std.testing.allocator;
 
         try embedded.start();
         try embedded.runtime.registerCanvasFont(canvas.min_registered_font_id, canvas.font_ttf.geist_mono_bytes);
@@ -118,7 +122,7 @@ test "embedded app deinit is idempotent" {
         .name = "embedded-deinit-twice",
         .source = platform.WebViewSource.html("<p>Fonts</p>"),
     }, null_platform.platform());
-    embedded.runtime.options.allocator = std.testing.allocator;
+    embedded.runtime.owned_allocator = std.testing.allocator;
     try embedded.runtime.registerCanvasFont(canvas.min_registered_font_id, canvas.font_ttf.geist_mono_bytes);
 
     // The documented idiom is `defer embedded.deinit()`, which must
@@ -134,7 +138,7 @@ test "mobile C ABI destroy returns registered font bytes through the embedded de
     errdefer native_sdk_app_destroy(app);
 
     const self = mobileApp(app).?;
-    self.embedded.runtime.options.allocator = std.testing.allocator;
+    self.embedded.runtime.owned_allocator = std.testing.allocator;
     try self.embedded.runtime.registerCanvasFont(canvas.min_registered_font_id, canvas.font_ttf.geist_mono_bytes);
     try std.testing.expectEqual(@as(usize, 1), self.embedded.runtime.registeredCanvasFontCount());
 

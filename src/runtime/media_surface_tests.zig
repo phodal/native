@@ -1,0 +1,625 @@
+//! Media-surface texture channel tests: the synthetic producer battery.
+//! Latest-wins staging under burst pushes, damage short-circuits at the
+//! push and adoption boundaries, layout/clip compositing through the
+//! widget tree, the reference renderer's deterministic placeholder (and
+//! its independence from producer output), record/replay fingerprint
+//! identity with NO producer attached, cross-thread pushes, and the
+//! teardown discipline (a producer outliving its runtime pushes into
+//! inert process-lived memory, never freed runtime state).
+
+const std = @import("std");
+const geometry = @import("geometry");
+const canvas = @import("canvas");
+const app_manifest = @import("app_manifest");
+const core = @import("core.zig");
+const canvas_limits = @import("canvas_limits.zig");
+const media_surface = @import("media_surface.zig");
+const ui_app_mod = @import("ui_app.zig");
+const session_record = @import("session_record.zig");
+const session_replay = @import("session_replay.zig");
+const support = @import("test_support.zig");
+
+const platform = support.platform;
+const App = support.App;
+const TestHarness = support.TestHarness;
+
+const surface_id: u64 = 5;
+
+fn startedGpuHarness(allocator: std.mem.Allocator) !*TestHarness() {
+    const harness = try TestHarness().create(allocator, .{ .size = geometry.SizeF.init(240, 140) });
+    errdefer harness.destroy(allocator);
+    harness.null_platform.gpu_surfaces = true;
+    return harness;
+}
+
+const ProbeApp = struct {
+    fn app(self: *@This()) App {
+        return .{ .context = self, .name = "media-surface-probe", .source = platform.WebViewSource.html("<h1>Media</h1>") };
+    }
+};
+
+/// A tiny solid RGBA8 frame (2x2) in one color.
+fn solidFrame(rgba: [4]u8) [16]u8 {
+    var frame: [16]u8 = undefined;
+    inline for (0..4) |pixel| @memcpy(frame[pixel * 4 .. pixel * 4 + 4], &rgba);
+    return frame;
+}
+
+fn dispatchFrame(harness: *TestHarness(), app: App, frame_index: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = "canvas",
+        .size = geometry.SizeF.init(240, 140),
+        .scale_factor = 1,
+        .frame_index = frame_index,
+        .timestamp_ns = frame_index * 1_000_000,
+        .nonblank = true,
+    } });
+}
+
+test "burst pushes stage latest-wins and the frame clock adopts the newest" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+
+    // A burst of three distinct frames between presents: nothing adopts
+    // before the frame clock ticks, and the tick adopts ONLY the newest.
+    const red = solidFrame(.{ 255, 0, 0, 255 });
+    const green = solidFrame(.{ 0, 255, 0, 255 });
+    const blue = solidFrame(.{ 0, 0, 255, 255 });
+    try producer.pushFrame(2, 2, &red);
+    try producer.pushFrame(2, 2, &green);
+    try producer.pushFrame(2, 2, &blue);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) == null);
+
+    try dispatchFrame(harness, app, 1);
+    const adopted = harness.runtime.adoptedMediaSurfaceTexture(surface_id).?;
+    try std.testing.expectEqual(@as(usize, 2), adopted.width);
+    try std.testing.expectEqual(@as(usize, 2), adopted.height);
+    try std.testing.expect(adopted.fingerprint != 0);
+
+    // The adopted texture rides the frame planner's resource set as a
+    // presentation-only entry under the derived texture id, carrying
+    // the newest (blue) pixels and its precomputed fingerprint.
+    const resources = harness.runtime.registeredCanvasImages();
+    try std.testing.expectEqual(@as(usize, 1), resources.len);
+    try std.testing.expectEqual(canvas.mediaSurfaceTextureImageId(surface_id), resources[0].id);
+    try std.testing.expect(resources[0].presentation_only);
+    try std.testing.expectEqual(adopted.fingerprint, resources[0].content_fingerprint);
+    try std.testing.expectEqualSlices(u8, &blue, resources[0].pixels);
+}
+
+test "unchanged frames short-circuit damage; changed frames invalidate and repaint" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+
+    const gray = solidFrame(.{ 40, 40, 40, 255 });
+    try producer.pushFrame(2, 2, &gray);
+    try dispatchFrame(harness, app, 1);
+    const first = harness.runtime.adoptedMediaSurfaceTexture(surface_id).?;
+
+    // Identical bytes pushed again: adopted state, the invalidation
+    // flag, and the prompt-frame request count all stay untouched.
+    harness.runtime.invalidated = false;
+    const requests_before = harness.null_platform.gpu_surface_frame_request_count;
+    try producer.pushFrame(2, 2, &gray);
+    try dispatchFrame(harness, app, 2);
+    try std.testing.expectEqual(first.fingerprint, harness.runtime.adoptedMediaSurfaceTexture(surface_id).?.fingerprint);
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(requests_before, harness.null_platform.gpu_surface_frame_request_count);
+
+    // The ADOPTION boundary has its own gate: a fresh claim (whose
+    // push-boundary memory reset with the claim) staging bytes that
+    // match the adopted texture is dropped at adoption — no copy, no
+    // invalidation.
+    producer.release();
+    const reclaimed = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer reclaimed.release();
+    harness.runtime.invalidated = false;
+    try reclaimed.pushFrame(2, 2, &gray);
+    try dispatchFrame(harness, app, 3);
+    try std.testing.expectEqual(first.fingerprint, harness.runtime.adoptedMediaSurfaceTexture(surface_id).?.fingerprint);
+    try std.testing.expect(!harness.runtime.invalidated);
+    try std.testing.expectEqual(requests_before, harness.null_platform.gpu_surface_frame_request_count);
+
+    // A changed frame invalidates, requests a prompt repaint, and
+    // re-fingerprints — the registered-image-swap contract.
+    const white = solidFrame(.{ 255, 255, 255, 255 });
+    try reclaimed.pushFrame(2, 2, &white);
+    try dispatchFrame(harness, app, 4);
+    const second = harness.runtime.adoptedMediaSurfaceTexture(surface_id).?;
+    try std.testing.expect(second.fingerprint != first.fingerprint);
+    try std.testing.expect(harness.runtime.invalidated);
+    try std.testing.expect(harness.null_platform.gpu_surface_frame_request_count > requests_before);
+}
+
+test "the producer channel is loud about ids, dimensions, claims, and exhaustion" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    try harness.start(app_state.app());
+
+    // Surface ids: 0 and the reserved texture-namespace bit are refused.
+    try std.testing.expectError(error.InvalidSurfaceId, harness.runtime.acquireMediaSurfaceProducer(0));
+    try std.testing.expectError(error.InvalidSurfaceId, harness.runtime.acquireMediaSurfaceProducer(canvas.media_surface_image_id_bit | 3));
+    // ...and the same bit is fenced off from canvas image registration,
+    // so producer textures can never be shadowed by a registered image.
+    const pixel = [_]u8{ 1, 2, 3, 255 };
+    try std.testing.expectError(error.InvalidImageId, harness.runtime.registerCanvasImage(canvas.media_surface_image_id_bit | 3, 1, 1, &pixel));
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    // One live producer per (runtime, surface id).
+    try std.testing.expectError(error.MediaSurfaceInUse, harness.runtime.acquireMediaSurfaceProducer(surface_id));
+
+    // Frame validation mirrors the image registry's contract.
+    try std.testing.expectError(error.InvalidFrameDimensions, producer.pushFrame(0, 1, &pixel));
+    try std.testing.expectError(error.InvalidFrameDimensions, producer.pushFrame(2, 1, &pixel));
+    const oversized_bytes = canvas_limits.max_media_surface_pixel_bytes + 4;
+    const oversized = try std.testing.allocator.alloc(u8, oversized_bytes);
+    defer std.testing.allocator.free(oversized);
+    @memset(oversized, 0);
+    try std.testing.expectError(error.FrameTooLarge, producer.pushFrame(oversized_bytes / 4, 1, oversized));
+
+    // Exhaustion: every remaining process-wide slot claimed, the next
+    // acquire fails loudly, and a release frees a slot for reuse.
+    var extras: [canvas_limits.max_media_surface_channels - 1]media_surface.MediaSurfaceProducer = undefined;
+    for (&extras, 0..) |*extra, index| {
+        extra.* = try harness.runtime.acquireMediaSurfaceProducer(100 + index);
+    }
+    try std.testing.expectError(error.MediaSurfaceChannelsExhausted, harness.runtime.acquireMediaSurfaceProducer(999));
+    extras[0].release();
+    const reclaimed = try harness.runtime.acquireMediaSurfaceProducer(999);
+    reclaimed.release();
+    for (extras[1..]) |extra| extra.release();
+
+    // A released handle (and any copy of it) is refused, idempotently.
+    producer.release();
+    const after = solidFrame(.{ 9, 9, 9, 255 });
+    try std.testing.expectError(error.MediaSurfaceReleased, producer.pushFrame(2, 2, &after));
+    producer.release();
+}
+
+// ------------------------------------------------------------- widget app
+
+const media_canvas_label = "media-canvas";
+
+const MediaModel = struct {
+    surface: u64 = surface_id,
+    count: u32 = 0,
+};
+
+const MediaMsg = union(enum) {
+    increment,
+};
+
+const MediaApp = ui_app_mod.UiApp(MediaModel, MediaMsg);
+
+fn mediaUpdate(model: *MediaModel, msg: MediaMsg) void {
+    switch (msg) {
+        .increment => model.count += 1,
+    }
+}
+
+fn mediaView(ui: *MediaApp.Ui, model: *const MediaModel) MediaApp.Ui.Node {
+    // The surface sits inside a CLIPPING parent (scroll viewports
+    // always clip) that is shorter than the surface's declared height,
+    // so the clip test below can probe pixels outside the viewport:
+    // composited like any widget means the parent's clip crops it. The
+    // surface also carries its own corner radius, masked on the draw.
+    return ui.column(.{ .gap = 8, .padding = 10 }, .{
+        ui.el(.scroll_view, .{ .width = 160, .height = 60 }, .{
+            ui.mediaSurface(.{
+                .image = model.surface,
+                .width = 140,
+                .height = 120,
+                .style = .{ .radius = 12 },
+                .semantics = .{ .label = "Synthetic preview" },
+            }),
+        }),
+        ui.text(.{}, ui.fmt("Count {d}", .{model.count})),
+        ui.button(.{ .on_press = .increment }, "Increment"),
+    });
+}
+
+const media_views = [_]app_manifest.ShellView{
+    .{ .label = media_canvas_label, .kind = .gpu_surface, .fill = true, .gpu_backend = .metal },
+};
+const media_windows = [_]app_manifest.ShellWindow{.{
+    .label = "main",
+    .title = "Media",
+    .width = 240,
+    .height = 220,
+    .views = &media_views,
+}};
+const media_scene: app_manifest.ShellConfig = .{ .windows = &media_windows };
+
+fn mediaOptions() MediaApp.Options {
+    return .{
+        .name = "media-surface-app",
+        .scene = media_scene,
+        .canvas_label = media_canvas_label,
+        .update = mediaUpdate,
+        .view = mediaView,
+    };
+}
+
+fn mediaAppFrame(harness: *TestHarness(), app: App, frame_index: u64) !void {
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = media_canvas_label,
+        .size = geometry.SizeF.init(240, 220),
+        .scale_factor = 1,
+        .frame_index = frame_index,
+        .timestamp_ns = frame_index * 1_000_000,
+        .nonblank = true,
+    } });
+}
+
+fn mediaScreenshot(harness: *TestHarness(), out: []u8, scratch: []u8) !core.CanvasScreenshot {
+    return harness.runtime.renderCanvasScreenshot(1, media_canvas_label, null, out, scratch);
+}
+
+test "the widget composites the placeholder deterministically, clipped like any widget" {
+    const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 220) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(MediaApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = MediaApp.init(std.testing.allocator, .{}, mediaOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try mediaAppFrame(harness, app, 1);
+    try std.testing.expect(app_state.installed);
+
+    const pixel_size = try harness.runtime.canvasScreenshotPixelSize(1, media_canvas_label, null);
+    const pixels = try std.testing.allocator.alloc(u8, pixel_size.byte_len);
+    defer std.testing.allocator.free(pixels);
+    const scratch = try std.testing.allocator.alloc(u8, pixel_size.byte_len);
+    defer std.testing.allocator.free(scratch);
+
+    // Locate the surface's laid-out frame and its clipping parent.
+    const layout = try harness.runtime.canvasWidgetLayout(1, media_canvas_label);
+    var surface_frame: ?geometry.RectF = null;
+    var viewport_frame: ?geometry.RectF = null;
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .media_surface) surface_frame = node.frame;
+        if (node.widget.kind == .scroll_view) viewport_frame = node.frame;
+    }
+    const media_frame = surface_frame.?;
+    const clip_frame = viewport_frame.?;
+    // The declared height (120) overflows the 60-tall clipping viewport.
+    try std.testing.expect(media_frame.maxY() > clip_frame.maxY());
+
+    const placeholder = canvas.mediaSurfacePlaceholderColor(surface_id);
+    const expected = [4]u8{
+        @intFromFloat(@round(placeholder.r * 255)),
+        @intFromFloat(@round(placeholder.g * 255)),
+        @intFromFloat(@round(placeholder.b * 255)),
+        255,
+    };
+
+    const before = try mediaScreenshot(harness, pixels, scratch);
+    const inside_x: usize = @intFromFloat(media_frame.x + 8);
+    const inside_y: usize = @intFromFloat(media_frame.y + 8);
+    const inside = (inside_y * before.width + inside_x) * 4;
+    try std.testing.expectEqualSlices(u8, &expected, before.rgba8[inside .. inside + 4]);
+    // Outside the clipping parent (but inside the surface's declared
+    // frame): the parent's clip crops the surface like any widget.
+    const clipped_y: usize = @intFromFloat(clip_frame.maxY() + 4);
+    const clipped = (clipped_y * before.width + inside_x) * 4;
+    try std.testing.expect(!std.mem.eql(u8, &expected, before.rgba8[clipped .. clipped + 4]));
+    // The surface's own corner radius masks the draw: the rounded
+    // corner pixel is not placeholder-colored while the face is.
+    const corner_x: usize = @intFromFloat(media_frame.x + 1);
+    const corner_y: usize = @intFromFloat(media_frame.y + 1);
+    const corner = (corner_y * before.width + corner_x) * 4;
+    try std.testing.expect(!std.mem.eql(u8, &expected, before.rgba8[corner .. corner + 4]));
+
+    // Reference-placeholder determinism: a producer pushing REAL frames
+    // changes nothing in the reference render — goldens can never
+    // depend on producer output. Byte-identical before/after.
+    const golden = try std.testing.allocator.dupe(u8, before.rgba8);
+    defer std.testing.allocator.free(golden);
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+    const magenta = solidFrame(.{ 255, 0, 255, 255 });
+    try producer.pushFrame(2, 2, &magenta);
+    try mediaAppFrame(harness, app, 2);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) != null);
+
+    const after = try mediaScreenshot(harness, pixels, scratch);
+    try std.testing.expectEqualSlices(u8, golden, after.rgba8);
+
+    // ...while the GPU/packet side of the same plan sees the texture:
+    // the resource set carries the adopted pixels for upload.
+    const resources = harness.runtime.registeredCanvasImages();
+    try std.testing.expectEqual(@as(usize, 1), resources.len);
+    try std.testing.expectEqualSlices(u8, &magenta, resources[0].pixels);
+    try std.testing.expect(resources[0].presentation_only);
+}
+
+test "the surface's a11y line is producer-independent, so fingerprints exclude texture contents" {
+    const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 220) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(MediaApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = MediaApp.init(std.testing.allocator, .{}, mediaOptions());
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+    try mediaAppFrame(harness, app, 1);
+
+    const before = harness.runtime.sessionStateFingerprint();
+    try std.testing.expect(before != 0);
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+    const cyan = solidFrame(.{ 0, 255, 255, 255 });
+    try producer.pushFrame(2, 2, &cyan);
+    try mediaAppFrame(harness, app, 2);
+    try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) != null);
+
+    // Texture contents are presentation chrome: the session fingerprint
+    // (hashed over the a11y tree) is identical with frames flowing.
+    try std.testing.expectEqual(before, harness.runtime.sessionStateFingerprint());
+}
+
+// ------------------------------------------------------- record / replay
+
+const JournalBuffer = struct {
+    bytes: [256 * 1024]u8 = undefined,
+    len: usize = 0,
+
+    fn sink(self: *JournalBuffer) session_record.RecorderSink {
+        return .{ .context = self, .write_fn = write };
+    }
+
+    fn write(context: *anyopaque, bytes: []const u8) anyerror!void {
+        const self: *JournalBuffer = @ptrCast(@alignCast(context));
+        if (self.len + bytes.len > self.bytes.len) return error.NoSpaceLeft;
+        @memcpy(self.bytes[self.len .. self.len + bytes.len], bytes);
+        self.len += bytes.len;
+    }
+
+    fn journalBytes(self: *const JournalBuffer) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+test "a session recorded with a live producer replays fingerprint-identical with NO producer" {
+    const gpa = std.testing.allocator;
+    const buffer = try std.heap.page_allocator.create(JournalBuffer);
+    defer std.heap.page_allocator.destroy(buffer);
+    buffer.len = 0;
+
+    // Record: a producer pushes distinct frames between presented
+    // frames while the app also does model work (increments), with
+    // per-frame fingerprint checkpoints.
+    var recorded_model: MediaModel = undefined;
+    var recorded_fingerprint: u64 = 0;
+    {
+        const recorder = try std.heap.page_allocator.create(session_record.SessionRecorder);
+        defer std.heap.page_allocator.destroy(recorder);
+        recorder.* = session_record.SessionRecorder.init(buffer.sink());
+        recorder.begin(.{ .platform_name = "test", .app_name = "media-surface-app", .window_width = 240, .window_height = 220 });
+
+        const harness = try TestHarness().create(gpa, .{ .size = geometry.SizeF.init(240, 220) });
+        defer harness.destroy(gpa);
+        harness.null_platform.gpu_surfaces = true;
+        harness.runtime.options.session_recorder = recorder;
+
+        const app_state = try gpa.create(MediaApp);
+        defer gpa.destroy(app_state);
+        app_state.* = MediaApp.init(std.heap.page_allocator, .{}, mediaOptions());
+        defer app_state.deinit();
+        const app = app_state.app();
+        try harness.start(app);
+        try mediaAppFrame(harness, app, 1);
+        try harness.runtime.dispatchPlatformEvent(app, .frame_requested);
+
+        const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+        defer producer.release();
+
+        const layout = try harness.runtime.canvasWidgetLayout(1, media_canvas_label);
+        var button_frame: ?geometry.RectF = null;
+        for (layout.nodes) |node| {
+            if (node.widget.kind == .button) button_frame = node.frame;
+        }
+        const press_frame = button_frame.?;
+
+        var frame_index: u64 = 2;
+        var shade: u8 = 10;
+        while (frame_index < 6) : (frame_index += 1) {
+            const frame = solidFrame(.{ shade, shade, 0, 255 });
+            try producer.pushFrame(2, 2, &frame);
+            shade +%= 40;
+            try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+                .window_id = 1,
+                .label = media_canvas_label,
+                .kind = .pointer_down,
+                .x = press_frame.x + press_frame.width * 0.5,
+                .y = press_frame.y + press_frame.height * 0.5,
+            } });
+            try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_input = .{
+                .window_id = 1,
+                .label = media_canvas_label,
+                .kind = .pointer_up,
+                .x = press_frame.x + press_frame.width * 0.5,
+                .y = press_frame.y + press_frame.height * 0.5,
+            } });
+            try mediaAppFrame(harness, app, frame_index);
+            try harness.runtime.dispatchPlatformEvent(app, .frame_requested);
+        }
+        try std.testing.expect(app_state.model.count > 0);
+        try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) != null);
+
+        recorder.finish();
+        try std.testing.expect(!recorder.failed);
+        recorded_model = app_state.model;
+        recorded_fingerprint = harness.runtime.sessionStateFingerprint();
+    }
+
+    // Replay into a fresh runtime and app with NO producer attached:
+    // every checkpoint verifies and the final fingerprint matches —
+    // texture contents were never part of the session's identity.
+    {
+        const harness = try TestHarness().create(gpa, .{ .size = geometry.SizeF.init(240, 220) });
+        defer harness.destroy(gpa);
+        harness.null_platform.gpu_surfaces = true;
+
+        const app_state = try gpa.create(MediaApp);
+        defer gpa.destroy(app_state);
+        app_state.* = MediaApp.init(std.heap.page_allocator, .{}, mediaOptions());
+        defer app_state.deinit();
+
+        const report = try session_replay.replaySession(&harness.runtime, app_state.app(), buffer.journalBytes(), .{
+            .verify = true,
+            .require_same_platform = false,
+        });
+        try std.testing.expect(report.ok());
+        try std.testing.expect(report.events_replayed > 0);
+        try std.testing.expect(report.checkpoints_verified > 0);
+        try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) == null);
+        try std.testing.expectEqualDeep(recorded_model, app_state.model);
+        try std.testing.expectEqual(recorded_fingerprint, harness.runtime.sessionStateFingerprint());
+    }
+}
+
+// -------------------------------------------------- threads and teardown
+
+test "cross-thread pushes stage safely and the loop adopts the newest" {
+    const harness = try startedGpuHarness(std.testing.allocator);
+    defer harness.destroy(std.testing.allocator);
+    var app_state: ProbeApp = .{};
+    const app = app_state.app();
+    try harness.start(app);
+    _ = try harness.runtime.createView(.{
+        .window_id = 1,
+        .label = "canvas",
+        .kind = .gpu_surface,
+        .frame = geometry.RectF.init(0, 0, 240, 140),
+    });
+
+    const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+    defer producer.release();
+
+    // A real producer thread pushes a burst of distinct frames; the
+    // loop thread adopts on its own frame clock. Joining first makes
+    // the assertion deterministic: latest-wins leaves exactly the final
+    // frame staged.
+    const Worker = struct {
+        fn run(handle: media_surface.MediaSurfaceProducer) void {
+            var shade: u8 = 1;
+            while (shade <= 50) : (shade += 1) {
+                const frame = solidFrame(.{ shade, 0, shade, 255 });
+                handle.pushFrame(2, 2, &frame) catch return;
+            }
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Worker.run, .{producer});
+    thread.join();
+
+    try dispatchFrame(harness, app, 1);
+    const final = solidFrame(.{ 50, 0, 50, 255 });
+    const resources = harness.runtime.registeredCanvasImages();
+    try std.testing.expectEqual(@as(usize, 1), resources.len);
+    try std.testing.expectEqualSlices(u8, &final, resources[0].pixels);
+}
+
+test "a producer outliving its runtime pushes into inert process-lived memory" {
+    const gpa = std.testing.allocator;
+
+    // First life: a runtime claims the channel and adopts one frame.
+    var orphan: media_surface.MediaSurfaceProducer = undefined;
+    {
+        const harness = try startedGpuHarness(gpa);
+        defer harness.destroy(gpa);
+        var app_state: ProbeApp = .{};
+        const app = app_state.app();
+        try harness.start(app);
+        _ = try harness.runtime.createView(.{
+            .window_id = 1,
+            .label = "canvas",
+            .kind = .gpu_surface,
+            .frame = geometry.RectF.init(0, 0, 240, 140),
+        });
+        orphan = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+        const first = solidFrame(.{ 1, 2, 3, 255 });
+        try orphan.pushFrame(2, 2, &first);
+        try dispatchFrame(harness, app, 1);
+        try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) != null);
+        // The harness (and the whole Runtime) dies here with the
+        // producer NOT released — the decoder-outlives-the-view shape.
+    }
+
+    // The orphan handle keeps pushing after its runtime is gone: the
+    // pushes land in the process-lived mailbox slot (never freed, never
+    // adopted again) — no use-after-free by construction.
+    const after_teardown = solidFrame(.{ 200, 100, 50, 255 });
+    try orphan.pushFrame(2, 2, &after_teardown);
+
+    // Second life: a NEW runtime acquires the SAME surface id. It gets
+    // its own claim; the orphan's staged frame never crosses over.
+    {
+        const harness = try startedGpuHarness(gpa);
+        defer harness.destroy(gpa);
+        var app_state: ProbeApp = .{};
+        const app = app_state.app();
+        try harness.start(app);
+        _ = try harness.runtime.createView(.{
+            .window_id = 1,
+            .label = "canvas",
+            .kind = .gpu_surface,
+            .frame = geometry.RectF.init(0, 0, 240, 140),
+        });
+        const producer = try harness.runtime.acquireMediaSurfaceProducer(surface_id);
+        defer producer.release();
+
+        // Before the new producer pushes: nothing to adopt (the orphan's
+        // frame belongs to the dead runtime's claim).
+        try dispatchFrame(harness, app, 1);
+        try std.testing.expect(harness.runtime.adoptedMediaSurfaceTexture(surface_id) == null);
+
+        const fresh = solidFrame(.{ 7, 7, 7, 255 });
+        try producer.pushFrame(2, 2, &fresh);
+        try dispatchFrame(harness, app, 2);
+        const resources = harness.runtime.registeredCanvasImages();
+        try std.testing.expectEqual(@as(usize, 1), resources.len);
+        try std.testing.expectEqualSlices(u8, &fresh, resources[0].pixels);
+
+        // The orphan still pushes into its own (dead) claim harmlessly
+        // while the new channel is live.
+        try orphan.pushFrame(2, 2, &after_teardown);
+        try dispatchFrame(harness, app, 3);
+        try std.testing.expectEqualSlices(u8, &fresh, harness.runtime.registeredCanvasImages()[0].pixels);
+    }
+
+    // Free the orphan's slot for later tests in this binary.
+    orphan.release();
+}

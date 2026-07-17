@@ -74,6 +74,12 @@ pub fn mediaSurfaceTextureImageId(surface_id: u64) ImageId {
     return surface_id | media_surface_image_id_bit;
 }
 
+/// The media surface's deterministic id-derived placeholder color
+/// (widget_render.zig): what the reference renderer — goldens,
+/// screenshots, replay pixel marks — shows for a bound surface, live
+/// texture or not. Exported so tests pin the placeholder policy.
+pub const mediaSurfacePlaceholderColor = @import("widget_render.zig").mediaSurfacePlaceholderColor;
+
 pub const default_sans_font_id: FontId = 1;
 pub const default_mono_font_id: FontId = 2;
 // Reserved sans variant ids for inline span styling. The deterministic

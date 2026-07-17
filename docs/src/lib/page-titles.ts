@@ -17,6 +17,7 @@ export const PAGE_TITLES: Record<string, string> = {
   runtime: "App & Runtime",
   frontend: "Frontend Projects",
   "native-surfaces": "Native Surfaces",
+  "media-producers": "Media Producers",
   windows: "Windows",
   webviews: "Multiple WebViews",
   "keyboard-shortcuts": "Keyboard Shortcuts",

@@ -105,6 +105,31 @@ pub const max_canvas_text_layout_lines_per_view: usize = 8192;
 pub const max_registered_canvas_images: usize = 16;
 pub const max_registered_canvas_image_pixel_bytes: usize = 1024 * 1024;
 
+// Media-surface texture channels (media_surface.zig): producer-pushed
+// dynamic textures composited by media_surface widgets. Sized at video
+// scale, not avatar scale — one 1080p RGBA8 frame is ~7.9 MiB, so the
+// per-channel bound fits it exactly (8 MiB) and refuses 4K until the
+// format axis grows real zero-copy paths; 4 concurrent channels covers
+// a player plus a camera preview plus headroom, and a fifth acquire
+// fails loudly (`error.MediaSurfaceChannelsExhausted`). Both bounds are
+// VALIDATION bounds plus per-USE allocation sizes, never Runtime-struct
+// reservations: an ADOPTED texture's buffer is one lazy frame-budget
+// allocation from the runtime's `owned_allocator` (frozen from
+// `Options.allocator` at init) at the entry's first adoption (freed by
+// `Runtime.deinit`), so a runtime with no
+// media producers carries zero media-texture bytes — an embedded pool
+// at this bound put 4 x 8 MiB = 32 MiB in EVERY Runtime, measured on
+// the docs wasm preview host (one Runtime per component tile, wasm
+// linear memory never overcommits) as 137.5 -> 169.5 MB per instance
+// before any producer existed, the registered-font-pool regression's
+// twin. The producer-side STAGING buffers are allocated at first claim
+// into process-lived module state and kept for the process's life —
+// the mailbox a producer thread may touch after its runtime died,
+// which is why they can never be freed (the effects executor's
+// process-lifetime doctrine).
+pub const max_media_surface_channels: usize = 4;
+pub const max_media_surface_pixel_bytes: usize = 8 * 1024 * 1024;
+
 // Runtime-registered font faces: TrueType bytes apps register under a
 // caller-chosen FontId (>= canvas.min_registered_font_id) so their own
 // typefaces resolve everywhere a font id rides — token overrides, text

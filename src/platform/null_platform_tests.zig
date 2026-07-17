@@ -1,5 +1,6 @@
 const std = @import("std");
 const geometry = @import("geometry");
+const canvas = @import("canvas");
 const types = @import("types.zig");
 const null_backend = @import("null_platform.zig");
 const default_gpu_frame_interval_ns = types.default_gpu_frame_interval_ns;
@@ -556,6 +557,44 @@ test "null platform records gpu surface image upload lifecycle" {
     // The seam can be disabled to model platforms without it.
     null_platform.gpu_surface_image_uploads = false;
     try std.testing.expectError(error.UnsupportedService, services.uploadGpuSurfaceImage(.{ .id = 7, .width = 1, .height = 1, .rgba8 = &red }));
+}
+
+test "gpu surface image upload bounds are honest per id namespace" {
+    var null_platform = NullPlatform.init(.{});
+    null_platform.gpu_surfaces = true;
+    const services = null_platform.platform().services;
+
+    // This validation is the one gate in front of EVERY host's upload
+    // seam (the AppKit store included — macos/root.zig forwards whatever
+    // passes here), so the bounds are pinned at this seam.
+    const media_bit = canvas.media_surface_image_id_bit;
+    const buffer = try std.testing.allocator.alloc(u8, types.max_gpu_surface_media_image_pixel_bytes + 4);
+    defer std.testing.allocator.free(buffer);
+    @memset(buffer, 128);
+
+    // Ordinary registered-image ids keep the registry's avatar-scale
+    // bound: exactly 1 MiB (512x512 RGBA8) passes, one pixel past it is
+    // an engine bug and refuses loudly.
+    try services.uploadGpuSurfaceImage(.{ .id = 7, .width = 512, .height = 512, .rgba8 = buffer[0..types.max_gpu_surface_image_pixel_bytes] });
+    try std.testing.expectError(error.InvalidGpuSurfaceImage, services.uploadGpuSurfaceImage(.{
+        .id = 7,
+        .width = types.max_gpu_surface_image_pixel_bytes / 4 + 1,
+        .height = 1,
+        .rgba8 = buffer[0 .. types.max_gpu_surface_image_pixel_bytes + 4],
+    }));
+
+    // Media-surface texture ids are video-scale: the flagship 1920x1080
+    // RGBA8 frame (8,294,400 bytes — 8x the ordinary bound) passes, the
+    // exact frame budget passes, one pixel past the budget refuses.
+    try services.uploadGpuSurfaceImage(.{ .id = media_bit | 5, .width = 1920, .height = 1080, .rgba8 = buffer[0 .. 1920 * 1080 * 4] });
+    try std.testing.expectEqual(@as(usize, 1920 * 1080 * 4), null_platform.gpu_surface_image_upload_byte_len);
+    try services.uploadGpuSurfaceImage(.{ .id = media_bit | 5, .width = 2048, .height = 1024, .rgba8 = buffer[0..types.max_gpu_surface_media_image_pixel_bytes] });
+    try std.testing.expectError(error.InvalidGpuSurfaceImage, services.uploadGpuSurfaceImage(.{
+        .id = media_bit | 5,
+        .width = types.max_gpu_surface_media_image_pixel_bytes / 4 + 1,
+        .height = 1,
+        .rgba8 = buffer,
+    }));
 }
 
 test "null platform preserves shifted webview storage after close" {

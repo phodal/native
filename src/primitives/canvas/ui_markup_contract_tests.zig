@@ -719,6 +719,30 @@ test "expression type errors name the model field and its Zig type" {
     try testing.expect(std.mem.indexOf(u8, message, "name: []const u8") != null);
 }
 
+test "the media-surface surface binding checks as a model integer" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // An integer-producing binding passes — the exact grammar `native
+    // check`'s model-aware pass applies to TS and Zig cores alike.
+    const good = try parseFixture(arena,
+        \\<column>
+        \\  <media-surface surface="{count}" label="Preview" />
+        \\</column>
+    );
+    try testing.expectEqual(null, try contractMessage(arena, good, null));
+
+    // A non-integer binding is refused with the surface teaching.
+    const wrong = try parseFixture(arena,
+        \\<column>
+        \\  <media-surface surface="{name}" label="Preview" />
+        \\</column>
+    );
+    const message = (try contractMessage(arena, wrong, null)).?;
+    try testing.expectEqualStrings(markup.media_surface_surface_message, message);
+}
+
 test "app: icon references check against the contract's registered icon list" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

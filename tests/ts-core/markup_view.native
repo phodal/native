@@ -8,6 +8,7 @@
     <text-field text="{draft}" label="Draft" on-input="draft_edit" width="160" />
     <text>draft [{draft}]</text>
   </row>
+  <media-surface surface="{previewSurface}" width="160" height="40" label="Preview" />
   <row gap="4">
     <stack>
       <button on-press="add">Add</button>

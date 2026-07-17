@@ -36,6 +36,7 @@ export const componentPages: ComponentPage[] = [
   { slug: "input-group", name: "Input Group", preview: "input-group-hero", blurb: "One bordered field: textarea plus accessory actions." },
   { slug: "list", name: "List", preview: "list-hero", blurb: "Rows with icons, selection, and virtualization." },
   { slug: "markdown", name: "Markdown", preview: "markdown-hero", blurb: "GFM rendering through native widgets." },
+  { slug: "media-surface", name: "Media Surface", preview: "media-surface-hero", blurb: "Externally produced textures: video, camera, mpv." },
   { slug: "pagination", name: "Pagination", preview: "pagination-hero", blurb: "Page navigation row." },
   { slug: "panel", name: "Panel", preview: "panel-hero", blurb: "The plain surface container." },
   { slug: "progress", name: "Progress", preview: "progress-hero", blurb: "Determinate progress bar." },

@@ -1589,6 +1589,8 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
                     };
                 } else if (comptime std.mem.eql(u8, attribute.name, "image")) {
                     applyImageAttr(node, attribute.value, entries, ui, model, scope, options);
+                } else if (comptime std.mem.eql(u8, attribute.name, "surface")) {
+                    applySurfaceAttr(node, attribute.value, entries, ui, model, scope, options);
                 } else if (comptime std.mem.eql(u8, attribute.name, "name")) {
                     // Consumed by the icon branch in buildElement; a
                     // compile error on any other element (interpreter and
@@ -1666,8 +1668,35 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             }
             const path = comptime markup.parseAttrExpression(raw).?.binding;
             comptime requireVariant(pathVariant(node, entries, path, true), &.{.integer}, node, markup.avatar_image_message);
+            // Range-checked before the u64 cast (the interpreter fails
+            // the same way): a signed model field (`image: i64 = -1`)
+            // can deliver a negative — fail the build, never trap.
             options.image = switch (bindingValue(node, entries, path, ui, model, scope, true)) {
-                .integer => |int| @intCast(int),
+                .integer => |int| if (int < 0) runtimeFail(canvas.ImageId, ui) else @intCast(int),
+                else => runtimeFail(canvas.ImageId, ui),
+            };
+        }
+
+        /// Comptime mirror of the interpreter's `applySurfaceAttr`:
+        /// `surface="{binding}"` on media-surface resolves to the
+        /// model-owned u64 surface id a producer targets —
+        /// media-surface-only, binding-only, integer-valued, all checked
+        /// at comptime with the interpreter's messages. The id rides
+        /// `options.image` into `Widget.image_id`, the media surface's
+        /// surface-id channel.
+        fn applySurfaceAttr(comptime node: markup.MarkupNode, comptime raw: []const u8, comptime entries: []const ScopeEntry, ui: *Ui, model: *const ModelT, scope: anytype, options: *Ui.ElementOptions) void {
+            comptime {
+                if (!std.mem.eql(u8, node.name, "media-surface")) fail(node, markup.media_surface_surface_element_message);
+                const expression = markup.parseAttrExpression(raw) orelse fail(node, markup.media_surface_surface_message);
+                if (expression != .binding) fail(node, markup.media_surface_surface_message);
+            }
+            const path = comptime markup.parseAttrExpression(raw).?.binding;
+            comptime requireVariant(pathVariant(node, entries, path, true), &.{.integer}, node, markup.media_surface_surface_message);
+            // Range-checked before the u64 cast (the interpreter fails
+            // the same way): a signed model field (`surface: i64 = -1`)
+            // can deliver a negative — fail the build, never trap.
+            options.image = switch (bindingValue(node, entries, path, ui, model, scope, true)) {
+                .integer => |int| if (int < 0) runtimeFail(canvas.ImageId, ui) else @intCast(int),
                 else => runtimeFail(canvas.ImageId, ui),
             };
         }
@@ -1778,7 +1807,10 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
 
         fn uiKeyFromValue(value: Value, ui: *Ui) canvas.UiKey {
             return switch (value) {
-                .integer => |int| canvas.uiKey(@as(u64, @intCast(int))),
+                // Keys are identity, not quantities: a negative integer
+                // id maps bijectively into the u64 key space (the
+                // interpreter's itemKey/attrKey rule), never a trap.
+                .integer => |int| canvas.uiKey(@as(u64, @bitCast(int))),
                 .string => |text| canvas.uiKey(text),
                 else => blk: {
                     ui.failed = true;
@@ -1977,8 +2009,13 @@ fn CompiledMarkupEngine(comptime ModelT: type, comptime MsgT: type, comptime res
             switch (comptime @typeInfo(T)) {
                 .int => {
                     comptime requireVariant(variant, &.{.integer}, node, "payload type does not match the message");
+                    // Range-checked against the payload's own integer
+                    // type before the cast (the interpreter fails the
+                    // same way): a binding's i64 can deliver a negative
+                    // to an unsigned payload or overflow a small one.
+                    // Signed payloads keep their negative range.
                     return switch (value) {
-                        .integer => |int| @intCast(int),
+                        .integer => |int| if (int < std.math.minInt(T) or int > std.math.maxInt(T)) runtimeFail(T, ui) else @intCast(int),
                         else => runtimeFail(T, ui),
                     };
                 },

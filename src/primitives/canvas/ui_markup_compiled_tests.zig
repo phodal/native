@@ -1218,6 +1218,39 @@ test "compiled avatar image binding matches the interpreter and the hand-written
     try testing.expectEqualStrings("CT", fixture.findByText(empty.root, .avatar, "CT").?.text);
 }
 
+// ------------------------------- negative id bindings fail, never trap
+
+const AvatarNegativeCompiled = canvas.CompiledMarkupView(fixture.AvatarModel, fixture.AvatarMsg, fixture.avatar_negative_markup_source);
+const SurfaceUi = fixture.SurfaceUi;
+const SurfaceCompiled = canvas.CompiledMarkupView(fixture.SurfaceModel, fixture.SurfaceMsg, fixture.surface_markup_source);
+const SurfaceNegativeCompiled = canvas.CompiledMarkupView(fixture.SurfaceModel, fixture.SurfaceMsg, fixture.surface_negative_markup_source);
+
+test "compiled avatar and media-surface id bindings refuse negative model values instead of trapping" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The u64 surface id resolves like the interpreter's.
+    var ok_ui = SurfaceUi.init(arena);
+    const ok_tree = try ok_ui.finalize(SurfaceCompiled.build(&ok_ui, &fixture.SurfaceModel{}));
+    const surface = ok_tree.root.children[0];
+    try testing.expectEqual(canvas.WidgetKind.media_surface, surface.kind);
+    try testing.expectEqual(@as(canvas.ImageId, 5), surface.image_id);
+
+    // A negative i64 binding into either u64 id seam latches the
+    // failed build (the interpreter's teaching error mirrors it), and
+    // finalize surfaces the failure — never an @intCast trap.
+    var avatar_ui = AvatarUi.init(arena);
+    const avatar_node = AvatarNegativeCompiled.build(&avatar_ui, &fixture.AvatarModel{});
+    try testing.expect(avatar_ui.failed);
+    try testing.expectError(error.OutOfMemory, avatar_ui.finalize(avatar_node));
+
+    var surface_ui = SurfaceUi.init(arena);
+    const surface_node = SurfaceNegativeCompiled.build(&surface_ui, &fixture.SurfaceModel{});
+    try testing.expect(surface_ui.failed);
+    try testing.expectError(error.OutOfMemory, surface_ui.finalize(surface_node));
+}
+
 // ------------------------------------------------------ text wrap parity
 
 const WrapUi = fixture.WrapUi;

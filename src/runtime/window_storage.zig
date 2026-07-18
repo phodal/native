@@ -151,6 +151,7 @@ pub fn RuntimeWindowStorage(comptime Runtime: type) type {
             self.windows[index].info.frame = state.frame;
             self.windows[index].info.scale_factor = state.scale_factor;
             self.windows[index].info.open = state.open;
+            self.windows[index].info.hidden = state.hidden;
             if (!self.windows[index].main_frame_set) {
                 self.windows[index].main_frame = geometry.RectF.init(0, 0, state.frame.width, state.frame.height);
             }

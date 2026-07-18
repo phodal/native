@@ -555,6 +555,16 @@ pub const WindowState = struct {
     focused: bool = true,
     maximized: bool = false,
     fullscreen: bool = false,
+    /// True while the window is alive but off the glass because its
+    /// `close_policy = .hide` intercepted a user close (the menu-bar-app
+    /// shape): the window keeps its views and native identity, `open`
+    /// stays true, and a show — `Effects.showWindow`, a tray action's
+    /// consequence, the macOS Dock reopen — flips it back. Distinct from
+    /// minimized (which keeps a Dock/taskbar affordance) and from
+    /// closed (`open = false`, the window is gone). Session-transient:
+    /// never persisted to the window-state store, so every launch
+    /// starts shown.
+    hidden: bool = false,
 };
 
 pub const WindowInfo = struct {
@@ -565,6 +575,8 @@ pub const WindowInfo = struct {
     scale_factor: f32 = 1,
     open: bool = true,
     focused: bool = false,
+    /// Alive but policy-hidden — see `WindowState.hidden`.
+    hidden: bool = false,
 
     pub fn state(self: WindowInfo) WindowState {
         return .{
@@ -575,6 +587,7 @@ pub const WindowInfo = struct {
             .scale_factor = self.scale_factor,
             .open = self.open,
             .focused = self.focused,
+            .hidden = self.hidden,
         };
     }
 };

@@ -809,6 +809,146 @@ test "the Chinese receipt: a scaffold-shaped app registers a CJK face and render
     try std.testing.expect(!std.mem.eql(u8, registered_shot, uncovered_shot));
 }
 
+// ------------------- late registration re-measures installed layouts
+
+/// 你好 SDK — mixed CJK + Latin, chosen so the measured width MUST move
+/// when the fixture face joins late. Pure-CJK width would not move: the
+/// bundled estimator's East Asian wide fallback charges 1.0 em and the
+/// fixture's ideographs really advance 1.0 em. The Latin tail is what
+/// moves — the estimator charges Geist's own sub-em ASCII advances,
+/// while the fixture face (subsetted to four ideographs plus notdef)
+/// answers every ASCII codepoint with its 1.0 em notdef advance, the
+/// documented no-cascade fallback registered faces take for uncovered
+/// codepoints.
+const late_mixed_text = "\u{4F60}\u{597D} SDK";
+
+const late_window_label = "late-panel";
+const late_window_canvas_label = "late-panel-canvas";
+
+fn lateFontAppView(ui: *FontApp.Ui, model: *const FontAppModel) FontApp.Ui.Node {
+    _ = model;
+    // A row lays text out at its MEASURED intrinsic width (a column's
+    // default cross alignment stretches children to the column width),
+    // so this widget's frame is a direct function of what the
+    // measurement seam answers for the string.
+    return ui.row(.{ .gap = 8, .padding = 12 }, .{
+        ui.text(.{}, late_mixed_text),
+    });
+}
+
+fn lateFontAppWindows(model: *const FontAppModel, scratch: *FontApp.WindowsScratch) []const FontApp.WindowDescriptor {
+    _ = model;
+    scratch.windows[0] = .{
+        .label = late_window_label,
+        .canvas_label = late_window_canvas_label,
+        .title = "Late",
+        .width = 240,
+        .height = 200,
+    };
+    return scratch.windows[0..1];
+}
+
+fn lateFontAppWindowView(ui: *FontApp.Ui, model: *const FontAppModel, window_label: []const u8) FontApp.Ui.Node {
+    std.debug.assert(std.mem.eql(u8, window_label, late_window_label));
+    return lateFontAppView(ui, model);
+}
+
+/// The laid-out frame width of the view's one text widget.
+fn lateTextFrameWidth(runtime: *core.Runtime, window_id: platform.WindowId, label: []const u8) !f32 {
+    const layout = try runtime.canvasWidgetLayout(window_id, label);
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .text and std.mem.eql(u8, node.widget.text, late_mixed_text)) return node.widget.frame.width;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "a face registered after install re-measures every installed surface's layout" {
+    const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 200) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    // No declared fonts: the app installs measuring registered_font_id
+    // (the tokens' face slot) through the bundled estimator, the exact
+    // pre-registration state the fonts page's late-registration promise
+    // starts from. A declared secondary window pins the multi-surface
+    // half of the promise.
+    var options = fontAppOptions(&.{});
+    options.view = lateFontAppView;
+    options.windows_fn = lateFontAppWindows;
+    options.window_view = lateFontAppWindowView;
+    const app_state = try std.testing.allocator.create(FontApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = FontApp.init(std.testing.allocator, .{}, options);
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    // The always-declared panel window opened during the installing
+    // rebuild's window reconcile; its own first frame installs its tree.
+    const panel_id = blk: {
+        var buffer: [platform.max_windows]platform.WindowInfo = undefined;
+        for (harness.runtime.listWindows(&buffer)) |info| {
+            if (std.mem.eql(u8, info.label, late_window_label)) break :blk info.id;
+        }
+        return error.TestUnexpectedResult;
+    };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = panel_id,
+        .label = late_window_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 2_000_000,
+        .nonblank = true,
+    } });
+
+    const main_before = try lateTextFrameWidth(&harness.runtime, 1, font_app_canvas_label);
+    const panel_before = try lateTextFrameWidth(&harness.runtime, panel_id, late_window_canvas_label);
+    try std.testing.expectEqual(main_before, panel_before);
+
+    // Late registration through the runtime seam — the embedder path the
+    // fonts page documents under the `Options.fonts` sugar.
+    try harness.runtime.registerCanvasFont(registered_font_id, cjk_receipt_bytes);
+
+    // The registration requested a frame for every open surface; ONE
+    // arriving frame (the main canvas's here — arrival order is the
+    // platform's) must re-measure every installed surface, not just the
+    // surface whose frame landed.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 2,
+        .timestamp_ns = 3_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.dispatchErrors().len);
+
+    const main_after = try lateTextFrameWidth(&harness.runtime, 1, font_app_canvas_label);
+    const panel_after = try lateTextFrameWidth(&harness.runtime, panel_id, late_window_canvas_label);
+    // Both surfaces now hold frames measured with the registered face's
+    // own advances — the widths moved, and moved identically.
+    try std.testing.expect(@abs(main_after - main_before) > 1);
+    try std.testing.expect(@abs(panel_after - panel_before) > 1);
+    try std.testing.expectEqual(main_after, panel_after);
+
+    // The re-measured width IS the face-aware seam's answer scaled into
+    // the frame, not merely a different guess: the face measures the
+    // string wider than the estimator did (1.0 em notdef per ASCII
+    // codepoint versus Geist's sub-em advances), so the frame grew.
+    try std.testing.expect(main_after > main_before);
+}
+
 test "ui app fonts option surfaces the glyph-budget refusal as a teaching error" {
     const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 200) });
     defer harness.destroy(std.testing.allocator);

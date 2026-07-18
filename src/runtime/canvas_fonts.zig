@@ -250,7 +250,12 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
         /// A face joined the registry: force every gpu_surface view to
         /// re-render its next frame (text referencing the id may already
         /// be retained) and request frames so the repaint is not gated on
-        /// other input — the image-registry choreography.
+        /// other input — the image-registry choreography. Re-rendering
+        /// alone re-inks RETAINED geometry; installed UiApps complete the
+        /// late-registration story by comparing the registered count on
+        /// each presented frame and rebuilding every surface so layout
+        /// re-measures with the new face (ui_app.zig,
+        /// `rebuildForRegisteredFonts`).
         fn noteCanvasFontsChanged(self: *Runtime) void {
             // A new face changes what the measurement seam answers for
             // its id (host providers just learned the face; the engine

@@ -49,7 +49,7 @@ The face must be a TrueType (`glyf`) file. The Google Fonts TrueType builds of t
 try runtime.registerCanvasFont(cjk_font_id, ttf_bytes);
 ```
 
-Register at startup so the first layout already measures with the face. Late registration still works honestly: every open surface re-measures and repaints when a face joins the registry.
+Register at startup so the first layout already measures with the face. Late registration still works honestly: `UiApp` surfaces re-measure and rebuild automatically when a face joins the registry, and callers driving the runtime directly re-emit their display lists after registering.
 
 ## Validation is loud and registration-time only
 
@@ -74,7 +74,7 @@ There is no per-widget font attribute. Text resolves its face through the typogr
 
 Layout and ink stay in lockstep on the desktop paths. On macOS, the raw bytes reach the host at registration time, so CoreText measurement and packet text drawing resolve the exact registered face even when the family is not installed system-wide. On Windows and Linux, layout charges the parsed face's own `cmap`/`hmtx` advances, and the deterministic reference renderer inks the same outlines — CJK advances measure as the face declares them, not as the Latin estimator would guess. Mobile hosts do not yet have a registered-font measurement seam, so this guarantee does not extend there — see the platform notes below.
 
-Codepoints the registered face does not cover keep the same per-glyph fallback as the built-ins: the face's own notdef box. A registered face never silently cascades into another family — missing coverage is visible, never approximated.
+Codepoints the registered face does not cover keep the same per-glyph fallback as the built-ins: the face's own notdef box. The engine never silently cascades into another family — the reference renderer, the glyph atlas, and packet text through the SDK's rasterizer show missing coverage as visible notdef, never an approximation. Text the macOS host draws follows platform shaping, including system-font fallback, so uncovered codepoints there may render from a substituted family instead of notdef.
 
 One honest interaction with the [tofu guard](/native-ui#tooling): the static markup check validates literal text against the *bundled* face's coverage — it runs without your app and cannot know what you register. Text in a script outside bundled coverage reaches the view through model bindings (`{greeting}` — the guard deliberately skips binding spans, and real CJK content is almost always data) or through Zig-built views, where the same lesson is a Debug-build diagnostic rather than an error.
 

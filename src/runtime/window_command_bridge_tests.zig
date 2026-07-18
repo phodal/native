@@ -177,6 +177,20 @@ test "runtime handles built-in JavaScript window bridge commands" {
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"hidden\":true") != null);
 
+    // Focusing the policy-hidden window rides the runtime's ONE
+    // hidden-then-focus rule: the show verb runs first (the platform
+    // mirror counts it — the seam that clears the hosts' policy-hidden
+    // bookkeeping), so the response never reports a focused window
+    // that is still hidden.
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"5\",\"command\":\"native-sdk.window.focus\",\"payload\":{\"label\":\"palette\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"focused\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"hidden\":false") != null);
+    try std.testing.expectEqual(@as(u32, 1), harness.null_platform.showCountForWindow(2));
+
     try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
         .bytes = "{\"id\":\"4\",\"command\":\"native-sdk.window.close\",\"payload\":{\"label\":\"palette\"}}",
         .origin = "zero://inline",

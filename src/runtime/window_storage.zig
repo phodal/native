@@ -37,6 +37,20 @@ pub fn RuntimeWindowStorage(comptime Runtime: type) type {
 
         pub fn focusWindow(self: *Runtime, window_id: platform.WindowId) anyerror!void {
             const index = Self.findWindowIndexById(self, window_id) orelse return error.WindowNotFound;
+            // Focus implies visibility: a window hidden by its .hide
+            // close policy must leave the hidden state through the REAL
+            // show verb before it takes key. The hosts' focus paths
+            // order a window forward without touching their
+            // policy-hidden bookkeeping (macOS would report hidden=true
+            // on a window standing on the glass; Windows never shows an
+            // SW_HIDE'd window at all, leaving focused=true on an
+            // invisible one), while their show paths clear that
+            // bookkeeping and emit the state — and the runtime's
+            // showWindow flips its own hidden flag with rollback on
+            // platform failure. One rule, at this seam, so every focus
+            // ingress (the app verb, the JS bridge's window.focus)
+            // resolves hidden-then-focus the same way.
+            if (self.windows[index].info.hidden) try self.showWindow(window_id);
             try self.options.platform.services.focusWindow(window_id);
             try Self.setFocusedIndex(self, index);
             self.invalidated = true;

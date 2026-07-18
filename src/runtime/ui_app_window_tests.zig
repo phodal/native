@@ -851,6 +851,53 @@ test "close_policy .hide: the user close hides the window, nothing tears down, a
     try std.testing.expectEqual(@as(usize, 0), fixture.harness.null_platform.userReopenApp(&reopen_buffer).len);
 }
 
+test "focus-while-hidden routes through the show verb: hidden clears before the window takes key" {
+    const fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    const info = try fixture.harness.runtime.createSourcelessShellWindow(.{
+        .label = "player",
+        .title = "Player",
+        .width = 400,
+        .height = 300,
+        .close_policy = .hide,
+    });
+
+    // The user close hides the window (policy .hide) and the runtime
+    // adopts the hidden state off the journaled frame channel.
+    const hide_event = fixture.harness.null_platform.userCloseWindow(info.id).?;
+    try fixture.harness.runtime.dispatchPlatformEvent(fixture.app, hide_event);
+    var buffer: [support.platform.max_windows]support.platform.WindowInfo = undefined;
+    for (fixture.harness.runtime.listWindows(&buffer)) |window| {
+        if (window.id == info.id) try std.testing.expect(window.hidden);
+    }
+
+    // Focusing the hidden window must drive the platform's SHOW verb
+    // (the path that clears the hosts' policy-hidden bookkeeping and
+    // emits consistent state), not just its focus verb: the hidden
+    // flag clears, focus lands, and the show count pins the routing —
+    // a focusWindow that skips the show seam leaves this count at 0
+    // and the window reported hidden while standing on the glass.
+    try fixture.harness.runtime.focusWindow(info.id);
+    try std.testing.expectEqual(@as(u32, 1), fixture.harness.null_platform.showCountForWindow(info.id));
+    for (fixture.harness.runtime.listWindows(&buffer)) |window| {
+        if (window.id != info.id) continue;
+        try std.testing.expect(window.open);
+        try std.testing.expect(!window.hidden);
+        try std.testing.expect(window.focused);
+    }
+    // The platform mirror agrees on both flags.
+    for (fixture.harness.null_platform.windows[0..fixture.harness.null_platform.window_count]) |window| {
+        if (window.id != info.id) continue;
+        try std.testing.expect(!window.hidden);
+        try std.testing.expect(window.focused);
+    }
+
+    // A visible window's focus stays a plain focus: no second show.
+    try fixture.harness.runtime.focusWindow(info.id);
+    try std.testing.expectEqual(@as(u32, 1), fixture.harness.null_platform.showCountForWindow(info.id));
+}
+
 test "close_policy default stays .quit: the user close still tears the window down" {
     const fixture = try Fixture.create();
     defer fixture.destroy();

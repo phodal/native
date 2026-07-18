@@ -355,6 +355,10 @@ pub const LinuxPlatform = struct {
             // deck's glass rests honestly instead of dancing on fakes.
             .audio_spectrum => self.web_engine == .system and audioSpectrumAvailable(self.host),
             .tray => false,
+            // No tray means no affordance to bring a policy-hidden
+            // window back — reporting support would strand windows, so
+            // GTK refuses `close_policy = .hide` at create instead.
+            .window_hide_on_close => false,
             // Native scroll drivers, native context menus, and app-owned
             // view-surface adoption are macOS-only today; GTK keeps the
             // engine's wheel physics and has no popover-menu presenter

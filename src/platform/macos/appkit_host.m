@@ -301,6 +301,17 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 @property(nonatomic, assign) BOOL observesContentLayout;
 @end
 
+/// NSApp's delegate, installed by runWithCallback: — this host
+/// otherwise drives NSApplication entirely through notification
+/// observers, and staying that way for activation keeps those events
+/// single-sourced (a delegate implementing applicationDidBecomeActive:
+/// would ALSO receive the notification, double-emitting). The one job
+/// here is the Dock-icon reopen: with no window visible, re-show the
+/// windows the .hide close policy hid.
+@interface NativeSdkAppDelegate : NSObject <NSApplicationDelegate>
+@property(nonatomic, assign) NativeSdkAppKitHost *host;
+@end
+
 @interface NativeSdkWebView : WKWebView <NSDraggingDestination>
 @property(nonatomic, strong) NSArray<NSValue *> *coveredMouseRects;
 @property(nonatomic, assign) NativeSdkAppKitHost *host;
@@ -662,6 +673,20 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 /// color, packed RGBA8 per window — so residual gaps (resize slack,
 /// titlebar bands) show the app's background, never a blank default.
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSNumber *> *windowClearColors;
+/// close_policy per window (0 = quit, the default; 1 = hide). Applied
+/// by native_sdk_appkit_set_window_close_policy right after create —
+/// the delegate's windowShouldClose: consults it, so the user's close
+/// affordance hides a .hide window instead of closing it.
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSNumber *> *windowClosePolicies;
+/// Windows currently hidden BY their .hide close policy — the set the
+/// Dock reopen re-shows, and the truth emitWindowFrameForWindowId's
+/// hidden flag reports. Ordinary orderOut/minimize states never enter
+/// it.
+@property(nonatomic, strong) NSMutableSet<NSNumber *> *policyHiddenWindows;
+/// Strong ref for NSApp.delegate (which is unretained): the tiny
+/// delegate that turns a Dock-icon reopen into re-showing
+/// policy-hidden windows.
+@property(nonatomic, strong) id reopenDelegate;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, WKWebView *> *childWebViews;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSView *> *nativeViews;
 /// App-owned NSViews adopted into native view containers (native-surface
@@ -783,6 +808,9 @@ static NSMutableDictionary *NativeSdkCredentialQuery(NSString *service, NSString
 - (void)applyWindowClearColor:(uint64_t)windowId red:(uint8_t)red green:(uint8_t)green blue:(uint8_t)blue alpha:(uint8_t)alpha;
 - (void)focusWindowWithId:(uint64_t)windowId;
 - (void)closeWindowWithId:(uint64_t)windowId;
+- (void)hideWindowWithId:(uint64_t)windowId;
+- (void)showWindowWithId:(uint64_t)windowId;
+- (BOOL)reopenPolicyHiddenWindows;
 - (BOOL)startWindowDragWithId:(uint64_t)windowId;
 - (BOOL)chromeInsetsForWindowId:(uint64_t)windowId top:(double *)top left:(double *)left bottom:(double *)bottom right:(double *)right buttonsX:(double *)buttonsX buttonsY:(double *)buttonsY buttonsWidth:(double *)buttonsWidth buttonsHeight:(double *)buttonsHeight;
 - (WKWebView *)ensureMainWebViewForWindowId:(uint64_t)windowId;
@@ -1022,6 +1050,22 @@ static void NativeSdkEmitGpuSurfaceResizes(NSView *view) {
     return [self.host emitDroppedFileURLs:urls windowId:self.windowId];
 }
 
+// close_policy .hide: the USER's close affordance (the red button,
+// cmd+W — anything routed through performClose:) hides the window
+// instead of closing it, and the app keeps running behind its status
+// item. Runtime-initiated closes bypass this hook deliberately
+// (closeWindowWithId: calls -close directly for .hide windows), so an
+// app that decides to really close its window still can. A future
+// .event tier would land here too — the delegate forwarding the close
+// request to the model instead of deciding — the enum keeps that room.
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    (void)sender;
+    NSNumber *policy = self.host.windowClosePolicies[@(self.windowId)];
+    if (policy.intValue != 1) return YES;
+    [self.host hideWindowWithId:self.windowId];
+    return NO;
+}
+
 - (void)windowWillClose:(NSNotification *)notification {
     (void)notification;
     if (self.observesContentLayout) {
@@ -1029,6 +1073,10 @@ static void NativeSdkEmitGpuSurfaceResizes(NSView *view) {
         [window removeObserver:self forKeyPath:@"contentLayoutRect"];
         self.observesContentLayout = NO;
     }
+    // A really-closing window is closed, not hidden: leave the
+    // policy-hidden set before the frame emit so open=false never
+    // carries a stale hidden=true.
+    [self.host.policyHiddenWindows removeObject:@(self.windowId)];
     [self.host emitWindowFrameForWindowId:self.windowId open:NO];
     [self.host closeWebViewsInWindow:self.windowId];
     [self.host closeNativeViewsInWindow:self.windowId];
@@ -1041,10 +1089,25 @@ static void NativeSdkEmitGpuSurfaceResizes(NSView *view) {
     [self.host.windowLabels removeObjectForKey:key];
     [self.host.deferredShowWindows removeObjectForKey:key];
     [self.host.windowClearColors removeObjectForKey:key];
+    [self.host.windowClosePolicies removeObjectForKey:key];
     if (self.host.windows.count == 0) {
         [self.host emitShutdown];
         [self.host stop];
     }
+}
+
+@end
+
+@implementation NativeSdkAppDelegate
+
+// Clicking the Dock icon with every window gone from the glass: when
+// policy-hidden windows exist, re-show them and answer NO (the reopen
+// is handled); otherwise answer YES so AppKit keeps its default
+// behavior (deminiaturizing, ordering in) untouched.
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    if (flag) return YES;
+    return ![self.host reopenPolicyHiddenWindows];
 }
 
 @end
@@ -6407,6 +6470,8 @@ static double NativeSdkClampedPinchMagnification(double magnification) {
     self.windowLabels = [[NSMutableDictionary alloc] init];
     self.deferredShowWindows = [[NSMutableDictionary alloc] init];
     self.windowClearColors = [[NSMutableDictionary alloc] init];
+    self.windowClosePolicies = [[NSMutableDictionary alloc] init];
+    self.policyHiddenWindows = [[NSMutableSet alloc] init];
     self.childWebViews = [[NSMutableDictionary alloc] init];
     self.nativeViews = [[NSMutableDictionary alloc] init];
     self.adoptedViewSurfaces = [[NSMutableDictionary alloc] init];
@@ -6633,6 +6698,14 @@ static double NativeSdkClampedPinchMagnification(double magnification) {
 - (void)closeWindowWithId:(uint64_t)windowId {
     NSWindow *window = self.windows[@(windowId)];
     if (!window) return;
+    // A runtime-initiated close is the app DECIDING to close: it must
+    // not bounce off the window's own .hide close policy, so it skips
+    // performClose: (which runs windowShouldClose:) and closes
+    // directly — the full windowWillClose teardown still runs.
+    if ([self.windowClosePolicies[@(windowId)] intValue] == 1) {
+        [window close];
+        return;
+    }
     // performClose: simulates the titlebar close button, which a
     // chromeless (borderless) window does not have — AppKit just beeps.
     // Closing directly runs the same delegate teardown
@@ -6642,6 +6715,50 @@ static double NativeSdkClampedPinchMagnification(double magnification) {
         return;
     }
     [window performClose:nil];
+}
+
+// close_policy .hide, the hiding half: order the window out (it keeps
+// its views, its webviews, and its host records — nothing tears down),
+// remember it as policy-hidden, and report the state on the frame
+// channel so the runtime's window table and the session journal both
+// carry the truth. orderOut composes with the host's bookkeeping where
+// close would not: the windows dictionary still owns the window, so
+// the count never reaches zero and no shutdown emits.
+- (void)hideWindowWithId:(uint64_t)windowId {
+    NSWindow *window = self.windows[@(windowId)];
+    if (!window) return;
+    [self.policyHiddenWindows addObject:@(windowId)];
+    [window orderOut:nil];
+    [self emitWindowFrameForWindowId:windowId open:YES];
+}
+
+// The counterpart show verb: bring a hidden (or merely unfocused)
+// window back to the glass and activate the app — the tray-menu
+// "Open" consequence and the Dock reopen both land here. Also clears a
+// pending present-before-show defer and a minimize, for the same
+// reason focusWindowWithId: does: the runtime asked for the window NOW.
+- (void)showWindowWithId:(uint64_t)windowId {
+    NSWindow *window = self.windows[@(windowId)];
+    if (!window) return;
+    [self.policyHiddenWindows removeObject:@(windowId)];
+    [self.deferredShowWindows removeObjectForKey:@(windowId)];
+    if (window.miniaturized) [window deminiaturize:nil];
+    [window makeKeyAndOrderFront:nil];
+    [NSApp activate];
+    [self emitWindowFrameForWindowId:windowId open:YES];
+    [self scheduleFrame];
+}
+
+// The Dock-icon reopen consequence: with no window visible, re-show
+// every window the .hide close policy hid. Returns whether any window
+// was re-shown (the app delegate then suppresses AppKit's default
+// reopen handling for exactly that case).
+- (BOOL)reopenPolicyHiddenWindows {
+    if (self.policyHiddenWindows.count == 0) return NO;
+    for (NSNumber *key in [self.policyHiddenWindows copy]) {
+        [self showWindowWithId:key.unsignedLongLongValue];
+    }
+    return YES;
 }
 
 // The real OS minimize verb, for app-drawn window controls (chromeless
@@ -8225,6 +8342,16 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
     self.callback = callback;
     self.context = context;
 
+    // The Dock-reopen delegate (close_policy .hide's re-show path).
+    // NSApp.delegate is free in this host — everything else rides
+    // notification observers — and NSApp does not retain it.
+    if (!NSApp.delegate) {
+        NativeSdkAppDelegate *reopenDelegate = [[NativeSdkAppDelegate alloc] init];
+        reopenDelegate.host = self;
+        self.reopenDelegate = reopenDelegate;
+        NSApp.delegate = reopenDelegate;
+    }
+
     // Present-before-show: a deferred startup window stays ordered out
     // here and appears when its first canvas present lands (or the
     // create-time fallback deadline fires).
@@ -8477,6 +8604,10 @@ static void NativeSdkApplyProcessDisplayName(NSString *displayName) {
         .scale = window.backingScaleFactor,
         .open = open ? 1 : 0,
         .focused = window.isKeyWindow ? 1 : 0,
+        // The hidden flag reports host truth, not a parameter: every
+        // frame emit while a window sits in the policy-hidden set
+        // carries it, and hide/show flip the set before they emit.
+        .hidden = [self.policyHiddenWindows containsObject:@(windowId)] ? 1 : 0,
         .label = label.UTF8String,
         .label_len = [label lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
     }];
@@ -10003,6 +10134,22 @@ int native_sdk_appkit_minimize_window(native_sdk_appkit_host_t *host, uint64_t w
     NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
     if (!object.windows[@(window_id)]) return 0;
     [object miniaturizeWindowWithId:window_id];
+    return 1;
+}
+
+int native_sdk_appkit_show_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    if (!object.windows[@(window_id)]) return 0;
+    [object showWindowWithId:window_id];
+    return 1;
+}
+
+int native_sdk_appkit_set_window_close_policy(native_sdk_appkit_host_t *host, uint64_t window_id, int close_policy) {
+    NativeSdkAppKitHost *object = (__bridge NativeSdkAppKitHost *)host;
+    if (!object.windows[@(window_id)]) return 0;
+    // Applied right after create, like the content min-size floor —
+    // close handling is host window state fixed for the window's life.
+    object.windowClosePolicies[@(window_id)] = @(close_policy);
     return 1;
 }
 

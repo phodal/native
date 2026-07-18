@@ -153,6 +153,15 @@ pub const PlatformFeature = enum {
     /// keeps emitting; the null platform models the rule through its
     /// windows' modeled occlusion so the suites can pin it.
     audio_spectrum,
+    /// The `close_policy = .hide` window shape: the host can intercept
+    /// the user's close affordance, keep the window alive off the
+    /// glass, and re-show it later (`show_window_fn`, tray actions, the
+    /// macOS Dock reopen). macOS and Windows implement it; GTK reports
+    /// false — Linux has no status-item affordance in this toolkit, so
+    /// a hidden window would be unreachable, and window create refuses
+    /// the policy with a teaching error instead. The null platform
+    /// models full support.
+    window_hide_on_close,
 };
 
 pub const WebViewSourceKind = enum {
@@ -522,6 +531,24 @@ pub const WindowShowMode = enum {
     on_first_present,
 };
 
+/// What the user's close affordance (the red traffic light, cmd+W, the
+/// caption X) does to this window.
+/// `.quit` is the default and today's behavior unchanged: the window
+/// really closes, and the last close follows the host's exit semantics.
+/// `.hide` is the menu-bar/tray-app shape: the close affordance hides
+/// the window instead — it stays alive in the host's records (no
+/// shutdown), `WindowState.hidden` flips true on the frame channel,
+/// and `Effects.showWindow` / the macOS Dock reopen bring it back.
+/// Hosts that cannot re-show a hidden window (GTK has no status item
+/// to click) refuse `.hide` at create time with a teaching error —
+/// never a silent no-op that strands the window.
+/// Deliberate enum room for a future `.event` tier (model-decides
+/// close, for unsaved-changes flows) — not implemented yet.
+pub const WindowClosePolicy = enum {
+    quit,
+    hide,
+};
+
 pub const WindowOptions = struct {
     id: WindowId = 1,
     label: []const u8 = "main",
@@ -539,6 +566,9 @@ pub const WindowOptions = struct {
     /// does not grow an already-smaller restored frame.
     min_width: f32 = 0,
     min_height: f32 = 0,
+    /// What the user's close affordance does — see `WindowClosePolicy`.
+    /// Fixed at create like the titlebar: it is host window state.
+    close_policy: WindowClosePolicy = .quit,
 
     pub fn resolvedTitle(self: WindowOptions, app_name: []const u8) []const u8 {
         return if (self.title.len > 0) self.title else app_name;
@@ -606,6 +636,8 @@ pub const WindowCreateOptions = struct {
     /// `WindowOptions.min_width`/`min_height`); 0 = no floor.
     min_width: f32 = 0,
     min_height: f32 = 0,
+    /// See `WindowOptions.close_policy`.
+    close_policy: WindowClosePolicy = .quit,
     source: ?WebViewSource = null,
 
     pub fn windowOptions(self: WindowCreateOptions, id: WindowId, label: []const u8) WindowOptions {
@@ -621,6 +653,7 @@ pub const WindowCreateOptions = struct {
             .show = self.show,
             .min_width = self.min_width,
             .min_height = self.min_height,
+            .close_policy = self.close_policy,
         };
     }
 };
@@ -2793,6 +2826,10 @@ fn defaultSupportsFeature(services: PlatformServices, feature: PlatformFeature) 
         // cannot see it; platforms that analyze answer through their own
         // `supports_fn` (like file_drops and gpu_surfaces above).
         .audio_spectrum => false,
+        // Hide-on-close is host close-delegate behavior, not a service
+        // verb: hosts that implement it answer through their own
+        // `supports_fn`. The generic floor is honest refusal.
+        .window_hide_on_close => false,
     };
 }
 

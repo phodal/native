@@ -235,6 +235,10 @@ typedef struct {
     double y;
     int open;
     int focused;
+    /* WINDOW_FRAME: nonzero while the window is alive but hidden by
+     * its close_policy (.hide intercepted a user close). open stays 1
+     * for the window's whole hidden stretch. */
+    int hidden;
     const char *label;
     size_t label_len;
     const char *shortcut_id;
@@ -364,6 +368,17 @@ int native_sdk_appkit_close_window(native_sdk_appkit_host_t *host, uint64_t wind
 // window controls on chromeless windows. Returns 0 when the window id
 // is unknown.
 int native_sdk_appkit_minimize_window(native_sdk_appkit_host_t *host, uint64_t window_id);
+// The show verb: bring the window back to the glass and activate the
+// app (deminiaturize + makeKeyAndOrderFront) — the counterpart to a
+// close_policy .hide hide, and the tray-menu "Open" consequence.
+// Returns 0 when the window id is unknown.
+int native_sdk_appkit_show_window(native_sdk_appkit_host_t *host, uint64_t window_id);
+// What the user's close affordance does to this window: 0 = quit (the
+// default: really close; last close follows app exit semantics),
+// 1 = hide (order out and keep running — the menu-bar-app shape).
+// Applied right after create, like the content min-size floor.
+// Returns 0 when the window id is unknown.
+int native_sdk_appkit_set_window_close_policy(native_sdk_appkit_host_t *host, uint64_t window_id, int close_policy);
 // Window-drag region channel: called during dispatch of the pointer-down
 // that starts the gesture. Single click hands the event to
 // -[NSWindow performWindowDragWithEvent:] (moves only on actual

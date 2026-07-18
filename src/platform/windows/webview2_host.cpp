@@ -184,6 +184,10 @@ struct WindowsEvent {
     double y;
     int open;
     int focused;
+    /* kWindowFrame: nonzero while the window is alive but hidden by its
+     * close_policy (.hide intercepted WM_CLOSE). open stays 1 for the
+     * window's whole hidden stretch. */
+    int hidden;
     const char *label;
     size_t label_len;
     const char *title;
@@ -306,6 +310,14 @@ struct Window {
      * behind the button cluster matches the app's header). */
     COLORREF hidden_caption_color = 0;
     bool hidden_caption_color_set = false;
+    /* close_policy: 0 = quit (WM_CLOSE destroys; the default), 1 = hide
+     * (WM_CLOSE hides — SW_HIDE — and the app keeps running behind its
+     * tray icon, the Win32 tray-player shape). Applied right after
+     * create via native_sdk_windows_set_window_close_policy. */
+    int close_policy = 0;
+    /* True while the .hide policy has this window off the glass; the
+     * hwnd stays live and the map entry stays owned. */
+    bool policy_hidden = false;
 };
 
 /* One rectangle of a canvas view's window-drag mirror (runtime push,
@@ -1157,6 +1169,7 @@ static void emit(Host *host, const Window &window, EventKind kind) {
     event.y = window.y;
     event.open = window.hwnd != nullptr;
     event.focused = window.hwnd && GetFocus() == window.hwnd;
+    event.hidden = window.policy_hidden ? 1 : 0;
     event.label = window.label.c_str();
     event.label_len = window.label.size();
     event.title = window.title.c_str();
@@ -4896,6 +4909,22 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
             if (host) emitAppearanceIfChanged(host, false);
             break;
         case WM_CLOSE:
+            /* close_policy .hide: the user's close (caption X, Alt+F4)
+             * hides the window instead of destroying it — the hwnd and
+             * every view stay live, the app keeps running behind its
+             * tray icon, and the frame event reports the hidden state.
+             * Runtime-initiated closes call DestroyWindow directly
+             * (native_sdk_windows_close_window) and bypass this hook. */
+            if (host) {
+                for (auto &entry : host->windows) {
+                    if (entry.second.hwnd == hwnd && entry.second.close_policy == 1) {
+                        entry.second.policy_hidden = true;
+                        ShowWindow(hwnd, SW_HIDE);
+                        emit(host, entry.second, kWindowFrame);
+                        return 0;
+                    }
+                }
+            }
             DestroyWindow(hwnd);
             return 0;
         case WM_DESTROY:
@@ -4905,6 +4934,8 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT message, WPARAM wparam, LPARA
                         destroyNativeViewsForWindow(host, entry.first);
                         destroyChildWebViewsForWindow(host, entry.first);
                         entry.second.hwnd = nullptr;
+                        /* Destroyed means closed, never hidden. */
+                        entry.second.policy_hidden = false;
                         emit(host, entry.second, kWindowFrame);
                     }
                 }
@@ -5591,6 +5622,32 @@ int native_sdk_windows_minimize_window(Host *host, uint64_t window_id) {
     auto found = host->windows.find(window_id);
     if (found == host->windows.end() || !found->second.hwnd) return 0;
     ShowWindow(found->second.hwnd, SW_MINIMIZE);
+    return 1;
+}
+
+/* The show verb: bring the window back to the glass and foreground it —
+ * the counterpart to a close_policy hide (and the tray-menu "Open"
+ * consequence). Restores a minimized window on the way. */
+int native_sdk_windows_show_window(Host *host, uint64_t window_id) {
+    if (!host) return 0;
+    auto found = host->windows.find(window_id);
+    if (found == host->windows.end() || !found->second.hwnd) return 0;
+    found->second.policy_hidden = false;
+    ShowWindow(found->second.hwnd, IsIconic(found->second.hwnd) ? SW_RESTORE : SW_SHOW);
+    SetForegroundWindow(found->second.hwnd);
+    SetFocus(found->second.hwnd);
+    emit(host, found->second, kWindowFrame);
+    return 1;
+}
+
+/* What the user's close affordance does: 0 = quit (destroy; the
+ * default), 1 = hide (SW_HIDE and keep running). Applied right after
+ * create — close handling is host window state for the window's life. */
+int native_sdk_windows_set_window_close_policy(Host *host, uint64_t window_id, int close_policy) {
+    if (!host) return 0;
+    auto found = host->windows.find(window_id);
+    if (found == host->windows.end()) return 0;
+    found->second.close_policy = close_policy;
     return 1;
 }
 

@@ -477,6 +477,13 @@ static const char *NativeSdkCefBridgeScript() {
 @property(nonatomic, assign) BOOL observesContentLayout;
 @end
 
+/// NSApp's delegate (unretained by NSApp; the host keeps the strong
+/// ref). One job: the Dock-icon reopen re-shows windows hidden by
+/// their close_policy — mirrors the AppKit host's delegate.
+@interface NativeSdkChromiumAppDelegate : NSObject <NSApplicationDelegate>
+@property(nonatomic, assign) NativeSdkChromiumHost *host;
+@end
+
 @interface NativeSdkChromiumShortcut : NSObject
 @property(nonatomic, strong) NSString *identifier;
 @property(nonatomic, strong) NSString *key;
@@ -513,6 +520,11 @@ static const char *NativeSdkCefBridgeScript() {
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *assetOrigins;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *windowLabels;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSString *> *fallbackURLs;
+/// close_policy per window (0 = quit, 1 = hide) and the windows that
+/// policy currently hides — mirrors the AppKit host's bookkeeping.
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSNumber *> *windowClosePolicies;
+@property(nonatomic, strong) NSMutableSet<NSNumber *> *policyHiddenWindows;
+@property(nonatomic, strong) id reopenDelegate;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSView *> *webviewViews;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *webviewPendingURLs;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *webviewPendingZooms;
@@ -557,6 +569,9 @@ static const char *NativeSdkCefBridgeScript() {
 - (BOOL)createWindowWithId:(uint64_t)windowId title:(NSString *)title label:(NSString *)label x:(double)x y:(double)y width:(double)width height:(double)height restoreFrame:(BOOL)restoreFrame resizable:(BOOL)resizable makeMain:(BOOL)makeMain;
 - (void)focusWindowWithId:(uint64_t)windowId;
 - (void)closeWindowWithId:(uint64_t)windowId;
+- (void)hideWindowWithId:(uint64_t)windowId;
+- (void)showWindowWithId:(uint64_t)windowId;
+- (BOOL)reopenPolicyHiddenWindows;
 - (void)runWithCallback:(native_sdk_appkit_event_callback_t)callback context:(void *)context;
 - (void)stop;
 - (void)emitEvent:(native_sdk_appkit_event_t)event;
@@ -675,6 +690,18 @@ static const char *NativeSdkCefBridgeScript() {
     [self.host emitResizeForWindowId:self.windowId];
 }
 
+// close_policy .hide: the user's close affordance hides the window
+// instead of closing it (mirrors the AppKit host). Runtime closes
+// never route through performClose: here, so they bypass this hook by
+// construction.
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    (void)sender;
+    NSNumber *policy = self.host.windowClosePolicies[@(self.windowId)];
+    if (policy.intValue != 1) return YES;
+    [self.host hideWindowWithId:self.windowId];
+    return NO;
+}
+
 - (void)windowWillClose:(NSNotification *)notification {
     (void)notification;
     if (self.observesContentLayout) {
@@ -682,9 +709,13 @@ static const char *NativeSdkCefBridgeScript() {
         [window removeObserver:self forKeyPath:@"contentLayoutRect"];
         self.observesContentLayout = NO;
     }
+    // A really-closing window is closed, not hidden: leave the set
+    // before the emit so open=false never carries hidden=true.
+    [self.host.policyHiddenWindows removeObject:@(self.windowId)];
     [self.host emitWindowFrameForWindowId:self.windowId open:NO];
     [self.host closeWebViewsInWindow:self.windowId];
     NSNumber *key = @(self.windowId);
+    [self.host.windowClosePolicies removeObjectForKey:key];
     [self.host.windows removeObjectForKey:key];
     [self.host.browserContainers removeObjectForKey:key];
     [self.host.delegates removeObjectForKey:key];
@@ -701,6 +732,18 @@ static const char *NativeSdkCefBridgeScript() {
         [self.host emitShutdown];
         [self.host stop];
     }
+}
+
+@end
+
+@implementation NativeSdkChromiumAppDelegate
+
+// Dock reopen with no visible windows: re-show policy-hidden windows
+// and answer NO (handled); otherwise keep AppKit's default behavior.
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    if (flag) return YES;
+    return ![self.host reopenPolicyHiddenWindows];
 }
 
 @end
@@ -729,6 +772,8 @@ static const char *NativeSdkCefBridgeScript() {
     self.assetOrigins = [[NSMutableDictionary alloc] init];
     self.windowLabels = [[NSMutableDictionary alloc] init];
     self.fallbackURLs = [[NSMutableDictionary alloc] init];
+    self.windowClosePolicies = [[NSMutableDictionary alloc] init];
+    self.policyHiddenWindows = [[NSMutableSet alloc] init];
     self.webviewViews = [[NSMutableDictionary alloc] init];
     self.webviewPendingURLs = [[NSMutableDictionary alloc] init];
     self.webviewPendingZooms = [[NSMutableDictionary alloc] init];
@@ -918,6 +963,39 @@ static const char *NativeSdkCefBridgeScript() {
     [self emitWindowFrameForWindowId:windowId open:YES];
 }
 
+// close_policy .hide, the hiding half (mirrors the AppKit host): order
+// the window out, keep every host record, report the state on the
+// frame channel. The windows dictionary still owns the window, so the
+// count never reaches zero and no shutdown emits.
+- (void)hideWindowWithId:(uint64_t)windowId {
+    NSWindow *window = self.windows[@(windowId)];
+    if (!window) return;
+    [self.policyHiddenWindows addObject:@(windowId)];
+    [window orderOut:nil];
+    [self emitWindowFrameForWindowId:windowId open:YES];
+}
+
+// The counterpart show verb: back to the glass, app activated.
+- (void)showWindowWithId:(uint64_t)windowId {
+    NSWindow *window = self.windows[@(windowId)];
+    if (!window) return;
+    [self.policyHiddenWindows removeObject:@(windowId)];
+    if (window.miniaturized) [window deminiaturize:nil];
+    [window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    [self emitWindowFrameForWindowId:windowId open:YES];
+}
+
+// Dock reopen consequence: re-show every policy-hidden window.
+// Returns whether any was re-shown.
+- (BOOL)reopenPolicyHiddenWindows {
+    if (self.policyHiddenWindows.count == 0) return NO;
+    for (NSNumber *key in [self.policyHiddenWindows copy]) {
+        [self showWindowWithId:key.unsignedLongLongValue];
+    }
+    return YES;
+}
+
 - (void)closeWindowWithId:(uint64_t)windowId {
     void (^closeBlock)(void) = ^{
         NSWindow *window = self.windows[@(windowId)];
@@ -945,6 +1023,14 @@ static const char *NativeSdkCefBridgeScript() {
 - (void)runWithCallback:(native_sdk_appkit_event_callback_t)callback context:(void *)context {
     self.callback = callback;
     self.context = context;
+
+    // The Dock-reopen delegate (close_policy .hide's re-show path).
+    if (!NSApp.delegate) {
+        NativeSdkChromiumAppDelegate *reopenDelegate = [[NativeSdkChromiumAppDelegate alloc] init];
+        reopenDelegate.host = self;
+        self.reopenDelegate = reopenDelegate;
+        NSApp.delegate = reopenDelegate;
+    }
 
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
@@ -1072,6 +1158,9 @@ static const char *NativeSdkCefBridgeScript() {
         .y = frame.origin.y,
         .open = open ? 1 : 0,
         .focused = window.isKeyWindow ? 1 : 0,
+        // Host truth: any frame emit while the window sits in the
+        // policy-hidden set carries the hidden flag.
+        .hidden = [self.policyHiddenWindows containsObject:@(windowId)] ? 1 : 0,
         .label = label.UTF8String,
         .label_len = [label lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
     }];
@@ -2139,6 +2228,22 @@ int native_sdk_appkit_minimize_window(native_sdk_appkit_host_t *host, uint64_t w
     dispatch_async(dispatch_get_main_queue(), ^{
         [window miniaturize:nil];
     });
+    return 1;
+}
+
+int native_sdk_appkit_show_window(native_sdk_appkit_host_t *host, uint64_t window_id) {
+    NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
+    if (!object.windows[@(window_id)]) return 0;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [object showWindowWithId:window_id];
+    });
+    return 1;
+}
+
+int native_sdk_appkit_set_window_close_policy(native_sdk_appkit_host_t *host, uint64_t window_id, int close_policy) {
+    NativeSdkChromiumHost *object = (__bridge NativeSdkChromiumHost *)host;
+    if (!object.windows[@(window_id)]) return 0;
+    object.windowClosePolicies[@(window_id)] = @(close_policy);
     return 1;
 }
 

@@ -96,6 +96,9 @@ pub const RunOptions = struct {
             // enforced floor is host state from the first frame on.
             info.main_window.min_width = manifestShellStartupMinSize("min_width");
             info.main_window.min_height = manifestShellStartupMinSize("min_height");
+            // Close handling is host window state like the titlebar:
+            // the manifest's declaration rides the host create.
+            info.main_window.close_policy = manifestShellStartupClosePolicy();
         }
         return info;
     }
@@ -156,6 +159,7 @@ fn manifestWindow(comptime window: anytype, comptime index: usize) native_sdk.Wi
         .titlebar = windowTitlebarStyle(window),
         .min_width = windowMinSize(window, "min_width"),
         .min_height = windowMinSize(window, "min_height"),
+        .close_policy = windowClosePolicy(window),
     };
 }
 
@@ -200,6 +204,17 @@ fn manifestShellStartupResizable() bool {
     if (comptime !@hasField(@TypeOf(shell), "windows")) return true;
     if (comptime shell.windows.len == 0) return true;
     return windowBool(shell.windows[0], "resizable", true);
+}
+
+/// The startup window's close policy for scene-first apps: app.zon's
+/// `.shell.windows[0].close_policy`. Like the titlebar, close handling
+/// is host window state fixed at create time.
+fn manifestShellStartupClosePolicy() native_sdk.WindowClosePolicy {
+    if (comptime !@hasField(@TypeOf(app_manifest), "shell")) return .quit;
+    const shell = app_manifest.shell;
+    if (comptime !@hasField(@TypeOf(shell), "windows")) return .quit;
+    if (comptime shell.windows.len == 0) return .quit;
+    return windowClosePolicy(shell.windows[0]);
 }
 
 /// The startup window's content min-size floor for scene-first apps:
@@ -356,6 +371,24 @@ fn windowRestorePolicy(comptime window: anytype) native_sdk.WindowRestorePolicy 
     if (comptime std.mem.eql(u8, value, "clamp_to_visible_screen")) return .clamp_to_visible_screen;
     if (comptime std.mem.eql(u8, value, "center_on_primary")) return .center_on_primary;
     @compileError("unknown app.zon window restore_policy");
+}
+
+/// What the window's close affordance does, from app.zon. `.hide` is
+/// validated against the TARGET platform at comptime: a host with no
+/// affordance to bring a hidden window back (GTK has no status item)
+/// refuses the declaration here, at build time, instead of stranding a
+/// hidden window at runtime.
+fn windowClosePolicy(comptime window: anytype) native_sdk.WindowClosePolicy {
+    if (comptime !@hasField(@TypeOf(window), "close_policy")) return .quit;
+    const value = window.close_policy;
+    if (comptime std.mem.eql(u8, value, "quit")) return .quit;
+    if (comptime std.mem.eql(u8, value, "hide")) {
+        if (comptime std.mem.eql(u8, build_options.platform, "linux")) {
+            @compileError("app.zon window close_policy \"hide\" is not supported on linux: the GTK host has no status item (tray), so nothing could bring the hidden window back - declare \"quit\" (the default), or scope the .hide declaration to macos/windows builds");
+        }
+        return .hide;
+    }
+    @compileError("unknown app.zon window close_policy - supported values: \"quit\" (close really closes; the default) and \"hide\" (the menu-bar-app shape: close hides the window and the app keeps running)");
 }
 
 fn shortcutModifiers(comptime shortcut: anytype) native_sdk.ShortcutModifiers {

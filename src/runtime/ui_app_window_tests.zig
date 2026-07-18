@@ -715,3 +715,94 @@ test "window-action effects resolve labels to live windows and drive the real ve
     try app_state.dispatch(&harness.runtime, 1, .minimize_main);
     try std.testing.expectEqual(@as(u32, 3), app_state.effects.windowActionState().minimize_count);
 }
+
+// ------------------------------------- close_policy (.quit | .hide)
+
+test "close_policy .hide: the user close hides the window, nothing tears down, and the reopen re-shows it" {
+    const fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    // A menu-bar-shaped window through the REAL create seam (the same
+    // `ShellWindow` path a manifest-declared window rides): the
+    // declared policy must survive to the platform.
+    const info = try fixture.harness.runtime.createSourcelessShellWindow(.{
+        .label = "player",
+        .title = "Player",
+        .width = 400,
+        .height = 300,
+        .close_policy = .hide,
+    });
+    try std.testing.expectEqual(support.platform.WindowClosePolicy.hide, fixture.harness.null_platform.closePolicyForWindow(info.id).?);
+
+    // The user clicks the red button: the modeled close delegate hides
+    // instead of closing — the window stays in the host's records
+    // (open = true), only the hidden flag flips, and because open never
+    // transitioned, NO window_closed app event (and so no on_close Msg)
+    // fires.
+    const hide_event = fixture.harness.null_platform.userCloseWindow(info.id).?;
+    try std.testing.expect(hide_event.window_frame_changed.open);
+    try std.testing.expect(hide_event.window_frame_changed.hidden);
+    try fixture.harness.runtime.dispatchPlatformEvent(fixture.app, hide_event);
+    try std.testing.expectEqual(@as(u32, 0), fixture.app_state.model.user_closes);
+    var buffer: [support.platform.max_windows]support.platform.WindowInfo = undefined;
+    for (fixture.harness.runtime.listWindows(&buffer)) |window| {
+        if (window.id != info.id) continue;
+        try std.testing.expect(window.open);
+        try std.testing.expect(window.hidden);
+    }
+
+    // The Dock-icon reopen: every policy-hidden window re-shows and the
+    // hidden flag clears through the same journaled frame channel.
+    var reopen_buffer: [support.platform.max_windows]support.platform.Event = undefined;
+    const reopen_events = fixture.harness.null_platform.userReopenApp(&reopen_buffer);
+    try std.testing.expectEqual(@as(usize, 1), reopen_events.len);
+    try std.testing.expect(!reopen_events[0].window_frame_changed.hidden);
+    for (reopen_events) |event| try fixture.harness.runtime.dispatchPlatformEvent(fixture.app, event);
+    for (fixture.harness.runtime.listWindows(&buffer)) |window| {
+        if (window.id != info.id) continue;
+        try std.testing.expect(window.open);
+        try std.testing.expect(!window.hidden);
+    }
+
+    // A reopen with nothing hidden is honestly empty — the host's
+    // default reopen behavior stays in charge.
+    try std.testing.expectEqual(@as(usize, 0), fixture.harness.null_platform.userReopenApp(&reopen_buffer).len);
+}
+
+test "close_policy default stays .quit: the user close still tears the window down" {
+    const fixture = try Fixture.create();
+    defer fixture.destroy();
+
+    try fixture.clickSettingsButton();
+    const info = fixture.settingsWindowInfo() orelse return error.TestUnexpectedResult;
+    // No declaration means .quit: the capture proves the default rode
+    // the create seam unchanged.
+    try std.testing.expectEqual(support.platform.WindowClosePolicy.quit, fixture.harness.null_platform.closePolicyForWindow(info.id).?);
+    const close_event = fixture.harness.null_platform.userCloseWindow(info.id).?;
+    try std.testing.expect(!close_event.window_frame_changed.open);
+    try std.testing.expect(!close_event.window_frame_changed.hidden);
+}
+
+test "close_policy .hide is refused loudly at create on hosts without the affordance" {
+    const harness = try core.TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(400, 300) });
+    defer harness.destroy(std.testing.allocator);
+    // Model a GTK-shaped host: no status item, no way to bring a
+    // hidden window back — the feature reports false and window create
+    // refuses the declaration instead of stranding the window.
+    harness.null_platform.window_hide_on_close = false;
+    try std.testing.expectError(error.UnsupportedWindowClosePolicy, harness.runtime.createSourcelessShellWindow(.{
+        .label = "tools",
+        .title = "Tools",
+        .width = 320,
+        .height = 240,
+        .close_policy = .hide,
+    }));
+    // The same shape under .quit (the default) creates fine.
+    const info = try harness.runtime.createSourcelessShellWindow(.{
+        .label = "tools",
+        .title = "Tools",
+        .width = 320,
+        .height = 240,
+    });
+    try std.testing.expect(info.open);
+}

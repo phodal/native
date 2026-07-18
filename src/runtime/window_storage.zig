@@ -64,6 +64,14 @@ pub fn RuntimeWindowStorage(comptime Runtime: type) type {
             }
             const id = if (options.id != 0) options.id else Self.allocateWindowId(self);
             try validateWindowFrame(options.default_frame);
+            // `.hide` needs a host that can keep a closed-by-the-user
+            // window alive and re-show it; refusing here is the loud
+            // teaching (GTK: no status item exists to bring the window
+            // back, declare .quit — the default — instead). NEVER a
+            // silent no-op that strands a hidden window.
+            if (options.close_policy == .hide and !self.options.platform.supports(.window_hide_on_close)) {
+                return error.UnsupportedWindowClosePolicy;
+            }
             if (Self.findWindowIndexById(self, id) != null) return error.DuplicateWindowId;
             if (Self.findWindowIndexByLabel(self, label) != null) return error.DuplicateWindowLabel;
             const index = try Self.reserveWindow(self, id, label, options.title, source, source_reloads_from_app);

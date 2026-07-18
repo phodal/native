@@ -45,6 +45,9 @@ const WindowsEvent = extern struct {
     y: f64,
     open: c_int,
     focused: c_int,
+    /// Nonzero while the window is alive but hidden by its close_policy
+    /// (`open` stays 1 for the whole hidden stretch).
+    hidden: c_int,
     label: [*]const u8,
     label_len: usize,
     title: [*]const u8,
@@ -134,6 +137,8 @@ extern fn native_sdk_windows_cancel_timer(host: *WindowsHost, timer_id: u64) voi
 extern fn native_sdk_windows_focus_window(host: *WindowsHost, window_id: u64) c_int;
 extern fn native_sdk_windows_close_window(host: *WindowsHost, window_id: u64) c_int;
 extern fn native_sdk_windows_minimize_window(host: *WindowsHost, window_id: u64) c_int;
+extern fn native_sdk_windows_show_window(host: *WindowsHost, window_id: u64) c_int;
+extern fn native_sdk_windows_set_window_close_policy(host: *WindowsHost, window_id: u64, close_policy: c_int) c_int;
 extern fn native_sdk_windows_create_view(host: *WindowsHost, window_id: u64, label: [*]const u8, label_len: usize, kind: c_int, parent: [*]const u8, parent_len: usize, x: f64, y: f64, width: f64, height: f64, layer: c_int, visible: c_int, enabled: c_int, role: [*]const u8, role_len: usize, accessibility_label: [*]const u8, accessibility_label_len: usize, text: [*]const u8, text_len: usize, command: [*]const u8, command_len: usize) c_int;
 extern fn native_sdk_windows_update_view(host: *WindowsHost, window_id: u64, label: [*]const u8, label_len: usize, has_frame: c_int, x: f64, y: f64, width: f64, height: f64, has_layer: c_int, layer: c_int, has_visible: c_int, visible: c_int, has_enabled: c_int, enabled: c_int, has_role: c_int, role: [*]const u8, role_len: usize, has_accessibility_label: c_int, accessibility_label: [*]const u8, accessibility_label_len: usize, has_text: c_int, text: [*]const u8, text_len: usize, has_command: c_int, command: [*]const u8, command_len: usize) c_int;
 extern fn native_sdk_windows_set_view_frame(host: *WindowsHost, window_id: u64, label: [*]const u8, label_len: usize, x: f64, y: f64, width: f64, height: f64) c_int;
@@ -239,6 +244,10 @@ pub const WindowsPlatform = struct {
         const window_title = window_options.resolvedTitle(app_info.app_name);
         const frame = window_options.default_frame;
         const host = native_sdk_windows_create(app_info.app_name.ptr, app_info.app_name.len, window_title.ptr, window_title.len, app_info.bundle_id.ptr, app_info.bundle_id.len, app_info.icon_path.ptr, app_info.icon_path.len, window_options.label.ptr, window_options.label.len, frame.x, frame.y, frame.width, frame.height, if (window_options.restore_state) 1 else 0, if (window_options.resizable) 1 else 0, titlebarStyleInt(window_options.titlebar), minSizeFloor(window_options.min_width), minSizeFloor(window_options.min_height)) orelse return error.CreateFailed;
+        // The manifest's declared close policy rides right after the
+        // create, like the min-size floor: close handling is host
+        // window state fixed for the window's life.
+        applyWindowClosePolicy(host, window_options.id, window_options.close_policy);
         return .{
             .host = host,
             .web_engine = web_engine,
@@ -353,6 +362,11 @@ pub const WindowsPlatform = struct {
             .gpu_surfaces,
             .audio_playback,
             .audio_streaming,
+            // close_policy .hide: WM_CLOSE hides (ShowWindow SW_HIDE),
+            // the window stays in the host map, and the tray is the
+            // re-show affordance — the same Win32 shape tray players
+            // ship.
+            .window_hide_on_close,
             => self.web_engine == .system,
             // Spectrum analysis captures the app's OWN audio session
             // through process-scoped WASAPI loopback, which the OS grew
@@ -454,6 +468,7 @@ fn windowsCallback(context: ?*anyopaque, event: *const WindowsEvent) callconv(.c
                 .scale_factor = @floatCast(event.scale),
                 .open = event.open != 0,
                 .focused = event.focused != 0,
+                .hidden = event.hidden != 0,
             } });
         },
         .shortcut => state.emit(.{ .shortcut = .{
@@ -690,6 +705,20 @@ fn titlebarStyleInt(style: platform_mod.WindowTitlebarStyle) c_int {
 
 /// Zero/negative/non-finite floors are the "no floor" sentinel (the
 /// host leaves that axis at its natural minimum).
+fn closePolicyInt(policy: platform_mod.WindowClosePolicy) c_int {
+    return switch (policy) {
+        .quit => 0,
+        .hide => 1,
+    };
+}
+
+/// Register a window's declared close policy with the host right after
+/// create. `.quit` skips the call — it IS the host default.
+fn applyWindowClosePolicy(host: *WindowsHost, window_id: u64, policy: platform_mod.WindowClosePolicy) void {
+    if (policy == .quit) return;
+    _ = native_sdk_windows_set_window_close_policy(host, window_id, closePolicyInt(policy));
+}
+
 fn minSizeFloor(value: f32) f64 {
     return if (std.math.isFinite(value) and value > 0) value else 0;
 }
@@ -699,6 +728,7 @@ fn createWindow(context: ?*anyopaque, options: platform_mod.WindowOptions) anyer
     const title = options.resolvedTitle(self.app_info.app_name);
     const frame = options.default_frame;
     if (native_sdk_windows_create_window(self.host, options.id, title.ptr, title.len, options.label.ptr, options.label.len, frame.x, frame.y, frame.width, frame.height, if (options.restore_state) 1 else 0, if (options.resizable) 1 else 0, titlebarStyleInt(options.titlebar), minSizeFloor(options.min_width), minSizeFloor(options.min_height)) == 0) return error.CreateFailed;
+    applyWindowClosePolicy(self.host, options.id, options.close_policy);
     return .{
         .id = options.id,
         .label = options.label,

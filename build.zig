@@ -809,6 +809,17 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkItalicSansFont(base)" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkItalicSansFont(NativeSdkWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], base, NSFontWeightBold, YES, size))" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-registered-font-cache-eviction", "Verify the AppKit registered-font size cache evicts an id's cached NSFonts at registration (the cache is per-process while font-id permanence is per-runtime, so a new runtime re-registering an id must never resolve the previous runtime's face)", &.{
+        // No SDK test tier links appkit_host.m (only managed app builds
+        // compile it), so the eviction wiring is pinned textually like
+        // the other AppKit host contracts: the shared accessor both the
+        // resolve and registration paths use, the prefix eviction inside
+        // register_font, and the honest lifetime comment.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSMutableDictionary<NSString *, NSFont *> *NativeSdkRegisteredFontSizeCache(void)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSString *stalePrefix = [NSString stringWithFormat:@\"%llu/\", (unsigned long long)font_id];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if ([cachedKey hasPrefix:stalePrefix]) [sizeCache removeObjectForKey:cachedKey];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "an id is only permanent within" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "native_sdk_appkit_set_view_cursor" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "resetCursorRects" },

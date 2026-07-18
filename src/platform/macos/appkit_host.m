@@ -1763,18 +1763,35 @@ static NSMutableDictionary<NSNumber *, id> *NativeSdkRegisteredFontDescriptors(v
     return table;
 }
 
+// The per-(id, size) NSFont cache for registered faces, keyed "id/size".
+// Ids are permanent within ONE runtime (`error.FontIdInUse` guards
+// re-use for a runtime's lifetime), but this cache is per-PROCESS and
+// runtimes are not: an embedder that destroys its runtime
+// (`Runtime.deinit`) and registers a DIFFERENT face under the same
+// valid id in a new runtime is inside the documented lifecycle. Entries
+// therefore go stale exactly when an id's descriptor is (re)installed,
+// so `native_sdk_appkit_register_font` evicts the id's cached sizes
+// before installing the new descriptor. Accessed only under the
+// descriptor table's @synchronized guard, like the descriptors.
+static NSMutableDictionary<NSString *, NSFont *> *NativeSdkRegisteredFontSizeCache(void) {
+    static NSMutableDictionary<NSString *, NSFont *> *cache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[NSMutableDictionary alloc] init];
+    });
+    return cache;
+}
+
 // The registered face for a canvas font id at `size`, or nil when the id
 // has no registered face. Checked BEFORE the built-in candidates and
 // their cache so a registered id can never be masked by a font resolved
-// for that id earlier (ids are engine-validated and permanent, so cached
-// NSFonts here never go stale).
+// for that id earlier. Cached NSFonts here stay honest because
+// registration evicts an id's entries when its descriptor changes (see
+// NativeSdkRegisteredFontSizeCache) — an id is only permanent within
+// one runtime, and this cache outlives runtimes.
 static NSFont *NativeSdkRegisteredFontForId(unsigned long long value, CGFloat size) {
     NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
-    static NSMutableDictionary<NSString *, NSFont *> *sizeCache = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        sizeCache = [[NSMutableDictionary alloc] init];
-    });
+    NSMutableDictionary<NSString *, NSFont *> *sizeCache = NativeSdkRegisteredFontSizeCache();
     @synchronized (table) {
         id descriptorObject = table[@(value)];
         if (!descriptorObject) return nil;
@@ -1803,6 +1820,17 @@ int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size
         if (!descriptor) return 0;
         NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
         @synchronized (table) {
+            // Evict the id's cached NSFonts BEFORE installing the new
+            // descriptor: the process may still hold fonts a PREVIOUS
+            // runtime resolved for this id (ids are per-runtime
+            // permanent, the cache is per-process), and serving them
+            // would measure and draw the old face under the new id.
+            NSMutableDictionary<NSString *, NSFont *> *sizeCache = NativeSdkRegisteredFontSizeCache();
+            NSString *stalePrefix = [NSString stringWithFormat:@"%llu/", (unsigned long long)font_id];
+            NSArray<NSString *> *cachedKeys = sizeCache.allKeys;
+            for (NSString *cachedKey in cachedKeys) {
+                if ([cachedKey hasPrefix:stalePrefix]) [sizeCache removeObjectForKey:cachedKey];
+            }
             table[@(font_id)] = (__bridge_transfer id)descriptor;
         }
         return 1;

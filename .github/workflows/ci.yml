@@ -196,7 +196,8 @@ jobs:
       - name: WebKitGTK stub compile is diagnostic-free
         run: |
           export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d) ZIG_LOCAL_CACHE_DIR=$(mktemp -d)
-          out=$(zig cc -c src/platform/linux/gtk_host.c -DNATIVE_SDK_ALLOW_WEBKITGTK_STUB $(pkg-config --cflags gtk4) -o /tmp/gtk_host_stub.o 2>&1); status=$?
+          status=0
+          out=$(zig cc -c src/platform/linux/gtk_host.c -DNATIVE_SDK_ALLOW_WEBKITGTK_STUB $(pkg-config --cflags gtk4) -o /tmp/gtk_host_stub.o 2>&1) || status=$?
           if [ "$status" -ne 0 ] || [ -n "$out" ]; then
             echo "the WebKitGTK stub compile must succeed with zero diagnostics (exit $status):"
             echo "$out"
@@ -233,7 +234,8 @@ jobs:
       - name: WebView2 stub cross-compile is diagnostic-free
         run: |
           export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d) ZIG_LOCAL_CACHE_DIR=$(mktemp -d)
-          out=$(zig c++ -target x86_64-windows-gnu -std=c++17 -DNATIVE_SDK_ALLOW_WEBVIEW2_STUB -c src/platform/windows/webview2_host.cpp -o /tmp/webview2_host_stub.o 2>&1); status=$?
+          status=0
+          out=$(zig c++ -target x86_64-windows-gnu -std=c++17 -DNATIVE_SDK_ALLOW_WEBVIEW2_STUB -c src/platform/windows/webview2_host.cpp -o /tmp/webview2_host_stub.o 2>&1) || status=$?
           if [ "$status" -ne 0 ] || [ -n "$out" ]; then
             echo "the WebView2 stub cross-compile must succeed with zero diagnostics (exit $status):"
             echo "$out"

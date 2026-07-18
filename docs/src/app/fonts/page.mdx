@@ -53,7 +53,7 @@ Register at startup so the first layout already measures with the face. Late reg
 
 ## Validation is loud and registration-time only
 
-Every failure happens at registration, never at render time — a registered id always resolves when text draws. `Options.fonts` translates each error into a warning naming the font before propagating it:
+Every failure happens at registration, never at render time — a registered id always resolves when text draws — with one honest exception: point-matched composite placement is the one per-glyph refusal `maxp` cannot gate at registration (no declared field describes it), so it surfaces at first raster, where the glyph draws the deterministic block fallback — never a crash, never a silent skip. No measured production face places composites that way: the bundled Geist faces and every CJK face measured for the budgets use XY offsets. `Options.fonts` translates each error into a warning naming the font before propagating it:
 
 - `error.InvalidFontId` — id 0 is the "inherit run font" sentinel and can never hold a face.
 - `error.ReservedFontId` — ids below `canvas.min_registered_font_id` (64) belong to the built-in faces.

@@ -52,6 +52,18 @@ typedef struct native_sdk_absent_content_manager WebKitUserContentManager;
 #error "webkit/webkit.h not found: install the WebKitGTK 6.0 development package (libwebkitgtk-6.0-dev on Debian/Ubuntu), or define NATIVE_SDK_ALLOW_WEBKITGTK_STUB to build without the embedded web layer"
 #endif
 
+/* G_APPLICATION_DEFAULT_FLAGS arrived in GLib 2.74 as the
+ * non-deprecated spelling of "no flags". This host's GTK floor is 4.10
+ * (the GtkFileDialog family below), and GTK 4.10's own GLib floor is
+ * 2.72 — distros that backport GTK 4.10 onto a GLib 2.72 base (Ubuntu
+ * 22.04 derivatives) must still compile this file. Same value, gated to
+ * older GLib only; the pre-2.74 name G_APPLICATION_FLAGS_NONE is not
+ * used because it is deprecated from 2.74 on and would emit a warning
+ * exactly where the newer name exists. */
+#if !GLIB_CHECK_VERSION(2, 74, 0)
+#define G_APPLICATION_DEFAULT_FLAGS ((GApplicationFlags) 0)
+#endif
+
 #define NATIVE_SDK_MAX_WINDOWS 16
 #define NATIVE_SDK_MAX_WEBVIEWS 16
 #define NATIVE_SDK_MAX_TIMERS 64

@@ -218,6 +218,8 @@ jobs:
       # gpu_nonblank=true, template widgets in the snapshot).
       - name: Scaffold and drive the Debug template headless
         run: .github/scripts/linux-dev-smoke.sh
+
+  windows-canvas-smoke:
     name: Windows Canvas Smoke (Wine)
     runs-on: ubuntu-latest
     timeout-minutes: 30

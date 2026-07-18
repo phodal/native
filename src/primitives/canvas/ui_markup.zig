@@ -149,6 +149,13 @@ pub const MarkupDocument = struct {
     /// all templates is valid as an import target, but an app view needs
     /// a root, which the engines enforce with a teaching error.
     root: ?MarkupNode = null,
+    /// Total bytes of markup source this document was built from — the
+    /// parsed file, or every resolved file after import resolution. Both
+    /// parsers and both resolvers stamp it, so comptime branch-quota
+    /// scaling (`canonicalizeComptime`) can size its walk in O(1) instead
+    /// of recursing over the tree, which would itself exhaust the caller's
+    /// default quota on large documents.
+    source_bytes: usize = 0,
 
     pub fn templateIndex(self: MarkupDocument, name: []const u8) ?usize {
         for (self.templates, 0..) |template_node, index| {
@@ -235,7 +242,7 @@ pub const Parser = struct {
                 if (imports.items.len == 0 and templates.items.len == 0) {
                     return self.fail(empty_document_message);
                 }
-                return .{ .imports = imports.items, .templates = templates.items, .root = null };
+                return .{ .imports = imports.items, .templates = templates.items, .root = null, .source_bytes = self.source.len };
             }
             const node = try self.parseElement();
             if (node.kind == .import_block) {
@@ -256,7 +263,7 @@ pub const Parser = struct {
             if (self.index < self.source.len) {
                 return self.fail("expected end of file after the root element");
             }
-            return .{ .imports = imports.items, .templates = templates.items, .root = node };
+            return .{ .imports = imports.items, .templates = templates.items, .root = node, .source_bytes = self.source.len };
         }
     }
 
@@ -561,7 +568,7 @@ pub fn parseComptime(comptime source: []const u8) MarkupDocument {
                 if (imports.len == 0 and templates.len == 0) {
                     failComptime(&parser, parser.fail(empty_document_message));
                 }
-                return .{ .imports = imports, .templates = templates, .root = null };
+                return .{ .imports = imports, .templates = templates, .root = null, .source_bytes = source.len };
             }
             const node = parseElementComptime(&parser);
             if (node.kind == .import_block) {
@@ -582,7 +589,7 @@ pub fn parseComptime(comptime source: []const u8) MarkupDocument {
             if (parser.index < parser.source.len) {
                 failComptime(&parser, parser.fail("expected end of file after the root element"));
             }
-            return .{ .imports = imports, .templates = templates, .root = node };
+            return .{ .imports = imports, .templates = templates, .root = node, .source_bytes = source.len };
         }
     }
 }
@@ -980,11 +987,16 @@ fn typedTextSegments(arena: std.mem.Allocator, text: []const u8) error{OutOfMemo
 
 /// Comptime mirror of `canonicalize` for the compiled engine's documents:
 /// same classification, same segment scan, with comptime consts in place
-/// of arena allocations. The branch quota scales with the tree it walks.
+/// of arena allocations. The branch quota scales with the source the
+/// document was parsed from.
 pub fn canonicalizeComptime(comptime document: MarkupDocument) MarkupDocument {
     comptime {
+        // Invariant: a quota argument must never recurse over the tree it
+        // is budgeting — it evaluates under the CALLER's quota, so the
+        // measurement itself would exhaust the default 1000 branches on a
+        // large document. `source_bytes` is stamped at parse time (O(1)).
         @setEvalBranchQuota(comptime_parse_quota_base +
-            (documentByteSize(document) + 1) * comptime_canonicalize_quota_per_byte);
+            (document.source_bytes + 1) * comptime_canonicalize_quota_per_byte);
         var out = document;
         var templates: []const MarkupNode = &.{};
         for (document.templates) |template_node| {
@@ -996,25 +1008,12 @@ pub fn canonicalizeComptime(comptime document: MarkupDocument) MarkupDocument {
     }
 }
 
+/// Tuned against the canonicalize walk's comptime slice concatenation
+/// (`children ++`/`attrs ++` re-copy per element) with wide safety margin.
+/// The scale, `source_bytes`, only grew when it replaced the old measured
+/// tree size (node text/names/attrs): the source carries every one of
+/// those bytes plus all markup syntax, so the constant keeps its headroom.
 const comptime_canonicalize_quota_per_byte = 400;
-
-fn documentByteSize(comptime document: MarkupDocument) usize {
-    comptime {
-        var total: usize = 0;
-        for (document.templates) |template_node| total += nodeByteSize(template_node);
-        if (document.root) |root| total += nodeByteSize(root);
-        return total;
-    }
-}
-
-fn nodeByteSize(comptime node: MarkupNode) usize {
-    comptime {
-        var total: usize = node.text.len + node.name.len;
-        for (node.attrs) |attribute| total += attribute.name.len + attribute.value.len;
-        for (node.children) |child| total += nodeByteSize(child);
-        return total;
-    }
-}
 
 fn canonicalizeNodeComptime(comptime node: MarkupNode) MarkupNode {
     comptime {
@@ -3514,7 +3513,7 @@ pub fn resolveImports(
         .diagnostic = diagnostic,
     };
     const root = try resolver.visit(root_name, root_source, 0);
-    return .{ .imports = &.{}, .templates = resolver.templates.items, .root = root };
+    return .{ .imports = &.{}, .templates = resolver.templates.items, .root = root, .source_bytes = resolver.source_bytes };
 }
 
 const ImportResolver = struct {
@@ -3529,12 +3528,17 @@ const ImportResolver = struct {
     /// The in-progress import chain, for cycle reporting.
     chain: [max_import_depth][]const u8 = undefined,
     file_count: usize = 0,
+    /// Sum of every resolved file's source length — stamped onto the
+    /// merged document as `source_bytes`, so it covers the whole tree the
+    /// canonicalize walk will visit, imported templates included.
+    source_bytes: usize = 0,
 
     /// Parse one file, resolve its imports depth-first, splice its
     /// templates, and return its stamped view root (null for a component
     /// file). Only the root file (depth 0) may have a view root.
     fn visit(self: *ImportResolver, path: []const u8, source: []const u8, depth: usize) ResolveError!?MarkupNode {
         self.chain[depth] = path;
+        self.source_bytes += source.len;
         var parser = Parser.init(self.arena, source);
         const document = parser.parse() catch |err| {
             if (err == error.MarkupSyntax) {
@@ -3729,6 +3733,10 @@ fn dirnamePath(path: []const u8) []const u8 {
 /// would report, prefixed with the offending file.
 pub fn resolveImportsComptime(comptime root_name: []const u8, comptime sources: []const SourceFile) MarkupDocument {
     comptime {
+        // The summing loop runs under the CALLER's quota (a quota argument
+        // must never walk anything unbounded first), so budget it from the
+        // O(1) set length before deriving the byte-scaled quota from it.
+        @setEvalBranchQuota(comptime_parse_quota_base + sources.len * 100);
         var total_len: usize = 0;
         for (sources) |file| total_len += file.source.len;
         @setEvalBranchQuota(comptime_parse_quota_base + total_len * comptime_parse_quota_per_byte + (sources.len + 1) * 50_000);
@@ -3738,7 +3746,10 @@ pub fn resolveImportsComptime(comptime root_name: []const u8, comptime sources: 
         var templates: []const MarkupNode = &.{};
         var visited: []const []const u8 = &.{};
         const root = visitComptime(root_name, root_source, sources, dirnamePath(root_name), &templates, &visited, &.{});
-        return .{ .imports = &.{}, .templates = templates, .root = root };
+        // `total_len` covers the whole embedded set — a superset of the
+        // files resolution actually visited — so the canonicalize walk
+        // over the merged tree (imported templates included) is budgeted.
+        return .{ .imports = &.{}, .templates = templates, .root = root, .source_bytes = total_len };
     }
 }
 

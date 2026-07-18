@@ -431,6 +431,8 @@ export type Cmd<M extends Msgish> =
       /// Seek position (ms) / volume (0..1); 0 for the value-less verbs.
       readonly value: number;
     }
+  | { readonly op: "window_show"; readonly label: string }
+  | { readonly op: "quit_app" }
   | { readonly op: "batch"; readonly cmds: readonly Cmd<M>[] };
 
 /// The wire encoding of a host record payload, byte-identical to what the
@@ -657,6 +659,24 @@ export const Cmd = {
   /// next audioPlay re-applies it.
   audioSetVolume(key: string, volume: number): Cmd<never> {
     return { op: "audio_ctl", key, verb: "volume", value: volume };
+  },
+
+  /// Show the window with the declared `label`: un-hide + activate — the
+  /// counterpart to a `close_policy = "hide"` hide and the tray "Open"
+  /// consequence; also restores a minimized window. Fire-and-forget: no
+  /// result Msg (the window's own frame event carries the state), and an
+  /// unknown label is a no-op. The label is a string literal — window
+  /// labels are declarations.
+  showWindow(label: string): Cmd<never> {
+    return { op: "window_show", label };
+  },
+
+  /// Quit the app for real — the graceful terminate, and the tray "Quit"
+  /// consequence. The host quits through the SAME shutdown path a
+  /// last-window close takes, so the stop hook runs exactly once and a
+  /// recording session seals its journal. Fire-and-forget.
+  quitApp(): Cmd<never> {
+    return { op: "quit_app" };
   },
 
   /// Several commands from one dispatch, performed in order.

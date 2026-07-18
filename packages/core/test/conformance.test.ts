@@ -3656,6 +3656,35 @@ export function f(x: number, y: number): number { return pick(x, y, x < y); }`,
 // taught rules everywhere else.
 const streamingCases: Case[] = [
   {
+    name: "the window verbs emit in their documented shapes",
+    src: `
+import { Cmd } from "@native-sdk/core";
+${streamMsg}
+export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
+  switch (msg.kind) {
+    case "go":
+      if (msg.which === 0) return [model, Cmd.showWindow("player")];
+      if (msg.which === 1) return [model, Cmd.batch([Cmd.showWindow("player"), Cmd.quitApp()])];
+      return [model, Cmd.quitApp()];
+${streamTail}
+`,
+  },
+  {
+    name: "a dynamic showWindow label is taught (window labels are declarations)",
+    gate: "NS1027",
+    src: `
+import { Cmd } from "@native-sdk/core";
+${streamMsg}
+export function update(model: Model, msg: Msg): Model | [Model, Cmd<Msg>] {
+  switch (msg.kind) {
+    case "go": {
+      const label = msg.which === 0 ? "player" : "settings";
+      return [model, Cmd.showWindow(label)];
+    }
+${streamTail}
+`,
+  },
+  {
     name: "spawn and the audio verbs emit in their documented shapes",
     src: `
 import { Cmd, asciiBytes } from "@native-sdk/core";

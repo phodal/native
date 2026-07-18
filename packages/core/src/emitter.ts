@@ -2164,6 +2164,21 @@ export class Emitter {
       if (method in AUDIO_VERBS) {
         return this.emitAudioCtlCmd(e, method, ctx);
       }
+      if (method === "showWindow") {
+        // Window labels are declarations (app.zon / the scene), so the
+        // verb takes the label as a string literal — the same discipline
+        // effect keys ride (NS1027).
+        const labelArg = e.arguments[0];
+        if (!labelArg || !ts.isStringLiteral(labelArg)) {
+          this.fail(e, `\`Cmd.showWindow\` takes the declared window label as a string literal`, "NS1027");
+        }
+        if (labelArg.text.length > 255) this.fail(labelArg, "Cmd.showWindow label over 255 bytes");
+        return `rt.cmdWindowShow("${escapeZigString(labelArg.text)}")`;
+      }
+      if (method === "quitApp") {
+        if (e.arguments.length !== 0) this.fail(e, "Cmd.quitApp takes no arguments");
+        return "rt.cmdQuitApp()";
+      }
       if (method === "batch") {
         const arr = e.arguments[0];
         if (!arr || !ts.isArrayLiteralExpression(arr)) this.fail(e, "Cmd.batch argument (an array literal in v1)");
@@ -2173,7 +2188,7 @@ export class Emitter {
       }
       this.fail(
         e,
-        `Cmd.${method} (the v2 command set is none, persist, now, host, request, cancel, readFile, writeFile, fetch, clipboardWrite, clipboardRead, delay, spawn, audioPlay, audioPause, audioResume, audioStop, audioSeek, audioSetVolume, batch)`,
+        `Cmd.${method} (the v3 command set is none, persist, now, host, request, cancel, readFile, writeFile, fetch, clipboardWrite, clipboardRead, delay, spawn, audioPlay, audioPause, audioResume, audioStop, audioSeek, audioSetVolume, showWindow, quitApp, batch)`,
       );
     }
     this.fail(expr, "command expression (Cmd values are built inline from the Cmd.* factories)");

@@ -837,7 +837,17 @@ pub fn build(b: *std.Build) void {
         // newer runtime's live face under a shared id (ids are
         // per-runtime, host font state is per-process, last wins).
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "*out_token = token;" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "unsigned long long token = NativeSdkRegisteredFontToken((unsigned long long)font_id);" },
+        // The token and the registered face reach measure_text from ONE
+        // critical section (the snapshot helper): separate acquisitions
+        // let a registration land between the token read and the face
+        // resolution, pairing token 0 with the new registered face and
+        // caching registered widths under the reusable token-0 key —
+        // stale registered widths served after teardown. The snapshot
+        // signature and its measure_text call site are pinned so the
+        // two-acquisition shape cannot quietly return.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSFont *NativeSdkRegisteredFontSnapshot(unsigned long long value, CGFloat size, unsigned long long *out_token)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSFont *registered = NativeSdkRegisteredFontSnapshot((unsigned long long)font_id, clamped, &token);" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSFont *font = registered ?: NativeSdkBuiltInFontForFontId(font_id, clamped);" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NSString stringWithFormat:@\"%llu/%llu/%.3f/%@\", (unsigned long long)font_id, token, (double)clamped, value]" },
         // The teardown half: Runtime.deinit returns the host-side
         // registration through the unregister owner each font entry

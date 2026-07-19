@@ -1820,27 +1820,39 @@ static NSMutableDictionary<NSNumber *, NSNumber *> *NativeSdkRegisteredFontToken
 // table's @synchronized guard, like every table here.
 static unsigned long long NativeSdkRegisteredFontTokenCounter = 0;
 
-// The current registration token for a font id: 0 unless the id holds
-// a live registration.
-static unsigned long long NativeSdkRegisteredFontToken(unsigned long long value) {
-    NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
-    @synchronized (table) {
-        NSNumber *token = NativeSdkRegisteredFontTokens()[@(value)];
-        return token ? token.unsignedLongLongValue : 0;
-    }
-}
-
-// The registered face for a canvas font id at `size`, or nil when the id
-// has no registered face. Checked BEFORE the built-in candidates and
-// their cache so a registered id can never be masked by a font resolved
-// for that id earlier. Cached NSFonts here stay honest because
+// The id's current registration token AND the registered face that
+// token resolves to, snapshotted under ONE acquisition of the
+// descriptor table's @synchronized guard. The pair must be atomic
+// because measure_text keys its width memoization by (id, token): with
+// the token read and the face resolved under SEPARATE acquisitions, a
+// registration landing between them pairs token 0 with the NEW
+// registered face and caches a registered-face width under the
+// reusable token-0 key — served again after the registration is torn
+// down, when token 0 honestly means built-in resolution. One critical
+// section makes a torn pair unrepresentable; the width computation
+// itself stays outside the lock (see measure_text), because a
+// stale-but-consistent pair is harmless — its widths are keyed by a
+// retired token no future lookup can reach. Returns nil with
+// *out_token = 0 when the id holds no registration, so token 0 only
+// ever pairs with built-in resolution. (A registered descriptor whose
+// CTFont creation fails also answers nil, under its live token: the
+// built-in fallback then caches under that token — still one
+// consistent resolution per registration life, since the failure is a
+// property of the installed descriptor.)
+//
+// The registered-face NSFonts cached here stay honest because
 // registration evicts an id's entries when its descriptor changes (see
 // NativeSdkRegisteredFontSizeCache) — an id is only permanent within
-// one runtime, and this cache outlives runtimes.
-static NSFont *NativeSdkRegisteredFontForId(unsigned long long value, CGFloat size) {
+// one runtime, and this cache outlives runtimes. Registered faces are
+// checked BEFORE the built-in candidates and their cache so a
+// registered id can never be masked by a font resolved for that id
+// earlier.
+static NSFont *NativeSdkRegisteredFontSnapshot(unsigned long long value, CGFloat size, unsigned long long *out_token) {
     NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
     NSMutableDictionary<NSString *, NSFont *> *sizeCache = NativeSdkRegisteredFontSizeCache();
     @synchronized (table) {
+        NSNumber *tokenNumber = NativeSdkRegisteredFontTokens()[@(value)];
+        *out_token = tokenNumber ? tokenNumber.unsignedLongLongValue : 0;
         id descriptorObject = table[@(value)];
         if (!descriptorObject) return nil;
         NSString *key = [NSString stringWithFormat:@"%llu/%.3f", value, (double)size];
@@ -1852,6 +1864,14 @@ static NSFont *NativeSdkRegisteredFontForId(unsigned long long value, CGFloat si
         sizeCache[key] = font;
         return font;
     }
+}
+
+// The registered face for a canvas font id at `size`, or nil when the id
+// has no registered face — the snapshot above for callers that resolve
+// but do not memoize by token (packet drawing, the advances batch).
+static NSFont *NativeSdkRegisteredFontForId(unsigned long long value, CGFloat size) {
+    unsigned long long token = 0;
+    return NativeSdkRegisteredFontSnapshot(value, size, &token);
 }
 
 // Engine-validated TrueType bytes for a registered canvas font id: parse
@@ -1948,16 +1968,14 @@ int native_sdk_appkit_unregister_font(uint64_t font_id, uint64_t token) {
     }
 }
 
-// Resolves a canvas font id to the NSFont presentation draws with. Both
-// packet text drawing and native_sdk_appkit_measure_text go through this
-// single function so measured layout and drawn glyphs share font
-// resolution. Ids 3-6 are the reserved sans span variants (medium, bold,
-// italic, bold italic); everything else keeps the regular sans/mono
-// candidates. Registered faces win first (see above). Resolved
-// built-in fonts are cached per (font id, size).
-static NSFont *NativeSdkFontForFontId(unsigned long long value, CGFloat size) {
-    NSFont *registered = NativeSdkRegisteredFontForId(value, size);
-    if (registered) return registered;
+// The built-in-candidates half of font resolution: never consults the
+// registered tables, so callers that already hold a registered-face
+// snapshot (measure_text) fall back here without re-reading state the
+// snapshot fixed. Ids 3-6 are the reserved sans span variants (medium,
+// bold, italic, bold italic); everything else keeps the regular
+// sans/mono candidates. Resolved built-in fonts are cached per
+// (font id, size).
+static NSFont *NativeSdkBuiltInFontForFontId(unsigned long long value, CGFloat size) {
     static NSCache<NSString *, NSFont *> *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -2005,6 +2023,19 @@ static NSFont *NativeSdkFontForFontId(unsigned long long value, CGFloat size) {
     return font;
 }
 
+// Resolves a canvas font id to the NSFont presentation draws with. Both
+// packet text drawing and native_sdk_appkit_measure_text go through this
+// resolution order (registered faces win, then the built-in candidates)
+// so measured layout and drawn glyphs share font resolution —
+// measure_text inlines the two halves around its width cache because it
+// must key that cache by the registration-token snapshot the first half
+// fixes.
+static NSFont *NativeSdkFontForFontId(unsigned long long value, CGFloat size) {
+    NSFont *registered = NativeSdkRegisteredFontForId(value, size);
+    if (registered) return registered;
+    return NativeSdkBuiltInFontForFontId(value, size);
+}
+
 static NSFont *NativeSdkPacketPreferredFont(NSDictionary *text, CGFloat size) {
     NSNumber *fontId = [text[@"font"] isKindOfClass:[NSNumber class]] ? text[@"font"] : nil;
     unsigned long long value = fontId ? fontId.unsignedLongLongValue : 1;
@@ -2032,12 +2063,25 @@ double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char 
         // re-registered under the same id (a new runtime in this
         // process) never serves a previous face's widths — see
         // NativeSdkRegisteredFontTokens for why token, not eviction,
-        // invalidates this cache.
-        unsigned long long token = NativeSdkRegisteredFontToken((unsigned long long)font_id);
+        // invalidates this cache. Token and registered face come from
+        // ONE snapshot (one critical section — see
+        // NativeSdkRegisteredFontSnapshot): reading them under separate
+        // acquisitions let a registration land between the reads and
+        // cache the new face's width under the reusable token-0 key,
+        // serving stale registered widths in the unregistered state
+        // after teardown.
+        unsigned long long token = 0;
+        NSFont *registered = NativeSdkRegisteredFontSnapshot((unsigned long long)font_id, clamped, &token);
         NSString *key = [NSString stringWithFormat:@"%llu/%llu/%.3f/%@", (unsigned long long)font_id, token, (double)clamped, value];
         NSNumber *cached = [widthCache objectForKey:key];
         if (cached) return cached.doubleValue;
-        NSFont *font = NativeSdkFontForFontId(font_id, clamped);
+        // A nil snapshot means built-in resolution — with token 0 by the
+        // snapshot's contract unless a live descriptor's CTFont creation
+        // failed, so token 0 only ever keys built-in widths. Shaping
+        // stays OUTSIDE the critical section: a registration landing
+        // after the snapshot leaves this width stale but consistent,
+        // keyed by the now-retired token no future lookup reaches.
+        NSFont *font = registered ?: NativeSdkBuiltInFontForFontId(font_id, clamped);
         if (!font) return -1;
         double width = [value sizeWithAttributes:@{ NSFontAttributeName : font }].width;
         [widthCache setObject:@(width) forKey:key];
@@ -2055,6 +2099,14 @@ double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char 
 // call per text run replaces one measure_text round-trip per cluster of
 // every growing line prefix — the engine caches the batch, so a run is
 // typically shaped here once per content change, not once per frame.
+//
+// Unlike measure_text this needs no registration-token snapshot: it
+// memoizes nothing host-side (the engine caches the batch and
+// invalidates it by its own measure generation, bumped at every
+// registration), so each call resolves the font once and uses it
+// immediately — there is no (token, face) pairing that could tear
+// across lock acquisitions or outlive the registration it was read
+// from.
 int native_sdk_appkit_measure_text_advances(uint64_t font_id, double size, const char *text, size_t text_len, float *advances) {
     if (!text || text_len == 0 || !advances) return 0;
     CGFloat clamped = MAX(1, size);

@@ -2100,11 +2100,22 @@ pub const PlatformServices = struct {
     /// Platforms without the concept leave this null.
     show_window_fn: ?*const fn (context: ?*anyopaque, window_id: WindowId) anyerror!void = null,
     /// The graceful app quit: terminate through the SAME shutdown path
-    /// a last-window close takes — the host emits `app_shutdown`
-    /// synchronously (journaled like any platform event) and stops its
-    /// run loop, so `app.stop` runs exactly once and a recording
-    /// session seals its journal. Platforms without the concept leave
-    /// this null.
+    /// a last-window close takes — but the host QUEUES the emit, so
+    /// `app_shutdown` dispatches on its NEXT loop turn, only after the
+    /// dispatch that requested the quit has returned. Never emit
+    /// synchronously from inside this call: the request arrives mid
+    /// dispatch (the command whose update returned it is still on the
+    /// recorder's staged-event stack), and a nested emit seals the
+    /// session journal before the requesting command commits — the
+    /// record is lost and replay diverges. Before the run loop starts
+    /// (a quit from App.start's update, or from a boot command in the
+    /// synchronous first canvas frame) the host parks the request and
+    /// drains it at top level after the current callback returns.
+    /// Either way `app.stop` runs exactly once, and the shutdown is
+    /// journaled like any platform event. The null platform's
+    /// `quit_pending`/`takeQueuedQuit` seam is the reference model of
+    /// the queued shape. Platforms without the concept leave this
+    /// null.
     quit_app_fn: ?*const fn (context: ?*anyopaque) anyerror!void = null,
     /// Hand the ACTIVE pointer-down to the platform as a window-drag
     /// gesture (the hidden-titlebar drag-region channel): the window

@@ -831,18 +831,21 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "unsigned long long token = NativeSdkRegisteredFontToken((unsigned long long)font_id);" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NSString stringWithFormat:@\"%llu/%llu/%.3f/%@\", (unsigned long long)font_id, token, (double)clamped, value]" },
         // The teardown half: Runtime.deinit returns the host-side
-        // registration through the platform unregister seam, and the
-        // ObjC removal drops the descriptor, the size-cache entries, AND
-        // the token record — zero retained state per retired id. Pinned
-        // like the registration half (appkit_host.m has no SDK test
-        // tier); the deinit call site is pinned too so the seam can
-        // never silently lose its one caller, and the embed cycle test
-        // asserts that call behaviorally against the null platform's
-        // recorder.
+        // registration through the unregister owner each font entry
+        // captured at registration time (never live `options.platform`,
+        // which is publicly mutable), and the ObjC removal drops the
+        // descriptor, the size-cache entries, AND the token record —
+        // zero retained state per retired id. Pinned like the
+        // registration half (appkit_host.m has no SDK test tier); the
+        // capture and the deinit call site are pinned too so the seam
+        // can never silently lose its one caller or regress to the live
+        // read, and the embed cycle and platform-swap tests assert both
+        // behaviorally against null platform recorders.
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "int native_sdk_appkit_unregister_font(uint64_t font_id) {" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NativeSdkRegisteredFontTokens() removeObjectForKey:@(font_id)];" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[table removeObjectForKey:@(font_id)];" },
-        .{ .path = "src/runtime/core.zig", .pattern = "self.options.platform.services.unregisterGpuSurfaceFont(entry.id) catch {};" },
+        .{ .path = "src/runtime/canvas_fonts.zig", .pattern = ".host_unregister_fn = services.unregister_gpu_surface_font_fn," },
+        .{ .path = "src/runtime/core.zig", .pattern = "host_unregister_fn(entry.host_unregister_context, entry.id) catch {};" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "native_sdk_appkit_set_view_cursor" },

@@ -147,6 +147,39 @@ test "embedded app deinit is idempotent" {
     try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_font_unregister_count);
 }
 
+test "embedded app deinit returns the font registration to the platform that received it" {
+    // `Runtime.options` is public and mutable, and embedders genuinely
+    // swap the platform on a live runtime (tests in this repo do it
+    // constantly). The host-side registration must still come back to
+    // the host that RECEIVED it: each font entry captures its
+    // unregistration owner at registration time (the allocator-identity
+    // freeze, applied to the host seam), so a swap between registration
+    // and teardown retargets nothing. A deinit reading the live options
+    // instead would unregister against the swapped-in platform — the
+    // wrong host, or a null seam — and strand the original host's
+    // descriptor and caches for the process lifetime.
+    var platform_a = platform.NullPlatform.init(.{});
+    var platform_b = platform.NullPlatform.init(.{});
+    var state: u8 = 0;
+    const embedded = try std.testing.allocator.create(EmbeddedApp);
+    defer std.testing.allocator.destroy(embedded);
+    embedded.initInPlace(.{
+        .context = &state,
+        .name = "embedded-font-platform-swap",
+        .source = platform.WebViewSource.html("<p>Fonts</p>"),
+    }, platform_a.platform());
+    embedded.runtime.owned_allocator = std.testing.allocator;
+    try embedded.runtime.registerCanvasFont(canvas.min_registered_font_id, canvas.font_ttf.geist_mono_bytes);
+
+    // The swap under test: platform B holds the option by teardown time,
+    // but it never saw the registration.
+    embedded.runtime.options.platform = platform_b.platform();
+    embedded.deinit();
+    try std.testing.expectEqual(@as(usize, 1), platform_a.gpu_surface_font_unregister_count);
+    try std.testing.expectEqual(@as(u64, canvas.min_registered_font_id), platform_a.gpu_surface_font_unregister_id);
+    try std.testing.expectEqual(@as(usize, 0), platform_b.gpu_surface_font_unregister_count);
+}
+
 test "mobile C ABI destroy returns registered font bytes through the embedded deinit" {
     const app = native_sdk_app_create() orelse return error.TestUnexpectedResult;
     errdefer native_sdk_app_destroy(app);

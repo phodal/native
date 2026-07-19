@@ -1013,6 +1013,19 @@ static const char *NativeSdkCefBridgeScript() {
         if (self.browsers) {
             auto it = self.browsers->find(windowId);
             if (it != self.browsers->end() && it->second) {
+                // This branch is a close EXIT that never reaches
+                // windowWillClose (the window is ordered out, not
+                // NSWindow-closed), so it must do the delegate's
+                // policy-hidden cleanup itself: leave the set BEFORE the
+                // emit — the frame encoder derives hidden from set
+                // membership, and open=false must never carry
+                // hidden=true — and so the Dock-reopen handler (which
+                // re-shows every set member) can never resurrect a
+                // window the app closed. After this, set membership
+                // implies a live, policy-hidden window: only
+                // hideWindowWithId adds (the user close of a live
+                // window), and every close exit removes.
+                [self.policyHiddenWindows removeObject:@(windowId)];
                 [window orderOut:nil];
                 [self emitWindowFrameForWindowId:windowId open:NO];
                 return;

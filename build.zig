@@ -581,6 +581,17 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/app_runner/root.zig", .pattern = "close_policy \\\"hide\\\" is not supported on linux: the GTK host has no status item (tray), so nothing could bring the hidden window back - declare \\\"quit\\\" (the default), or scope the .hide declaration to macos/windows builds" },
         .{ .path = "src/tooling/templates.zig", .pattern = "close_policy \\\\\\\"hide\\\\\\\" is not supported on linux" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-macos-close-clears-policy-hidden", "Verify every macOS close exit leaves the policy-hidden set before its open=false emit (both hosts derive the frame event's hidden flag from set membership, and the Dock reopen re-shows every member — a close exit that skips the cleanup emits {open=false, hidden=true} and lets the reopen resurrect an app-closed window)", &.{
+        // AppKit: every close routes through NSWindow close/performClose,
+        // so the delegate's windowWillClose is the one cleanup site.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[self.host.policyHiddenWindows removeObject:@(self.windowId)];\n    [self.host emitWindowFrameForWindowId:self.windowId open:NO];" },
+        // CEF: the delegate cleanup covers the [window close] fallback,
+        // and the app-driven close of a browser-bearing window exits
+        // through orderOut WITHOUT reaching windowWillClose — that
+        // branch must do the set cleanup itself, before its emit.
+        .{ .path = "src/platform/macos/cef_host.mm", .pattern = "[self.host.policyHiddenWindows removeObject:@(self.windowId)];\n    [self.host emitWindowFrameForWindowId:self.windowId open:NO];" },
+        .{ .path = "src/platform/macos/cef_host.mm", .pattern = "[self.policyHiddenWindows removeObject:@(windowId)];\n                [window orderOut:nil];\n                [self emitWindowFrameForWindowId:windowId open:NO];" },
+    });
     // The embedded-WebView layer must stay real AND declare-to-use: the
     // standard build graph puts the vendored WebView2 SDK header on the
     // include path exactly when app.zon declares web use (`if

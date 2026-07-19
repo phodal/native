@@ -1831,9 +1831,10 @@ static unsigned long long NativeSdkRegisteredFontTokenCounter = 0;
 // full count limit of keys, each carrying the measured text itself —
 // until memory pressure. NSCache is thread-safe, so unlike the
 // dictionaries above this cache is deliberately NOT confined to the
-// descriptor table's @synchronized guard: measure_text shapes and
-// caches outside the critical section on purpose (see the snapshot
-// comment there).
+// descriptor table's @synchronized guard: measure_text shapes outside
+// the critical section on purpose (see the snapshot comment) and
+// re-enters the guard only to recheck the token before a
+// registered-token write (see the recheck comment in measure_text).
 static NSCache<NSString *, NSNumber *> *NativeSdkMeasuredWidthCache(void) {
     static NSCache<NSString *, NSNumber *> *cache = nil;
     static dispatch_once_t onceToken;
@@ -1855,8 +1856,9 @@ static NSCache<NSString *, NSNumber *> *NativeSdkMeasuredWidthCache(void) {
 // down, when token 0 honestly means built-in resolution. One critical
 // section makes a torn pair unrepresentable; the width computation
 // itself stays outside the lock (see measure_text), because a
-// stale-but-consistent pair is harmless — its widths are keyed by a
-// retired token no future lookup can reach. Returns nil with
+// stale-but-consistent pair is harmless: measure_text rechecks the
+// token under the guard before caching, so a pair retired mid-shape
+// is never even written. Returns nil with
 // *out_token = 0 when the id holds no registration, so token 0 only
 // ever pairs with built-in resolution. (A registered descriptor whose
 // CTFont creation fails also answers nil, under its live token: the
@@ -1999,6 +2001,10 @@ int native_sdk_appkit_unregister_font(uint64_t font_id, uint64_t token) {
             // width it still needs in one measure call. The clear runs
             // only on this token-matched path — a stale-token no-op
             // above must not cost live registrations their warm cache.
+            // A measurement in flight during this teardown cannot
+            // repopulate the cleared cache: measure_text rechecks the
+            // id's token under this same guard before caching, and this
+            // removal already retired the token it snapshotted.
             [NativeSdkMeasuredWidthCache() removeAllObjects];
         }
         return 1;
@@ -2110,13 +2116,38 @@ double native_sdk_appkit_measure_text(uint64_t font_id, double size, const char 
         // A nil snapshot means built-in resolution — with token 0 by the
         // snapshot's contract unless a live descriptor's CTFont creation
         // failed, so token 0 only ever keys built-in widths. Shaping
-        // stays OUTSIDE the critical section: a registration landing
-        // after the snapshot leaves this width stale but consistent,
-        // keyed by the now-retired token no future lookup reaches.
+        // stays OUTSIDE the critical section: a registration or
+        // unregistration landing after the snapshot leaves this width
+        // stale but consistent, and the token recheck below drops the
+        // write instead of caching it.
         NSFont *font = registered ?: NativeSdkBuiltInFontForFontId(font_id, clamped);
         if (!font) return -1;
         double width = [value sizeWithAttributes:@{ NSFontAttributeName : font }].width;
-        [widthCache setObject:@(width) forKey:key];
+        if (token == 0) {
+            // Token 0 is built-in resolution: built-in faces are never
+            // registered, so no unregister can ever clear widths keyed
+            // under it — this write needs no recheck.
+            [widthCache setObject:@(width) forKey:key];
+            return width;
+        }
+        // A registered-token width is cached only after RECHECKING the
+        // token under the guard. Unregister's only possible eviction is
+        // clearing the whole width cache, and shaping ran outside the
+        // critical section: an unconditional write here would land AFTER
+        // that clear whenever the teardown ran inside the shaping window,
+        // repopulating the cleared cache with a retired-token entry — one
+        // no lookup can ever serve (tokens never repeat) but that stays
+        // resident until memory pressure. A mismatch means the
+        // registration was torn down (or replaced) mid-shape — dropping
+        // the write costs one re-measure of a face that is already gone,
+        // and keeps teardown's cleared cache actually clear.
+        NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
+        @synchronized (table) {
+            NSNumber *currentToken = NativeSdkRegisteredFontTokens()[@(font_id)];
+            if (currentToken && currentToken.unsignedLongLongValue == token) {
+                [widthCache setObject:@(width) forKey:key];
+            }
+        }
         return width;
     }
 }

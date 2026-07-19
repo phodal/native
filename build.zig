@@ -849,6 +849,22 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSFont *registered = NativeSdkRegisteredFontSnapshot((unsigned long long)font_id, clamped, &token);" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSFont *font = registered ?: NativeSdkBuiltInFontForFontId(font_id, clamped);" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NSString stringWithFormat:@\"%llu/%llu/%.3f/%@\", (unsigned long long)font_id, token, (double)clamped, value]" },
+        // The width-cache WRITE is token-rechecked. Shaping runs outside
+        // the guard, so an unregister can land inside the shaping window:
+        // it clears the whole width cache (its only possible eviction),
+        // and an unconditional post-shape write would then repopulate the
+        // cleared cache with a retired-token entry — unreachable for
+        // serving (tokens never repeat) but resident until memory
+        // pressure, breaking the zero-retained-state teardown the clear
+        // exists to guarantee. measure_text therefore re-enters the
+        // descriptor guard after shaping and writes only while the id's
+        // current token still equals the snapshotted one; token 0
+        // (built-in resolution — never registered, so never cleared)
+        // caches without the recheck. Both branches are pinned so the
+        // unconditional-write shape cannot quietly return.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (token == 0) {" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSNumber *currentToken = NativeSdkRegisteredFontTokens()[@(font_id)];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (currentToken && currentToken.unsignedLongLongValue == token) {" },
         // The teardown half: Runtime.deinit returns the host-side
         // registration through the unregister owner each font entry
         // captured at registration time (never live `options.platform`,

@@ -1,6 +1,6 @@
 const std = @import("std");
 const android_tool = @import("android.zig");
-const app_icon_tool = @import("app_icon");
+const app_icon_tool = @import("canvas").app_icon;
 const assets_tool = @import("assets.zig");
 const buildgraph = @import("buildgraph.zig");
 const cef = @import("cef.zig");

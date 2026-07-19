@@ -1,5 +1,5 @@
 const std = @import("std");
-const ui_markup = @import("ui_markup");
+const ui_markup = @import("canvas").ui_markup;
 const markup_lsp = @import("markup_lsp");
 
 /// Re-exported for the `native check` verb's src/ walk: true for `.native`.

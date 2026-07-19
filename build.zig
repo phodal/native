@@ -163,12 +163,6 @@ pub fn build(b: *std.Build) void {
 
     const automation_protocol_mod = module(b, target, optimize, "src/automation/protocol.zig");
     const automation_protocol_tests = testArtifact(b, automation_protocol_mod);
-    // The app-icon pipeline as a standalone module: tooling needs only
-    // the vector core + PNG codec slice of canvas, not the full canvas
-    // module (which links platform frameworks on macOS and would weigh
-    // down the cross-compiled CLI).
-    const app_icon_mod = module(b, target, optimize, "src/primitives/canvas/app_icon.zig");
-    app_icon_mod.addImport("geometry", geometry_mod);
     // The iOS and Android host sources as embedded bytes: the tooling
     // module writes and compiles them for `native dev|package --target
     // ios|android`.
@@ -182,7 +176,7 @@ pub fn build(b: *std.Build) void {
     tooling_mod.addImport("debug", debug_mod);
     tooling_mod.addImport("platform_info", platform_info_mod);
     tooling_mod.addImport("trace", trace_mod);
-    tooling_mod.addImport("app_icon", app_icon_mod);
+    tooling_mod.addImport("canvas", canvas_mod);
     tooling_mod.addImport("ios_host", ios_host_mod);
     tooling_mod.addImport("android_host", android_host_mod);
     const tooling_tests = testArtifact(b, tooling_mod);
@@ -204,20 +198,23 @@ pub fn build(b: *std.Build) void {
     // against a hand-written emitted-ABI core).
     const ts_core_e2e_tests = tsCoreE2eArtifact(b, target, optimize, desktop_mod, tooling_mod);
 
-    const ui_markup_mod = module(b, target, optimize, "src/primitives/canvas/ui_markup.zig");
     const markup_lsp_mod = module(b, target, optimize, "tools/native-sdk/markup_lsp.zig");
-    markup_lsp_mod.addImport("ui_markup", ui_markup_mod);
+    markup_lsp_mod.addImport("canvas", canvas_mod);
     const markup_lsp_tests = testArtifact(b, markup_lsp_mod);
 
     const automation_cli_mod = module(b, target, optimize, "tools/native-sdk/automation.zig");
     automation_cli_mod.addImport("automation_protocol", automation_protocol_mod);
-    automation_cli_mod.addImport("ui_markup", ui_markup_mod);
+    automation_cli_mod.addImport("canvas", canvas_mod);
     const automation_cli_tests = testArtifact(b, automation_cli_mod);
 
     const markup_cli_mod = module(b, target, optimize, "tools/native-sdk/markup.zig");
-    markup_cli_mod.addImport("ui_markup", ui_markup_mod);
+    markup_cli_mod.addImport("canvas", canvas_mod);
     markup_cli_mod.addImport("markup_lsp", markup_lsp_mod);
     const markup_cli_tests = testArtifact(b, markup_cli_mod);
+
+    const svg_cli_mod = module(b, target, optimize, "tools/native-sdk/svg.zig");
+    svg_cli_mod.addImport("canvas", canvas_mod);
+    const svg_cli_tests = testArtifact(b, svg_cli_mod);
 
     // `native version` names the commit the binary was built from, so
     // binary/framework skew ("your native binary may be stale") is a
@@ -228,8 +225,8 @@ pub fn build(b: *std.Build) void {
     const cli_mod = module(b, target, optimize, "tools/native-sdk/main.zig");
     cli_mod.addImport("tooling", tooling_mod);
     cli_mod.addImport("automation_protocol", automation_protocol_mod);
-    cli_mod.addImport("ui_markup", ui_markup_mod);
     cli_mod.addImport("markup_lsp", markup_lsp_mod);
+    cli_mod.addImport("canvas", canvas_mod);
     cli_mod.addOptions("cli_build_info", cli_build_info);
     const cli_exe = b.addExecutable(.{
         .name = "native",
@@ -256,8 +253,16 @@ pub fn build(b: *std.Build) void {
     host_debug_mod.addImport("trace", host_trace_mod);
     const host_automation_protocol_mod = module(b, host_target, optimize, "src/automation/protocol.zig");
     const host_geometry_mod = module(b, host_target, optimize, "src/primitives/geometry/root.zig");
-    const host_app_icon_mod = module(b, host_target, optimize, "src/primitives/canvas/app_icon.zig");
-    host_app_icon_mod.addImport("geometry", host_geometry_mod);
+    const host_json_mod = module(b, host_target, optimize, "src/primitives/json/root.zig");
+    const host_canvas_mod = module(b, host_target, optimize, "src/primitives/canvas/root.zig");
+    host_canvas_mod.addImport("geometry", host_geometry_mod);
+    host_canvas_mod.addImport("json", host_json_mod);
+    if (host_target.result.os.tag == .macos) {
+        host_canvas_mod.linkFramework("CoreFoundation", .{});
+        host_canvas_mod.linkFramework("CoreGraphics", .{});
+        host_canvas_mod.linkFramework("CoreText", .{});
+        host_canvas_mod.linkSystemLibrary("c", .{});
+    }
     const host_ios_host_mod = module(b, host_target, optimize, "src/platform/ios/files.zig");
     const host_android_host_mod = module(b, host_target, optimize, "src/platform/android/files.zig");
     const host_tooling_mod = module(b, host_target, optimize, "src/tooling/root.zig");
@@ -268,17 +273,16 @@ pub fn build(b: *std.Build) void {
     host_tooling_mod.addImport("debug", host_debug_mod);
     host_tooling_mod.addImport("platform_info", host_platform_info_mod);
     host_tooling_mod.addImport("trace", host_trace_mod);
-    host_tooling_mod.addImport("app_icon", host_app_icon_mod);
+    host_tooling_mod.addImport("canvas", host_canvas_mod);
     host_tooling_mod.addImport("ios_host", host_ios_host_mod);
     host_tooling_mod.addImport("android_host", host_android_host_mod);
-    const host_ui_markup_mod = module(b, host_target, optimize, "src/primitives/canvas/ui_markup.zig");
     const host_markup_lsp_mod = module(b, host_target, optimize, "tools/native-sdk/markup_lsp.zig");
-    host_markup_lsp_mod.addImport("ui_markup", host_ui_markup_mod);
+    host_markup_lsp_mod.addImport("canvas", host_canvas_mod);
     const host_cli_mod = module(b, host_target, optimize, "tools/native-sdk/main.zig");
     host_cli_mod.addImport("tooling", host_tooling_mod);
     host_cli_mod.addImport("automation_protocol", host_automation_protocol_mod);
-    host_cli_mod.addImport("ui_markup", host_ui_markup_mod);
     host_cli_mod.addImport("markup_lsp", host_markup_lsp_mod);
+    host_cli_mod.addImport("canvas", host_canvas_mod);
     host_cli_mod.addOptions("cli_build_info", cli_build_info);
     const host_cli_exe = b.addExecutable(.{
         .name = "native",
@@ -438,6 +442,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(markup_lsp_tests).step);
     test_step.dependOn(&b.addRunArtifact(automation_cli_tests).step);
     test_step.dependOn(&b.addRunArtifact(markup_cli_tests).step);
+    test_step.dependOn(&b.addRunArtifact(svg_cli_tests).step);
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-package-types", "Verify package TypeScript platform feature names", &.{
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "NativeSdkCommandInfo" },
         .{ .path = "packages/native-sdk/native-sdk.d.ts", .pattern = "list(): Promise<NativeSdkCommandInfo[]>" },
@@ -1021,6 +1026,7 @@ pub fn build(b: *std.Build) void {
     addTestStep(b, "test-canvas-fonts", "Run the runtime font-registry tests (includes the registered-CJK Chinese receipt)", filteredTestArtifact(b, desktop_mod, "canvas-fonts-tests", &.{"runtime.canvas_font_tests.test"}));
     addTestStep(b, "test-automation-protocol", "Run automation protocol tests", automation_protocol_tests);
     addTestStep(b, "test-automation-cli", "Run native automate CLI tests", automation_cli_tests);
+    addTestStep(b, "test-svg-cli", "Run native SVG converter CLI tests", svg_cli_tests);
     addTestStep(b, "test-markup-cli", "Run native markup CLI tests", markup_cli_tests);
     addTestStep(b, "test-tooling", "Run Native SDK tooling tests", tooling_tests);
     addTestStep(b, "test-eject-components", "Run ejected-component widget-identity tests", eject_components_tests);

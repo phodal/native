@@ -91,6 +91,35 @@ Read the full guide at [native-sdk.dev/quick-start](https://native-sdk.dev/quick
 
 **AI is part of the workflow** — Native SDK is designed for a world where humans and AI agents build software together. Every app embeds an automation server, so any agent can read accessibility snapshots, drive widgets, assert on live state, and take deterministic screenshots of the running window; accessibility findings are machine-checked in `native check`; and the CLI ships the agent skills that teach all of it (`native skills list`).
 
+**Portable scenes** — The renderer is also usable as infrastructure. A versioned `native.canvas.scene` JSON document carries a complete display list and its deterministic image and font resources, independent of any app model or platform host. Paths, gradients, text outlines, transforms, rounded clips, opacity, shadows, images, and effects all cross the same boundary, so one producer can target the built-in SVG exporter today and additional exporters later.
+
+## Canvas scene conversion
+
+The CLI converts a portable scene without launching an application:
+
+```bash
+native svg render scene.json -o interface.svg
+```
+
+`--mode vector` requires a fully editable vector result. The default `--mode auto` keeps portable commands as vectors and uses the deterministic reference renderer only when an effect, such as backdrop blur, has no faithful SVG equivalent. Missing image resources fail by default; `--missing-images omit` makes omission explicit.
+
+Use `-` for either path to compose the converter in a pipeline: `producer | native svg render - -o - | consumer`.
+
+The stable envelope is intentionally small and language-neutral. `displayList` uses the same JSON command representation emitted by `DisplayList.writeJson`, while `resources` embeds raw RGBA images and TrueType fonts as base64:
+
+```json
+{
+  "schema": "native.canvas.scene",
+  "version": 1,
+  "width": 800,
+  "height": 600,
+  "displayList": { "commands": [] },
+  "resources": { "images": [], "fonts": [] }
+}
+```
+
+Zig callers can stay in memory with `canvas.writeSceneJson`, `canvas.parseSceneJson`, and `canvas.writeSvg`. The JSON boundary is for tools, build systems, and producers written in other languages; it is not required inside a Native SDK app.
+
 ## Examples
 
 The apps pictured above live in [examples/](./examples), most as zero-config projects — `app.zon` plus `src/`, no build files — run straight from their directory with `native dev`.

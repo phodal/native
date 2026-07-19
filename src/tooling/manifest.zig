@@ -1,5 +1,5 @@
 const std = @import("std");
-const app_icon_tool = @import("app_icon");
+const app_icon_tool = @import("canvas").app_icon;
 const app_manifest = @import("app_manifest");
 const diagnostics = @import("diagnostics");
 const raw_manifest = @import("raw_manifest.zig");

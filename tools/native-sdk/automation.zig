@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const protocol = @import("automation_protocol");
-const ui_markup = @import("ui_markup");
+const ui_markup = @import("canvas").ui_markup;
 
 const automation_dir = protocol.default_dir;
 

@@ -21,7 +21,7 @@
 //! whole server through fixed buffers) and `std.json` for messages.
 
 const std = @import("std");
-const ui_markup = @import("ui_markup");
+const ui_markup = @import("canvas").ui_markup;
 
 pub const server_name = "native-sdk-markup-lsp";
 pub const server_version = "0.1.0";

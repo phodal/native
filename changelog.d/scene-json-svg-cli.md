@@ -1,0 +1,1 @@
+feature: **Portable canvas scene protocol and SVG CLI**: a versioned `native.canvas.scene` JSON document now round-trips every display-list command plus deterministic RGBA image and TrueType font resources, and `native svg render scene.json -o output.svg` converts it with explicit vector, automatic, raster, and missing-image policies.

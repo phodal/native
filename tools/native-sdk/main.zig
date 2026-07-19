@@ -1,6 +1,7 @@
 const std = @import("std");
 const automation_cli = @import("automation.zig");
 const markup_cli = @import("markup.zig");
+const svg_cli = @import("svg.zig");
 const skills_cli = @import("skills.zig");
 const tooling = @import("tooling");
 const automation_protocol = @import("automation_protocol");
@@ -131,6 +132,8 @@ pub fn main(init: std.process.Init) !void {
         };
     } else if (std.mem.eql(u8, command, "markup")) {
         try markup_cli.run(allocator, init.io, args[2..]);
+    } else if (std.mem.eql(u8, command, "svg")) {
+        svg_cli.run(allocator, init.io, args[2..]) catch std.process.exit(1);
     } else if (std.mem.eql(u8, command, "validate")) {
         checkVerbFlags("validate", args[2..], .{ .usage = "validate [app.zon]" });
         const path = if (args.len >= 3) args[2] else "app.zon";
@@ -396,6 +399,7 @@ fn usage() void {
         \\  package-ios [--output path] [--binary path]
         \\  package-android [--output path] [--binary path]
         \\  markup check <file.native> [more files...] [--strict] | markup dump <file.native> [--out doc.nsui] | markup lsp
+        \\  svg render <scene.json> -o <output.svg> [--mode auto|vector|raster] [--missing-images fail|omit]
         \\  automate <command>
         \\  skills list|get
         \\  version

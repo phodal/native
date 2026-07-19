@@ -809,6 +809,100 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkItalicSansFont(base)" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkItalicSansFont(NativeSdkWeightedSansFont(@[ @\"Geist-Bold\", @\"Geist Bold\" ], base, NSFontWeightBold, YES, size))" },
     });
+    addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-registered-font-cache-eviction", "Verify the AppKit host invalidates BOTH per-process registered-font caches at registration (the caches are per-process while font-id permanence is per-runtime, so a new runtime re-registering an id must never resolve the previous runtime's face or its measured widths): the NSFont size cache by prefix eviction and the measured-width NSCache by a process-global registration token in its key", &.{
+        // No SDK test tier links appkit_host.m (only managed app builds
+        // compile it), so the eviction wiring is pinned textually like
+        // the other AppKit host contracts: the shared accessor both the
+        // resolve and registration paths use, the prefix eviction inside
+        // register_font, and the honest lifetime comment.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSMutableDictionary<NSString *, NSFont *> *NativeSdkRegisteredFontSizeCache(void)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSString *stalePrefix = [NSString stringWithFormat:@\"%llu/\", (unsigned long long)font_id];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if ([cachedKey hasPrefix:stalePrefix]) [sizeCache removeObjectForKey:cachedKey];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "an id is only permanent within" },
+        // The width-cache half: NSCache cannot enumerate keys, so the
+        // measured-width cache is invalidated by a registration token
+        // drawn from one process-global monotonic counter (tokens never
+        // repeat, which is what lets unregister DELETE an id's record
+        // instead of retaining a bumped one per retired id) — the token
+        // table, the fresh stamp inside register_font, and the
+        // token-carrying key inside measure_text.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSMutableDictionary<NSNumber *, NSNumber *> *NativeSdkRegisteredFontTokens(void)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "unsigned long long token = ++NativeSdkRegisteredFontTokenCounter;" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkRegisteredFontTokens()[@(font_id)] = @(token);" },
+        // The stamp is also the registration's OWNERSHIP token: register
+        // reports it to the caller (`*out_token`), the runtime stores it
+        // beside the captured unregister owner, and unregister removes
+        // the id's state only while the id's current registration still
+        // carries it — an older runtime's deinit must never tear down a
+        // newer runtime's live face under a shared id (ids are
+        // per-runtime, host font state is per-process, last wins).
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "*out_token = token;" },
+        // The token and the registered face reach measure_text from ONE
+        // critical section (the snapshot helper): separate acquisitions
+        // let a registration land between the token read and the face
+        // resolution, pairing token 0 with the new registered face and
+        // caching registered widths under the reusable token-0 key —
+        // stale registered widths served after teardown. The snapshot
+        // signature and its measure_text call site are pinned so the
+        // two-acquisition shape cannot quietly return.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSFont *NativeSdkRegisteredFontSnapshot(unsigned long long value, CGFloat size, unsigned long long *out_token)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSFont *registered = NativeSdkRegisteredFontSnapshot((unsigned long long)font_id, clamped, &token);" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSFont *font = registered ?: NativeSdkBuiltInFontForFontId(font_id, clamped);" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NSString stringWithFormat:@\"%llu/%llu/%.3f/%@\", (unsigned long long)font_id, token, (double)clamped, value]" },
+        // The width-cache WRITE is token-rechecked. Shaping runs outside
+        // the guard, so an unregister can land inside the shaping window:
+        // it clears the whole width cache (its only possible eviction),
+        // and an unconditional post-shape write would then repopulate the
+        // cleared cache with a retired-token entry — unreachable for
+        // serving (tokens never repeat) but resident until memory
+        // pressure, breaking the zero-retained-state teardown the clear
+        // exists to guarantee. measure_text therefore re-enters the
+        // descriptor guard after shaping and writes only while the id's
+        // current token still equals the snapshotted one; token 0
+        // (built-in resolution — never registered, so never cleared)
+        // caches without the recheck. Both branches are pinned so the
+        // unconditional-write shape cannot quietly return.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (token == 0) {" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSNumber *currentToken = NativeSdkRegisteredFontTokens()[@(font_id)];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (currentToken && currentToken.unsignedLongLongValue == token) {" },
+        // The teardown half: Runtime.deinit returns the host-side
+        // registration through the unregister owner each font entry
+        // captured at registration time (never live `options.platform`,
+        // which is publicly mutable), and the ObjC removal drops the
+        // descriptor, the size-cache entries, AND the token record —
+        // zero retained state per retired id. Pinned like the
+        // registration half (appkit_host.m has no SDK test tier); the
+        // capture and the deinit call site are pinned too so the seam
+        // can never silently lose its one caller or regress to the live
+        // read, and the embed cycle and platform-swap tests assert both
+        // behaviorally against null platform recorders.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "int native_sdk_appkit_unregister_font(uint64_t font_id, uint64_t token) {" },
+        // The token-match guard itself: reverting removal to id-keyed
+        // (deleting whatever the id currently holds, whoever registered
+        // it) must fail here — the embed suite's survives-teardown test
+        // pins the same guard behaviorally against the null platform's
+        // host-font mirror.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (!current || current.unsignedLongLongValue != token) return 1;" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NativeSdkRegisteredFontTokens() removeObjectForKey:@(font_id)];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[table removeObjectForKey:@(font_id)];" },
+        // Teardown must also CLEAR the measured-width NSCache: a
+        // retiring token's entries can never be served again (tokens
+        // never repeat) but they stay resident until memory pressure,
+        // and NSCache cannot enumerate keys, so the whole-cache clear on
+        // the token-matched path is the only release. Pinned textually
+        // because no behavioral tier can observe it — only managed app
+        // builds compile appkit_host.m, so no SDK test can watch the
+        // ObjC cache empty. The shared accessor and its measure_text
+        // call site are pinned with the clear so the cache cannot
+        // quietly retreat to a function-local static the unregister
+        // path has no way to reach.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSCache<NSString *, NSNumber *> *NativeSdkMeasuredWidthCache(void)" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NativeSdkMeasuredWidthCache() removeAllObjects];" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NSCache<NSString *, NSNumber *> *widthCache = NativeSdkMeasuredWidthCache();" },
+        .{ .path = "src/runtime/canvas_fonts.zig", .pattern = ".host_unregister_fn = services.unregister_gpu_surface_font_fn," },
+        .{ .path = "src/runtime/canvas_fonts.zig", .pattern = ".host_registration_token = host_token," },
+        .{ .path = "src/runtime/core.zig", .pattern = "host_unregister_fn(entry.host_unregister_context, entry.id, entry.host_registration_token) catch {};" },
+    });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "native_sdk_appkit_set_view_cursor" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "resetCursorRects" },
@@ -916,6 +1010,15 @@ pub fn build(b: *std.Build) void {
     for (desktop_test_shard_specs, desktop_test_shards) |spec, shard_tests| {
         addTestStep(b, b.fmt("test-desktop-{s}", .{spec.name}), spec.description, shard_tests);
     }
+    // The font-registry suite as its own step so CI lanes on real
+    // Windows hardware can run it natively: the whole font pipeline
+    // (TrueType parsing, glyph rasterization, the reference renderer)
+    // is platform-neutral Zig, and this suite's Chinese-receipt test
+    // registers a committed CJK face through the app-fonts seam and
+    // proves the rendered string is real glyphs, not tofu — running it
+    // on a Windows runner makes that a Windows-native receipt. The same
+    // tests also run inside `zig build test` via the canvas-frame shard.
+    addTestStep(b, "test-canvas-fonts", "Run the runtime font-registry tests (includes the registered-CJK Chinese receipt)", filteredTestArtifact(b, desktop_mod, "canvas-fonts-tests", &.{"runtime.canvas_font_tests.test"}));
     addTestStep(b, "test-automation-protocol", "Run automation protocol tests", automation_protocol_tests);
     addTestStep(b, "test-automation-cli", "Run native automate CLI tests", automation_cli_tests);
     addTestStep(b, "test-markup-cli", "Run native markup CLI tests", markup_cli_tests);

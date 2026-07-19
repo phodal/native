@@ -75,6 +75,34 @@ pub const max_registered_canvas_font_bytes = canvas_limits.max_registered_canvas
 pub const CanvasFontEntry = struct {
     id: canvas.FontId = 0,
     bytes: []const u8 = &.{},
+    /// The host-side unregistration owner — the platform's
+    /// `unregister_gpu_surface_font_fn` and its context, captured from
+    /// the services in effect when THIS registration was pushed to the
+    /// host. Captured precisely because `Runtime.options` is public and
+    /// mutable while registration and teardown can be a whole runtime
+    /// lifetime apart: the registration must be returned to the host
+    /// that received it, so `Runtime.deinit` unregisters through this
+    /// captured pair and mutating `options.platform` on a live runtime
+    /// retargets nothing (the `owned_allocator` identity-freeze
+    /// doctrine, applied to the host seam — a deinit that read the live
+    /// options would unregister against whatever platform the option
+    /// points at by teardown time, stranding the original host's
+    /// descriptor and caches). Null when the platform at registration
+    /// time had no unregister seam: it retained nothing to return.
+    host_unregister_fn: ?*const fn (context: ?*anyopaque, id: u64, token: u64) anyerror!void = null,
+    host_unregister_context: ?*anyopaque = null,
+    /// The host's ownership token for THIS registration, returned by
+    /// `registerGpuSurfaceFont` and passed back through the owner above
+    /// at deinit. Host font state is per-process while ids are only
+    /// permanent per-runtime, so a later runtime may re-register this
+    /// entry's id (last wins, the documented lifecycle); the host
+    /// removes an id's state only while its current registration still
+    /// carries the presented token, which keeps an older runtime's
+    /// deinit from tearing down a newer runtime's live face. 0 when the
+    /// platform returned no token (a stateless accept, or no register
+    /// seam at all): nothing was installed for this registration, and
+    /// an unregister carrying 0 removes nothing.
+    host_registration_token: u64 = 0,
 };
 
 /// Placeholder measure fn for the runtime's font-aware provider field
@@ -151,16 +179,38 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
             // exact silent fallback this seam forbids. Platforms without
             // host-side text may lack the seam (`UnsupportedService`):
             // the engine measures with the parsed face and inks it
-            // through the reference renderer, so nothing is lost.
-            self.options.platform.services.registerGpuSurfaceFont(.{ .id = id, .ttf = pooled }) catch |err| switch (err) {
-                error.UnsupportedService => {
-                    if (self.options.platform.services.measure_text_fn != null) return error.FontHostRegistrationUnsupported;
+            // through the reference renderer, so nothing is lost. ONE
+            // services read serves both the sync and the captured return
+            // path below, so the host that hears the registration is the
+            // host the entry's unregister owner names.
+            const services = self.options.platform.services;
+            // The returned token is the host's ownership handle for THIS
+            // registration (0 when the host retained nothing); it rides
+            // the entry beside the captured owner so deinit can tell the
+            // host which registration to remove — see
+            // `CanvasFontEntry.host_registration_token`.
+            const host_token: u64 = services.registerGpuSurfaceFont(.{ .id = id, .ttf = pooled }) catch |err| switch (err) {
+                error.UnsupportedService => blk: {
+                    if (services.measure_text_fn != null) return error.FontHostRegistrationUnsupported;
+                    break :blk 0;
                 },
                 else => return err,
             };
 
             self.canvas_font_faces[index] = face;
-            self.canvas_font_entries[index] = .{ .id = id, .bytes = pooled };
+            // The entry carries its own host unregistration owner,
+            // captured now (see `CanvasFontEntry.host_unregister_fn`):
+            // `options.platform` is publicly mutable, and the teardown
+            // return must land on the host that received this
+            // registration, never on whatever platform the option holds
+            // by `Runtime.deinit` time.
+            self.canvas_font_entries[index] = .{
+                .id = id,
+                .bytes = pooled,
+                .host_unregister_fn = services.unregister_gpu_surface_font_fn,
+                .host_unregister_context = services.context,
+                .host_registration_token = host_token,
+            };
             self.canvas_font_count = index + 1;
             // Bind the font-aware measure provider on first registration.
             // The runtime address is stable from here on (registration
@@ -250,7 +300,12 @@ pub fn RuntimeCanvasFonts(comptime Runtime: type) type {
         /// A face joined the registry: force every gpu_surface view to
         /// re-render its next frame (text referencing the id may already
         /// be retained) and request frames so the repaint is not gated on
-        /// other input — the image-registry choreography.
+        /// other input — the image-registry choreography. Re-rendering
+        /// alone re-inks RETAINED geometry; installed UiApps complete the
+        /// late-registration story by comparing the registered count on
+        /// each presented frame and rebuilding every surface so layout
+        /// re-measures with the new face (ui_app.zig,
+        /// `rebuildForRegisteredFonts`).
         fn noteCanvasFontsChanged(self: *Runtime) void {
             // A new face changes what the measurement seam answers for
             // its id (host providers just learned the face; the engine

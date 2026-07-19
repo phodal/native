@@ -510,8 +510,8 @@ test "a registered face renders pixel-identically on the present path and the re
 
 // ------------------------------------------------ UiApp Options.fonts
 
-const FontAppModel = struct { presses: u32 = 0 };
-const FontAppMsg = union(enum) { press: void };
+const FontAppModel = struct { presses: u32 = 0, show_uncovered_cjk: bool = false };
+const FontAppMsg = union(enum) { press: void, show_uncovered_cjk: void };
 const FontApp = ui_app_model.UiApp(FontAppModel, FontAppMsg);
 
 const font_app_canvas_label = "canvas";
@@ -519,6 +519,7 @@ const font_app_canvas_label = "canvas";
 fn fontAppUpdate(model: *FontAppModel, msg: FontAppMsg) void {
     switch (msg) {
         .press => model.presses += 1,
+        .show_uncovered_cjk => model.show_uncovered_cjk = true,
     }
 }
 
@@ -640,6 +641,442 @@ test "ui app declared font failures are teaching errors, not crashes or silent f
     } });
     try std.testing.expect(app_state.installed);
     try std.testing.expectEqual(first_errors, harness.runtime.dispatchErrorTotal());
+}
+
+// ---------------------------------------------- the Chinese receipt
+
+/// Committed CJK fixture: Noto Sans SC (OFL — the license rides beside
+/// the file in testdata/fonts/OFL.txt), instanced at wght=400 from the
+/// Google Fonts variable TrueType build and subsetted to exactly the
+/// receipt string's four ideographs plus notdef (2.2 KB — the license
+/// permits subsetting; full font binaries stay out of the repo). The
+/// subset keeps the format-4 unicode cmap, real `glyf` outlines, and
+/// the full font's truthful `maxp` declaration (584 points / 84
+/// contours — past the old Latin-sized budgets, inside the CJK-sized
+/// ones), so registration exercises the real gate and rendering inks
+/// real Han ideograph outlines, deterministically, on every CI host.
+const cjk_receipt_bytes = @embedFile("testdata/fonts/NotoSansSC-Receipt.ttf");
+
+/// 你好世界 — "Hello, world".
+const cjk_receipt_text = "\u{4F60}\u{597D}\u{4E16}\u{754C}";
+
+/// 中文字体 — "Chinese font": four ideographs the subsetted fixture
+/// face deliberately does NOT map (the subset carries exactly the
+/// receipt string's four glyphs plus notdef; the test pins the gap
+/// with glyphIndex() == 0 before relying on it). Rendered with the
+/// SAME registered face, this string can only draw four notdef boxes
+/// — the self-calibrating tofu baseline the receipt compares against.
+const cjk_uncovered_text = "\u{4E2D}\u{6587}\u{5B57}\u{4F53}";
+
+fn cjkAppView(ui: *FontApp.Ui, model: *const FontAppModel) FontApp.Ui.Node {
+    return ui.column(.{ .gap = 8, .padding = 12 }, .{
+        ui.text(.{}, if (model.show_uncovered_cjk) cjk_uncovered_text else cjk_receipt_text),
+    });
+}
+
+test "the Chinese receipt: a scaffold-shaped app registers a CJK face and renders real glyphs, not tofu" {
+    const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 200) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    // The scaffold shape: fonts declared on Options.fonts, tokens
+    // pointing the typography face slot at the registered id, Chinese
+    // text in the view.
+    const fonts = [_]FontApp.FontRegistration{.{
+        .id = registered_font_id,
+        .name = "NotoSansSC-Receipt.ttf",
+        .ttf = cjk_receipt_bytes,
+    }};
+    var options = fontAppOptions(&fonts);
+    options.view = cjkAppView;
+    const app_state = try std.testing.allocator.create(FontApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = FontApp.init(std.testing.allocator, .{}, options);
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.dispatchErrors().len);
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.registeredCanvasFontCount());
+
+    // Per-glyph receipt: every ideograph resolves to its own real glyph
+    // in the registered face (the bundled face maps NONE of them — the
+    // exact gap the registration closes) and rasterizes with nonzero
+    // ink at body and headline sizes.
+    const face = harness.runtime.registeredCanvasFontFace(registered_font_id).?;
+    const InkCounter = struct {
+        covered: usize = 0,
+        pub fn pixel(self: *@This(), x: i32, y: i32, coverage: f32) void {
+            _ = x;
+            _ = y;
+            if (coverage > 0) self.covered += 1;
+        }
+    };
+    var seen_glyphs: [4]u16 = undefined;
+    var index: usize = 0;
+    var glyph_count: usize = 0;
+    while (index < cjk_receipt_text.len) : (glyph_count += 1) {
+        const len = try std.unicode.utf8ByteSequenceLength(cjk_receipt_text[index]);
+        const codepoint = try std.unicode.utf8Decode(cjk_receipt_text[index .. index + len]);
+        index += len;
+
+        try std.testing.expectEqual(@as(u16, 0), canvas.font_ttf.geist_regular.glyphIndex(codepoint));
+        const glyph = face.glyphIndex(codepoint);
+        try std.testing.expect(glyph != 0);
+        // cmap distinguishes the codepoints — four ideographs, four
+        // distinct glyphs, never one shared fallback shape.
+        for (seen_glyphs[0..glyph_count]) |seen| try std.testing.expect(seen != glyph);
+        seen_glyphs[glyph_count] = glyph;
+
+        for ([_]f32{ 16, 40 }) |size| {
+            const scale = size / face.units_per_em;
+            var builder = canvas.vector.PathBuilder(2048){};
+            try face.glyphOutline(glyph, .{ .a = scale, .b = 0, .c = 0, .d = -scale, .tx = 4, .ty = size }, &builder);
+            try std.testing.expect(builder.slice().len > 0);
+            var counter = InkCounter{};
+            try canvas.vector.fillPath(
+                builder.slice(),
+                canvas.Affine.identity(),
+                .nonzero,
+                canvas.vector.default_tolerance,
+                .{ .x0 = 0, .y0 = 0, .x1 = 64, .y1 = 64 },
+                &counter,
+            );
+            try std.testing.expect(counter.covered > 0);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 4), glyph_count);
+
+    // Layout measures the ideographs with the registered face's own
+    // advances, so measured line breaking agrees with the inked glyphs.
+    const provider = harness.runtime.textMeasureProvider().?;
+    try std.testing.expect(provider.measureWidth(registered_font_id, 16.0, cjk_receipt_text) > 0);
+
+    // End-to-end pixels through the deterministic reference renderer —
+    // the same path Windows and Linux present. The registered face
+    // draws the string as real outlines; the same view under the
+    // bundled face can only draw notdef boxes, so the two screenshots
+    // MUST differ. That difference is the receipt: the Chinese text on
+    // screen came from the registered face, not tofu.
+    const registered_shot = try fontFixtureScreenshot(harness, std.testing.allocator, registered_font_id);
+    defer std.testing.allocator.free(registered_shot);
+    const tofu_shot = try fontFixtureScreenshot(harness, std.testing.allocator, canvas.default_sans_font_id);
+    defer std.testing.allocator.free(tofu_shot);
+    var nonblank = false;
+    var pixel: usize = 0;
+    while (pixel + 4 <= registered_shot.len) : (pixel += 4) {
+        if (registered_shot[pixel + 3] != 0 and (registered_shot[pixel] != 0 or registered_shot[pixel + 1] != 0 or registered_shot[pixel + 2] != 0)) {
+            nonblank = true;
+            break;
+        }
+    }
+    try std.testing.expect(nonblank);
+    try std.testing.expect(!std.mem.eql(u8, registered_shot, tofu_shot));
+
+    // Self-calibrating tofu control: the bundled-face comparison above
+    // proves the pixels changed with the face, not that they are real
+    // ideographs — a renderer that wrongly resolved every ideograph to
+    // the REGISTERED face's notdef glyph and inked that glyph's own
+    // outline would still differ from the bundled shot (a different
+    // face's fallback pixels) and still pass nonblank. Render the same
+    // view with the same registered face showing a string the fixture
+    // face genuinely does not cover — first pinning that gap per
+    // codepoint — so the control shot IS this face's
+    // everything-uncovered rendering through the identical pipeline.
+    // Had the receipt string resolved to notdef, the two shots would
+    // match: same face, same per-glyph fallback, same advances.
+    // Differing proves the receipt pixels are real ideograph outlines,
+    // not any face's fallback.
+    var uncovered_index: usize = 0;
+    while (uncovered_index < cjk_uncovered_text.len) {
+        const len = try std.unicode.utf8ByteSequenceLength(cjk_uncovered_text[uncovered_index]);
+        const codepoint = try std.unicode.utf8Decode(cjk_uncovered_text[uncovered_index .. uncovered_index + len]);
+        uncovered_index += len;
+        try std.testing.expectEqual(@as(u16, 0), face.glyphIndex(codepoint));
+    }
+    try app_state.dispatch(&harness.runtime, 1, .show_uncovered_cjk);
+    const uncovered_shot = try fontFixtureScreenshot(harness, std.testing.allocator, registered_font_id);
+    defer std.testing.allocator.free(uncovered_shot);
+    try std.testing.expect(!std.mem.eql(u8, registered_shot, uncovered_shot));
+}
+
+// ------------------- late registration re-measures installed layouts
+
+/// 你好 SDK — mixed CJK + Latin, chosen so the measured width MUST move
+/// when the fixture face joins late. Pure-CJK width would not move: the
+/// bundled estimator's East Asian wide fallback charges 1.0 em and the
+/// fixture's ideographs really advance 1.0 em. The Latin tail is what
+/// moves — the estimator charges Geist's own sub-em ASCII advances,
+/// while the fixture face (subsetted to four ideographs plus notdef)
+/// answers every ASCII codepoint with its 1.0 em notdef advance, the
+/// documented no-cascade fallback registered faces take for uncovered
+/// codepoints.
+const late_mixed_text = "\u{4F60}\u{597D} SDK";
+
+const late_window_label = "late-panel";
+const late_window_canvas_label = "late-panel-canvas";
+
+fn lateFontAppView(ui: *FontApp.Ui, model: *const FontAppModel) FontApp.Ui.Node {
+    _ = model;
+    // A row lays text out at its MEASURED intrinsic width (a column's
+    // default cross alignment stretches children to the column width),
+    // so this widget's frame is a direct function of what the
+    // measurement seam answers for the string.
+    return ui.row(.{ .gap = 8, .padding = 12 }, .{
+        ui.text(.{}, late_mixed_text),
+    });
+}
+
+fn lateFontAppWindows(model: *const FontAppModel, scratch: *FontApp.WindowsScratch) []const FontApp.WindowDescriptor {
+    _ = model;
+    scratch.windows[0] = .{
+        .label = late_window_label,
+        .canvas_label = late_window_canvas_label,
+        .title = "Late",
+        .width = 240,
+        .height = 200,
+    };
+    return scratch.windows[0..1];
+}
+
+fn lateFontAppWindowView(ui: *FontApp.Ui, model: *const FontAppModel, window_label: []const u8) FontApp.Ui.Node {
+    std.debug.assert(std.mem.eql(u8, window_label, late_window_label));
+    return lateFontAppView(ui, model);
+}
+
+/// The laid-out frame width of the view's one text widget.
+fn lateTextFrameWidth(runtime: *core.Runtime, window_id: platform.WindowId, label: []const u8) !f32 {
+    const layout = try runtime.canvasWidgetLayout(window_id, label);
+    for (layout.nodes) |node| {
+        if (node.widget.kind == .text and std.mem.eql(u8, node.widget.text, late_mixed_text)) return node.widget.frame.width;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "a face registered after install re-measures every installed surface's layout" {
+    const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 200) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    // No declared fonts: the app installs measuring registered_font_id
+    // (the tokens' face slot) through the bundled estimator, the exact
+    // pre-registration state the fonts page's late-registration promise
+    // starts from. A declared secondary window pins the multi-surface
+    // half of the promise.
+    var options = fontAppOptions(&.{});
+    options.view = lateFontAppView;
+    options.windows_fn = lateFontAppWindows;
+    options.window_view = lateFontAppWindowView;
+    const app_state = try std.testing.allocator.create(FontApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = FontApp.init(std.testing.allocator, .{}, options);
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+
+    // The always-declared panel window opened during the installing
+    // rebuild's window reconcile; its own first frame installs its tree.
+    const panel_id = blk: {
+        var buffer: [platform.max_windows]platform.WindowInfo = undefined;
+        for (harness.runtime.listWindows(&buffer)) |info| {
+            if (std.mem.eql(u8, info.label, late_window_label)) break :blk info.id;
+        }
+        return error.TestUnexpectedResult;
+    };
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .window_id = panel_id,
+        .label = late_window_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 2_000_000,
+        .nonblank = true,
+    } });
+
+    const main_before = try lateTextFrameWidth(&harness.runtime, 1, font_app_canvas_label);
+    const panel_before = try lateTextFrameWidth(&harness.runtime, panel_id, late_window_canvas_label);
+    try std.testing.expectEqual(main_before, panel_before);
+
+    // Late registration through the runtime seam — the embedder path the
+    // fonts page documents under the `Options.fonts` sugar.
+    try harness.runtime.registerCanvasFont(registered_font_id, cjk_receipt_bytes);
+
+    // The registration requested a frame for every open surface; ONE
+    // arriving frame (the main canvas's here — arrival order is the
+    // platform's) must re-measure every installed surface, not just the
+    // surface whose frame landed.
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 2,
+        .timestamp_ns = 3_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(@as(usize, 0), harness.runtime.dispatchErrors().len);
+
+    const main_after = try lateTextFrameWidth(&harness.runtime, 1, font_app_canvas_label);
+    const panel_after = try lateTextFrameWidth(&harness.runtime, panel_id, late_window_canvas_label);
+    // Both surfaces now hold frames measured with the registered face's
+    // own advances — the widths moved, and moved identically.
+    try std.testing.expect(@abs(main_after - main_before) > 1);
+    try std.testing.expect(@abs(panel_after - panel_before) > 1);
+    try std.testing.expectEqual(main_after, panel_after);
+
+    // The re-measured width IS the face-aware seam's answer scaled into
+    // the frame, not merely a different guess: the face measures the
+    // string wider than the estimator did (1.0 em notdef per ASCII
+    // codepoint versus Geist's sub-em advances), so the frame grew.
+    try std.testing.expect(main_after > main_before);
+}
+
+// ------------------------ late registration adopts only on success
+
+/// Model for the failed-rebuild retry test below: `row_count` extra rows
+/// join the measured text, so the test can push one rebuild past the
+/// per-view widget budget and then heal it.
+const RetryFontModel = struct {
+    row_count: usize = 0,
+
+    pub fn rows(model: *const RetryFontModel, arena: std.mem.Allocator) []const usize {
+        const out = arena.alloc(usize, model.row_count) catch return &.{};
+        for (out, 0..) |*slot, index| slot.* = index;
+        return out;
+    }
+};
+const RetryFontMsg = union(enum) { noop };
+const RetryFontApp = ui_app_model.UiApp(RetryFontModel, RetryFontMsg);
+
+fn retryFontUpdate(model: *RetryFontModel, msg: RetryFontMsg) void {
+    _ = model;
+    _ = msg;
+}
+
+fn retryFontTokens(model: *const RetryFontModel) canvas.DesignTokens {
+    _ = model;
+    var tokens = canvas.DesignTokens{};
+    tokens.typography.font_id = registered_font_id;
+    return tokens;
+}
+
+fn retryRowKey(index: *const usize) canvas.UiKey {
+    return canvas.uiKey(@as(u64, index.*));
+}
+
+fn retryRow(ui: *RetryFontApp.Ui, index: *const usize) RetryFontApp.Ui.Node {
+    return ui.text(.{}, ui.fmt("Row {d}", .{index.*}));
+}
+
+fn retryFontView(ui: *RetryFontApp.Ui, model: *const RetryFontModel) RetryFontApp.Ui.Node {
+    // The measured text rides in a row (intrinsic width, like
+    // lateFontAppView above) so its frame moves when the registered
+    // face's advances replace the estimator's.
+    return ui.column(.{ .gap = 2 }, .{
+        ui.row(.{ .gap = 8, .padding = 12 }, .{ ui.text(.{}, late_mixed_text) }),
+        ui.each(model.rows(ui.arena), retryRowKey, retryRow),
+    });
+}
+
+test "a failed late-font rebuild leaves the count unadopted so the next healthy frame retries" {
+    // The failing rebuild teaches through std.log; without lowering the
+    // level the warning would fail the build runner's stderr check.
+    const saved_log_level = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = saved_log_level;
+
+    const harness = try TestHarness().create(std.testing.allocator, .{ .size = geometry.SizeF.init(240, 200) });
+    defer harness.destroy(std.testing.allocator);
+    harness.null_platform.gpu_surfaces = true;
+
+    const app_state = try std.testing.allocator.create(RetryFontApp);
+    defer std.testing.allocator.destroy(app_state);
+    app_state.* = RetryFontApp.init(std.testing.allocator, .{}, .{
+        .name = "ui-app-font-retry",
+        .scene = font_app_scene,
+        .canvas_label = font_app_canvas_label,
+        .tokens_fn = retryFontTokens,
+        .update = retryFontUpdate,
+        .view = retryFontView,
+    });
+    defer app_state.deinit();
+    const app = app_state.app();
+    try harness.start(app);
+
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 1,
+        .timestamp_ns = 1_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expect(app_state.installed);
+    const width_before = try lateTextFrameWidth(&harness.runtime, 1, font_app_canvas_label);
+
+    // Production policy: dispatch degrades errors instead of dying —
+    // the policy under which a rebuild that adopted the font count
+    // BEFORE succeeding would strand stale layouts marked font-current,
+    // never retried.
+    harness.runtime.dispatch_error_policy = .degrade;
+
+    // Grow the model past the per-view widget budget (mutated directly
+    // — no dispatch, so no rebuild yet), then register a face late so
+    // the next frame's late-registration rebuild is the failing one.
+    app_state.model.row_count = core.max_canvas_widget_nodes_per_view + 40;
+    try harness.runtime.registerCanvasFont(registered_font_id, cjk_receipt_bytes);
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 2,
+        .timestamp_ns = 2_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.dispatchErrors().len);
+    // The failed rebuild must NOT adopt the count: the mismatch it
+    // leaves behind is exactly what the next presented frame reads as
+    // its retry trigger.
+    try std.testing.expect(app_state.fonts_built_count != harness.runtime.registeredCanvasFontCount());
+
+    // Heal the model; the next presented frame observes the mismatch,
+    // rebuilds every surface, and only then adopts.
+    app_state.model.row_count = 0;
+    try harness.runtime.dispatchPlatformEvent(app, .{ .gpu_surface_frame = .{
+        .label = font_app_canvas_label,
+        .size = geometry.SizeF.init(240, 200),
+        .scale_factor = 1,
+        .frame_index = 3,
+        .timestamp_ns = 3_000_000,
+        .nonblank = true,
+    } });
+    try std.testing.expectEqual(@as(usize, 1), harness.runtime.dispatchErrors().len);
+    try std.testing.expectEqual(harness.runtime.registeredCanvasFontCount(), app_state.fonts_built_count);
+
+    // The retried rebuild re-measured with the registered face, not
+    // merely repainted: the face answers the mixed string wider than
+    // the estimator did (1.0 em notdef per ASCII codepoint), so the
+    // text widget's frame grew.
+    const width_after = try lateTextFrameWidth(&harness.runtime, 1, font_app_canvas_label);
+    try std.testing.expect(width_after > width_before);
 }
 
 test "ui app fonts option surfaces the glyph-budget refusal as a teaching error" {

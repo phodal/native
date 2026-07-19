@@ -658,7 +658,7 @@ Zig-built views get the same discipline at tree level: `canvas.expectA11yAuditSw
 
 ## Tooling
 
-- `native markup check src/app.native` — instant validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face is a teaching error naming the character (it renders as a tofu box on the reference/screenshot and mobile paths — use a vector icon or plain words). Dynamic strings get the same lesson as a Debug-build diagnostic when the view builds. Accessibility findings ride the same pass: unnamed interactive controls and role misuse are errors, unnamed images and redundant labels are warnings (see [Accessibility](#accessibility)).
+- `native markup check src/app.native` — instant validation with `file:line:column` errors, including the font-coverage tofu guard: literal text with a codepoint outside the bundled face is a teaching error naming the character (it renders as a tofu box on the reference/screenshot and mobile paths — [register a font](/fonts) that covers it and bind the text from the model, or use a vector icon or plain words; the static check knows only the bundled face's coverage). Dynamic strings get the same lesson as a Debug-build diagnostic when the view builds. Accessibility findings ride the same pass: unnamed interactive controls and role misuse are errors, unnamed images and redundant labels are warnings (see [Accessibility](#accessibility)).
 - `native markup lsp` — diagnostics, completion, and hover in your editor (see `editors/native-markup/` in the repo for VS Code, Helix, and Neovim setup).
 - The automation harness drives widgets and reads accessibility snapshots and screenshots headlessly — see [Automation](/automation).
 

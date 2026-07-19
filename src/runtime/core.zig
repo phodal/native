@@ -461,9 +461,14 @@ pub const Runtime = struct {
     /// Release the runtime's heap-owned on-demand storage (registered
     /// canvas font bytes, registered canvas image slot buffers, and
     /// adopted media-surface texture buffers, allocated from the
-    /// init-frozen `owned_allocator`) and disarm the
-    /// media-surface wake bindings (a producer thread must never wake a
-    /// dead host). Ends the runtime's life: parsed faces, atlas keys,
+    /// init-frozen `owned_allocator`), return each registered font's
+    /// host-side registration (through the unregister owner captured
+    /// into the entry at registration time — host font state is
+    /// per-process, this runtime's ids are not, and live `options` may
+    /// no longer name the host that received the registration), and
+    /// disarm the media-surface wake bindings (a producer
+    /// thread must never wake a dead host). Ends the runtime's life:
+    /// parsed faces, atlas keys,
     /// measure providers, adopted textures, and the resource slices
     /// built over them are invalid past this point. Process-lifetime
     /// embeddings (the app runner) may skip it — the default
@@ -474,6 +479,30 @@ pub const Runtime = struct {
     pub fn deinit(self: *Runtime) void {
         self.disarmMediaSurfaceWakes();
         for (self.canvas_font_entries[0..self.canvas_font_count]) |entry| {
+            // Return the HOST side of the registration before the bytes:
+            // registration pushed the face to platforms with host-side
+            // text (macOS installs a CoreText descriptor plus caches,
+            // keyed by an id that is only permanent per-RUNTIME while
+            // that host state is per-process), so a deinit that freed
+            // only the Zig-side bytes would leave an embedder cycling
+            // runtimes growing host font state for the process lifetime.
+            // Through the entry's owner captured at registration time,
+            // never live `options`: the option is publicly mutable, and
+            // an embedder that swapped the platform after registering
+            // must see this land on the host that holds the
+            // registration, not on the current platform or a null seam
+            // (the `owned_allocator` identity discipline two lines
+            // down, applied to the host). Best-effort by design —
+            // deinit cannot fail, and a null owner means the platform
+            // at registration time retained nothing to return. The
+            // entry's ownership token rides along so the host removes
+            // ONLY this runtime's registration: a later runtime may
+            // have re-registered the id (last wins), and presenting a
+            // stale token is a no-op accept — the newer runtime's live
+            // face survives this deinit.
+            if (entry.host_unregister_fn) |host_unregister_fn| {
+                host_unregister_fn(entry.host_unregister_context, entry.id, entry.host_registration_token) catch {};
+            }
             // Through the frozen identity, never `options.allocator`:
             // an embedder may have swapped the public option since these
             // bytes were made, and a free must hit the allocator that

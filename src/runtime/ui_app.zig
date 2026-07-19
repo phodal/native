@@ -739,6 +739,16 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// register would then fail `FontIdInUse` and bury the real
         /// error).
         fonts_registered: bool = false,
+        /// The runtime's registered-font count the installed trees last
+        /// measured against. Registration is permanent with no
+        /// unregister, so the count IS the runtime's fonts generation:
+        /// a mismatch on a presented frame means a face joined the
+        /// registry AFTER the trees were built (late registration
+        /// through `runtime.registerCanvasFont` — `Options.fonts` lands
+        /// before the installing build), and every installed surface
+        /// must rebuild so layout re-measures with the new face
+        /// (`rebuildForRegisteredFonts`).
+        fonts_built_count: usize = 0,
         /// Exactly-once guard for `Options.init_fx`, independent of
         /// `installed` so a failed install rebuild cannot rerun it.
         init_fx_ran: bool = false,
@@ -1250,14 +1260,20 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
         /// Whether a rebuild must push its tokens into the runtime's
         /// stored copy. Derived tokens can change with any model or
         /// appearance input, so they always re-emit. Static tokens are
-        /// fixed by the app, but the runtime stamps the surface scale
-        /// onto them (`effectiveTokens`), so a stored copy holding a
-        /// stale scale re-emits too — hairlines re-snap after a move
-        /// between monitors — while ordinary rebuilds keep skipping the
-        /// redundant emission.
+        /// fixed by the app, but the runtime stamps two live values onto
+        /// them: the surface scale (`effectiveTokens` — a stored copy
+        /// holding a stale scale re-emits so hairlines re-snap after a
+        /// move between monitors) and the text-measure provider
+        /// (`tokensWithTextMeasure` — the FIRST font registration binds
+        /// the runtime's font-aware provider on platforms without host
+        /// measurement, and a stored copy still measuring with the
+        /// estimator would keep display-list text layout on
+        /// pre-registration metrics). Ordinary rebuilds keep skipping
+        /// the redundant emission.
         fn rebuildEmitsTokens(self: *const Self, runtime: *Runtime, window_id: platform.WindowId, canvas_label: []const u8, tokens: canvas.DesignTokens) bool {
             if (self.derivesTokens()) return true;
             const stored = runtime.canvasWidgetDesignTokens(window_id, canvas_label) catch return true;
+            if (!std.meta.eql(stored.text_measure, tokens.text_measure)) return true;
             return stored.pixel_snap.scale != tokens.pixel_snap.scale;
         }
 
@@ -2949,6 +2965,12 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                     _ = try runtime.emitCanvasWidgetDisplayList(frame_event.window_id, self.options.canvas_label, runtime.tokensWithTextMeasure(self.effectiveTokens()));
                 }
                 self.installed = true;
+                // The installing rebuild measured with everything the
+                // registry holds right now (declared fonts registered
+                // above, embedder registrations before install): adopt
+                // the count so only faces joining AFTER this build
+                // trigger the late-registration rebuild.
+                self.fonts_built_count = runtime.registeredCanvasFontCount();
                 self.startMarkupWatch(runtime);
                 self.installStatusItem(runtime);
             } else if (@abs(self.pixel_snap_scale - scale) > 0.001) {
@@ -2977,6 +2999,17 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // job.
                 self.canvas_size = frame_event.size;
                 try self.rebuild(runtime, frame_event.window_id);
+            } else if (runtime.registeredCanvasFontCount() != self.fonts_built_count) {
+                // A face joined the registry after install (late
+                // registration through the runtime seam). The runtime
+                // already invalidated measurement caches and requested
+                // frames for every open surface (noteCanvasFontsChanged),
+                // but repainting retained geometry only re-inks text
+                // measured with the OLD seam answers: honoring the fonts
+                // doc's promise — every open surface re-measures — means
+                // rebuilding so layout and the re-emitted display lists
+                // charge the registered face's advances.
+                try self.rebuildForRegisteredFonts(runtime);
             } else if (self.options.web_panes != null) {
                 // Re-snap the webview panes each presented frame: a shell
                 // relayout that stomped a pane frame also invalidated the
@@ -3031,8 +3064,37 @@ pub fn UiAppWithFeatures(comptime ModelT: type, comptime MsgT: type, comptime fe
                 // stale bounds.
                 slot.canvas_size = frame_event.size;
                 try self.rebuildWindowSlot(runtime, slot);
+            } else if (runtime.registeredCanvasFontCount() != self.fonts_built_count) {
+                // Late registration, first observed on a secondary
+                // window's frame (registration requests frames for every
+                // open surface, and arrival order is the platform's):
+                // the same all-surfaces rebuild as the main canvas —
+                // the count is app-level, so whichever surface's frame
+                // lands first re-measures all of them.
+                try self.rebuildForRegisteredFonts(runtime);
             }
             try self.presentFrame(runtime, frame_event, slot.canvasLabel(), installing);
+        }
+
+        /// A face joined the runtime's font registry after this app's
+        /// trees were built: rebuild EVERY installed surface — main
+        /// canvas and declared secondary windows — so widget frames and
+        /// baked text runs re-measure against the registered face, then
+        /// adopt the count. Rebuild re-emits each surface's display list
+        /// (`rebuildEmitsTokens` treats a text-measure provider change
+        /// as an emit reason), so the repaint the runtime already
+        /// requested draws re-measured geometry, not re-inked stale
+        /// frames.
+        fn rebuildForRegisteredFonts(self: *Self, runtime: *Runtime) anyerror!void {
+            try self.rebuildAllViews(runtime);
+            // Adopt the count only AFTER the rebuild succeeded:
+            // production dispatch degrades errors, so a failed rebuild
+            // (widget budget, allocator pressure, a secondary window's
+            // emit) that had already adopted the count would mark stale
+            // layouts as font-current and never retry. Left unadopted,
+            // the error leaves the count mismatched and the next
+            // presented frame retries the rebuild.
+            self.fonts_built_count = runtime.registeredCanvasFontCount();
         }
 
         /// Present the planned canvas frame: GPU packet when the platform

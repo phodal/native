@@ -125,6 +125,7 @@ const GpuSurfaceInputEvent = types.GpuSurfaceInputEvent;
 const GpuSurfacePixels = types.GpuSurfacePixels;
 const GpuSurfacePacket = types.GpuSurfacePacket;
 const GpuSurfaceImagePixels = types.GpuSurfaceImagePixels;
+const GpuSurfaceFontData = types.GpuSurfaceFontData;
 const max_gpu_surface_scroll_drivers = types.max_gpu_surface_scroll_drivers;
 const GpuSurfaceScrollDriver = types.GpuSurfaceScrollDriver;
 const max_context_menu_items = types.max_context_menu_items;
@@ -159,6 +160,20 @@ pub const NullGpuSurfaceImage = struct {
     height: usize = 0,
     byte_len: usize = 0,
     sample_rgba: [4]u8 = .{ 0, 0, 0, 0 },
+};
+
+/// Matches the runtime font registry's slot count
+/// (`canvas_limits.max_registered_canvas_fonts`).
+pub const max_gpu_surface_fonts: usize = 16;
+
+/// One mirrored host font registration (see `gpu_surface_fonts`): the
+/// id-keyed record a stateful host retains per registered face, plus the
+/// ownership token the register call reported for it — the shape of the
+/// AppKit host's descriptor-and-token tables, minus the CoreText.
+pub const NullGpuSurfaceFont = struct {
+    id: u64 = 0,
+    token: u64 = 0,
+    byte_len: usize = 0,
 };
 
 pub const NullTimer = struct {
@@ -433,6 +448,40 @@ pub const NullPlatform = struct {
     gpu_surface_image_upload_byte_len: usize = 0,
     gpu_surface_image_upload_sample_rgba: [4]u8 = .{ 0, 0, 0, 0 },
     gpu_surface_image_remove_id: u64 = 0,
+    /// Host-font mirror for the registration seam, default OFF: the null
+    /// platform models a platform without host-side text, whose register
+    /// seam is null (engine-side registration is the whole story there,
+    /// and the runtime records ownership token 0 — nothing installed).
+    /// Tests modelling a stateful host (macOS's per-process descriptor
+    /// and token tables) enable this before taking `platform()`: the
+    /// mirror then accepts registrations id-keyed and last-wins, mints a
+    /// monotonic ownership token per registration exactly like the
+    /// AppKit host, and honors the token guard at unregister — so the
+    /// shared-id lifecycle (an older runtime's deinit must leave a newer
+    /// runtime's re-registration intact) is assertable without CoreText.
+    /// Per-instance where the real host tables are per-process: tests
+    /// model "one process" by pointing every runtime at ONE instance.
+    gpu_surface_font_registrations: bool = false,
+    gpu_surface_fonts: [max_gpu_surface_fonts]NullGpuSurfaceFont = [_]NullGpuSurfaceFont{.{}} ** max_gpu_surface_fonts,
+    gpu_surface_font_count: usize = 0,
+    gpu_surface_font_register_count: usize = 0,
+    /// The mirror's monotonic token counter, pre-incremented per
+    /// registration so 0 is never a live token — the AppKit host's
+    /// counter discipline, which is what makes a stale (or 0) token
+    /// provably match nothing.
+    gpu_surface_font_token_counter: u64 = 0,
+    /// Font-unregister recorder for the host-teardown seam Runtime.deinit
+    /// drives. Present even with the mirror off: the null platform then
+    /// has no register seam (no host-side text — engine-side registration
+    /// is the whole story), but it still accepts and records the teardown
+    /// call, so embed tests can pin that deinit returns the host-side
+    /// registration on platforms that do retain per-id font state
+    /// (macOS's CoreText descriptor and caches). The recorded token is
+    /// exactly what the call carried — 0 when the runtime captured no
+    /// register-time token, the minted stamp when the mirror is on.
+    gpu_surface_font_unregister_count: usize = 0,
+    gpu_surface_font_unregister_id: u64 = 0,
+    gpu_surface_font_unregister_token: u64 = 0,
     timers: [max_null_timers]NullTimer = [_]NullTimer{.{}} ** max_null_timers,
     timer_count: usize = 0,
     timer_start_count: usize = 0,
@@ -619,6 +668,8 @@ pub const NullPlatform = struct {
                 .present_gpu_surface_packet_binary_fn = presentGpuSurfacePacketBinary,
                 .upload_gpu_surface_image_fn = uploadGpuSurfaceImage,
                 .remove_gpu_surface_image_fn = removeGpuSurfaceImage,
+                .register_gpu_surface_font_fn = if (self.gpu_surface_font_registrations) registerGpuSurfaceFont else null,
+                .unregister_gpu_surface_font_fn = unregisterGpuSurfaceFont,
                 .decode_image_fn = decodeImage,
                 .set_gpu_surface_scroll_drivers_fn = setGpuSurfaceScrollDrivers,
                 .show_context_menu_fn = if (self.context_menus) showContextMenu else null,
@@ -1759,6 +1810,69 @@ pub const NullPlatform = struct {
         if (index != last) self.gpu_surface_images[index] = self.gpu_surface_images[last];
         self.gpu_surface_images[last] = .{};
         self.gpu_surface_image_count = last;
+    }
+
+    /// The host-font mirror's register half (installed only when
+    /// `gpu_surface_font_registrations` is on — see that flag): id-keyed
+    /// and last-wins like the AppKit host's descriptor table, minting a
+    /// pre-incremented monotonic ownership token per registration and
+    /// returning it, so tests can assert the token lifecycle the real
+    /// host runs.
+    fn registerGpuSurfaceFont(context: ?*anyopaque, font: GpuSurfaceFontData) anyerror!u64 {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        self.gpu_surface_font_register_count += 1;
+        self.gpu_surface_font_token_counter += 1;
+        const token = self.gpu_surface_font_token_counter;
+        const index = self.findGpuSurfaceFontIndex(font.id) orelse blk: {
+            if (self.gpu_surface_font_count >= max_gpu_surface_fonts) return error.InvalidGpuSurfaceFont;
+            const index = self.gpu_surface_font_count;
+            self.gpu_surface_font_count += 1;
+            break :blk index;
+        };
+        self.gpu_surface_fonts[index] = .{
+            .id = font.id,
+            .token = token,
+            .byte_len = font.ttf.len,
+        };
+        return token;
+    }
+
+    /// Records every teardown call (see the recorder fields; unlike the
+    /// image seam this one is not gated on `gpu_surfaces` — Runtime.deinit
+    /// unregisters every registered font regardless of what the surface
+    /// renders through), then applies the mirror's token guard: the id's
+    /// entry comes out only while it still carries `token`, so a stale
+    /// owner (the id was re-registered since, last wins) removes nothing
+    /// — the guard an id-keyed removal would violate by letting an older
+    /// runtime's deinit delete a newer runtime's live registration. With
+    /// the mirror off the table is empty and this is the recording no-op
+    /// it always was: there is no host font state to drop.
+    fn unregisterGpuSurfaceFont(context: ?*anyopaque, id: u64, token: u64) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        self.gpu_surface_font_unregister_id = id;
+        self.gpu_surface_font_unregister_token = token;
+        self.gpu_surface_font_unregister_count += 1;
+        const index = self.findGpuSurfaceFontIndex(id) orelse return;
+        if (self.gpu_surface_fonts[index].token != token) return;
+        const last = self.gpu_surface_font_count - 1;
+        if (index != last) self.gpu_surface_fonts[index] = self.gpu_surface_fonts[last];
+        self.gpu_surface_fonts[last] = .{};
+        self.gpu_surface_font_count = last;
+    }
+
+    /// The mirrored host font registration for `id`, or null when the id
+    /// holds none (never registered, or returned at teardown) — what a
+    /// stateful host would resolve measurement and drawing through.
+    pub fn gpuSurfaceFont(self: *const NullPlatform, id: u64) ?NullGpuSurfaceFont {
+        const index = self.findGpuSurfaceFontIndex(id) orelse return null;
+        return self.gpu_surface_fonts[index];
+    }
+
+    fn findGpuSurfaceFontIndex(self: *const NullPlatform, id: u64) ?usize {
+        for (self.gpu_surface_fonts[0..self.gpu_surface_font_count], 0..) |font, index| {
+            if (font.id == id) return index;
+        }
+        return null;
     }
 
     /// The recorded side-channel entry for `id`, or null when the id was

@@ -71,7 +71,7 @@ The register is small enough to read in one sitting; these are the groups and wh
 - `controls` — per-control visual tables (`button_primary`, `input`, `card`, …). Each entry states background/hover/active/pressed/disabled colors, foreground, border, radius, and stroke width; null fields fall through to the semantic palette and the state formulas. This is where a design system's per-control exceptions live — a filled error button, a 12px card corner — without touching any renderer.
 - `states` — the interaction formulas applied when a control table is silent: the filled hover/pressed alpha cuts, the disabled wash strength, the destructive chip's wash ladder, the static-text selection wash.
 - `metrics` — the control size register: the sm/default/lg height ladder, per-rung button insets, button label steps, icon extents and gaps, row extent.
-- `typography` — faces and the type rungs (body/label/title/button/heading/display).
+- `typography` — faces and the type rungs (body/label/title/button/heading/display). The face slots (`font_id`/`mono_font_id`) take app-registered faces too — see [Fonts](/fonts).
 - `radius`, `stroke`, `spacing` — the corner scale, hairline/focus stroke widths plus the focus ring's offset gap, and the spacing scale.
 - `shadow`, `blur`, `motion`, `scroll`, `layer`, `pixel_snap` — elevation, backdrop blur, motion durations/easing, scroll physics, z-bands, and snapping.
 

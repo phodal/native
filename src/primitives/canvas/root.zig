@@ -12,6 +12,7 @@ const widget_runtime = @import("widget_runtime.zig");
 const event_model = @import("events.zig");
 const serialization = @import("serialization.zig");
 const svg_model = @import("svg.zig");
+const scene_json_model = @import("scene_json.zig");
 
 pub const Error = error{
     DisplayListFull,
@@ -338,6 +339,16 @@ pub const SvgResources = svg_model.Resources;
 pub const SvgScene = svg_model.Scene;
 pub const SvgOptions = svg_model.Options;
 pub const writeSvg = svg_model.write;
+
+// Versioned interchange format for app-neutral canvas scenes. The same
+// document can feed SVG today and additional exporters without embedding an
+// application's state model in the converter.
+pub const SceneJsonError = scene_json_model.Error;
+pub const SceneJsonDocument = scene_json_model.Document;
+pub const scene_json_schema = scene_json_model.schema_name;
+pub const scene_json_version = scene_json_model.schema_version;
+pub const parseSceneJson = scene_json_model.parse;
+pub const writeSceneJson = scene_json_model.write;
 
 // One-image app-icon pipeline: PNG/SVG source in, per-platform icon
 // artifacts (.icns/.ico/size sets) out, all through the vector core.

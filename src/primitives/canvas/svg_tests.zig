@@ -134,3 +134,12 @@ test "SVG scene borrows frame resources and surface size" {
     try std.testing.expectEqual(@as(f32, 32), scene.size.height);
     try std.testing.expectEqual(@as(usize, 0), scene.resources.images.len);
 }
+
+test "reference-raster mode rejects dimensions that cannot fit usize" {
+    var output_buffer: [128]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&output_buffer);
+    try std.testing.expectError(error.InvalidSceneSize, canvas.writeSvg(std.testing.allocator, &writer, .{
+        .display_list = .{},
+        .size = geometry.SizeF.init(std.math.floatMax(f32), 1),
+    }, .{ .mode = .reference_raster }));
+}

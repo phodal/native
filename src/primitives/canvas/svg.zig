@@ -199,8 +199,8 @@ fn writeReferenceRaster(
     scene: Scene,
     options: Options,
 ) !void {
-    const width: usize = @intFromFloat(@ceil(scene.size.width));
-    const height: usize = @intFromFloat(@ceil(scene.size.height));
+    const width = try rasterExtent(scene.size.width);
+    const height = try rasterExtent(scene.size.height);
     const pixel_len = try canvas.png.pixelByteLen(width, height);
     const pixels = try allocator.alloc(u8, pixel_len);
     defer allocator.free(pixels);
@@ -232,6 +232,15 @@ fn writeReferenceRaster(
     );
     try writeBase64(writer, png_writer.buffered());
     try writer.writeAll("\"/>\n</svg>\n");
+}
+
+fn rasterExtent(value: f32) Error!usize {
+    const rounded: f64 = @ceil(@as(f64, value));
+    // f32 values can be much larger than usize. Check in f64 before the
+    // integer conversion so a hostile or accidentally huge raster scene
+    // returns a protocol error instead of trapping.
+    if (rounded <= 0 or rounded >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.InvalidSceneSize;
+    return @intFromFloat(rounded);
 }
 
 fn writeDocumentOpen(writer: *std.Io.Writer, scene: Scene, options: Options) !void {

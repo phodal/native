@@ -494,9 +494,14 @@ pub const Runtime = struct {
             // (the `owned_allocator` identity discipline two lines
             // down, applied to the host). Best-effort by design —
             // deinit cannot fail, and a null owner means the platform
-            // at registration time retained nothing to return.
+            // at registration time retained nothing to return. The
+            // entry's ownership token rides along so the host removes
+            // ONLY this runtime's registration: a later runtime may
+            // have re-registered the id (last wins), and presenting a
+            // stale token is a no-op accept — the newer runtime's live
+            // face survives this deinit.
             if (entry.host_unregister_fn) |host_unregister_fn| {
-                host_unregister_fn(entry.host_unregister_context, entry.id) catch {};
+                host_unregister_fn(entry.host_unregister_context, entry.id, entry.host_registration_token) catch {};
             }
             // Through the frozen identity, never `options.allocator`:
             // an embedder may have swapped the public option since these

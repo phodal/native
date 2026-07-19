@@ -2461,15 +2461,21 @@ int native_sdk_appkit_update_widget_accessibility(native_sdk_appkit_host_t *host
  * registration so `Options.fonts` apps start identically under both
  * hosts; refusing here would fail startup for a face this host never
  * resolves. */
-int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len) {
-    if (font_id == 0 || !bytes || bytes_len == 0) return 0;
+int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len, uint64_t *out_token) {
+    /* Token 0 is the honest report for a stateless accept: nothing was
+     * installed, so there is no registration a token could own and
+     * nothing a later unregister could remove. */
+    if (out_token) *out_token = 0;
+    if (font_id == 0 || !bytes || bytes_len == 0 || !out_token) return 0;
     return 1;
 }
 
 /* Teardown twin of the stateless accept above: registration retained no
  * host state here, so Runtime.deinit's per-id unregister has nothing to
- * return — accept it for the same start-identically reason. */
-int native_sdk_appkit_unregister_font(uint64_t font_id) {
+ * return — accept it (whatever token rides it) for the same
+ * start-identically reason. */
+int native_sdk_appkit_unregister_font(uint64_t font_id, uint64_t token) {
+    (void)token;
     if (font_id == 0) return 0;
     return 1;
 }

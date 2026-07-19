@@ -827,7 +827,16 @@ pub fn build(b: *std.Build) void {
         // table, the fresh stamp inside register_font, and the
         // token-carrying key inside measure_text.
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "static NSMutableDictionary<NSNumber *, NSNumber *> *NativeSdkRegisteredFontTokens(void)" },
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkRegisteredFontTokens()[@(font_id)] = @(++NativeSdkRegisteredFontTokenCounter);" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "unsigned long long token = ++NativeSdkRegisteredFontTokenCounter;" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "NativeSdkRegisteredFontTokens()[@(font_id)] = @(token);" },
+        // The stamp is also the registration's OWNERSHIP token: register
+        // reports it to the caller (`*out_token`), the runtime stores it
+        // beside the captured unregister owner, and unregister removes
+        // the id's state only while the id's current registration still
+        // carries it — an older runtime's deinit must never tear down a
+        // newer runtime's live face under a shared id (ids are
+        // per-runtime, host font state is per-process, last wins).
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "*out_token = token;" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "unsigned long long token = NativeSdkRegisteredFontToken((unsigned long long)font_id);" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NSString stringWithFormat:@\"%llu/%llu/%.3f/%@\", (unsigned long long)font_id, token, (double)clamped, value]" },
         // The teardown half: Runtime.deinit returns the host-side
@@ -841,11 +850,18 @@ pub fn build(b: *std.Build) void {
         // can never silently lose its one caller or regress to the live
         // read, and the embed cycle and platform-swap tests assert both
         // behaviorally against null platform recorders.
-        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "int native_sdk_appkit_unregister_font(uint64_t font_id) {" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "int native_sdk_appkit_unregister_font(uint64_t font_id, uint64_t token) {" },
+        // The token-match guard itself: reverting removal to id-keyed
+        // (deleting whatever the id currently holds, whoever registered
+        // it) must fail here — the embed suite's survives-teardown test
+        // pins the same guard behaviorally against the null platform's
+        // host-font mirror.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "if (!current || current.unsignedLongLongValue != token) return 1;" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NativeSdkRegisteredFontTokens() removeObjectForKey:@(font_id)];" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[table removeObjectForKey:@(font_id)];" },
         .{ .path = "src/runtime/canvas_fonts.zig", .pattern = ".host_unregister_fn = services.unregister_gpu_surface_font_fn," },
-        .{ .path = "src/runtime/core.zig", .pattern = "host_unregister_fn(entry.host_unregister_context, entry.id) catch {};" },
+        .{ .path = "src/runtime/canvas_fonts.zig", .pattern = ".host_registration_token = host_token," },
+        .{ .path = "src/runtime/core.zig", .pattern = "host_unregister_fn(entry.host_unregister_context, entry.id, entry.host_registration_token) catch {};" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "native_sdk_appkit_set_view_cursor" },

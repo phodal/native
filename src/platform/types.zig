@@ -1783,8 +1783,11 @@ pub const GpuSurfaceImagePixels = struct {
 /// keyed by the canvas font id host-wide. The engine validates the bytes
 /// (a parseable TrueType face under the registry bounds) before this
 /// call, so hosts may treat a decode failure as a hard error rather than
-/// a fallback. Ids are permanent for the process — the engine never
-/// re-registers an id with different bytes.
+/// a fallback. Ids are permanent per RUNTIME (one runtime never
+/// re-registers an id with different bytes), but host font state is
+/// per-process and runtimes are not: a later runtime may re-register an
+/// id a still-live earlier runtime also holds, and the host resolves the
+/// most recent registration (last wins).
 pub const GpuSurfaceFontData = struct {
     id: u64,
     ttf: []const u8,
@@ -2204,17 +2207,34 @@ pub const PlatformServices = struct {
     /// without host-side text (GTK/Win32/null default), where the engine
     /// measures with the parsed face and inks it through the reference
     /// renderer.
-    register_gpu_surface_font_fn: ?*const fn (context: ?*anyopaque, font: GpuSurfaceFontData) anyerror!void = null,
+    ///
+    /// Returns the host's ownership token for THIS registration of the
+    /// id. Host font state is per-process while ids are only permanent
+    /// per-runtime, so two live runtimes can register the same id (last
+    /// wins); the token names which registration a later unregister may
+    /// remove — the runtime stores it beside the captured unregister
+    /// owner and passes it back at teardown. Platforms that retain no
+    /// per-id host state (a stateless accept) return 0: there was
+    /// nothing installed, so there is nothing a token could own, and an
+    /// unregister carrying 0 removes nothing.
+    register_gpu_surface_font_fn: ?*const fn (context: ?*anyopaque, font: GpuSurfaceFontData) anyerror!u64 = null,
     /// Teardown twin of the registration seam above: return whatever
     /// per-id state the host retained for a registered face (descriptor
     /// tables, size/measurement caches) when the runtime that registered
     /// the id deinits. Fonts are per-runtime but host font state is
     /// per-process, so without this seam an embedder cycling runtimes
     /// with fresh ids grows host state for the process lifetime.
-    /// Unregistering an id the host never saw is a no-op, not an error.
-    /// Null on platforms whose register seam is itself null (GTK/Win32
-    /// default) — with no host font state there is nothing to return.
-    unregister_gpu_surface_font_fn: ?*const fn (context: ?*anyopaque, id: u64) anyerror!void = null,
+    /// `token` is the ownership token the matching register call
+    /// returned: the host removes the id's state ONLY while the id's
+    /// current registration still carries that token, so an older
+    /// runtime's deinit can never tear down a newer runtime's live face
+    /// under a shared id. A stale token (the id was re-registered since)
+    /// is a no-op accept — the registration it owned is already gone,
+    /// which is exactly the state its owner asked for. Unregistering an
+    /// id the host never saw is likewise a no-op, not an error. Null on
+    /// platforms whose register seam is itself null (GTK/Win32 default)
+    /// — with no host font state there is nothing to return.
+    unregister_gpu_surface_font_fn: ?*const fn (context: ?*anyopaque, id: u64, token: u64) anyerror!void = null,
     update_widget_accessibility_fn: ?*const fn (context: ?*anyopaque, snapshot: WidgetAccessibilitySnapshot) anyerror!void = null,
     /// Reconcile the native scroll drivers for a gpu-surface view against
     /// the full desired set: create missing drivers, update frames /
@@ -2705,17 +2725,23 @@ pub const PlatformServices = struct {
         return remove_fn(self.context, id);
     }
 
-    pub fn registerGpuSurfaceFont(self: PlatformServices, font: GpuSurfaceFontData) anyerror!void {
+    /// Returns the host's ownership token for this registration (0 from
+    /// hosts that retain no per-id state) — see
+    /// `register_gpu_surface_font_fn`.
+    pub fn registerGpuSurfaceFont(self: PlatformServices, font: GpuSurfaceFontData) anyerror!u64 {
         if (font.id == 0) return error.InvalidGpuSurfaceFont;
         if (font.ttf.len == 0 or font.ttf.len > max_gpu_surface_font_bytes) return error.InvalidGpuSurfaceFont;
         const register_fn = self.register_gpu_surface_font_fn orelse return error.UnsupportedService;
         return register_fn(self.context, font);
     }
 
-    pub fn unregisterGpuSurfaceFont(self: PlatformServices, id: u64) anyerror!void {
+    /// `token` must be the value the matching `registerGpuSurfaceFont`
+    /// returned; a stale token is a no-op accept — see
+    /// `unregister_gpu_surface_font_fn`.
+    pub fn unregisterGpuSurfaceFont(self: PlatformServices, id: u64, token: u64) anyerror!void {
         if (id == 0) return error.InvalidGpuSurfaceFont;
         const unregister_fn = self.unregister_gpu_surface_font_fn orelse return error.UnsupportedService;
-        return unregister_fn(self.context, id);
+        return unregister_fn(self.context, id, token);
     }
 
     pub fn updateWidgetAccessibility(self: PlatformServices, snapshot: WidgetAccessibilitySnapshot) anyerror!void {

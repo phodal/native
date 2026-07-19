@@ -486,14 +486,26 @@ int native_sdk_appkit_measure_text_advances(uint64_t font_id, double size, const
 
 // Register engine-validated TrueType bytes under a canvas font id so
 // measurement and packet text drawing resolve the id to this exact face.
-// Returns 1 on success, 0 when CoreText rejects the data.
-int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len);
+// Returns 1 on success, 0 when CoreText rejects the data. On success
+// `*out_token` is the registration's ownership token — the handle the
+// caller must present to native_sdk_appkit_unregister_font, so teardown
+// removes exactly this registration (font ids are per-runtime while
+// host font state is per-process: a later runtime may re-register the
+// id, and its live face must survive the older owner's teardown). Hosts
+// that retain no font state (the Chromium engine's stateless accept)
+// write 0: nothing installed, nothing a token could own.
+int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len, uint64_t *out_token);
 // Drop the per-id state a registration installed (the descriptor and its
 // caches) — the teardown twin Runtime.deinit calls, because font ids are
-// per-runtime while this host's font state is per-process. Unregistering
-// an id with no installed descriptor is a no-op accept. Returns 1 on
+// per-runtime while this host's font state is per-process. `token` must
+// be the value the matching register call reported: state is removed
+// only while the id's current registration still carries it, so an
+// older runtime's deinit never tears down a newer runtime's live face
+// under a shared id. A stale token — like an id with no installed
+// descriptor — is a no-op accept: the registration the token owned is
+// already gone, which is the state the caller asked for. Returns 1 on
 // accept, 0 only for the invalid id 0.
-int native_sdk_appkit_unregister_font(uint64_t font_id);
+int native_sdk_appkit_unregister_font(uint64_t font_id, uint64_t token);
 /* Decode encoded image bytes (PNG, JPEG, ... — whatever ImageIO supports)
  * through CGImageSource into tightly packed, row-major, straight-alpha
  * (non-premultiplied) RGBA8 written into `pixels`. Returns 1 on success

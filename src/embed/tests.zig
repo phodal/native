@@ -120,7 +120,78 @@ test "embedded app deinit returns registered font bytes across create-destroy cy
         embedded.deinit();
         try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_font_unregister_count);
         try std.testing.expectEqual(@as(u64, canvas.min_registered_font_id), null_platform.gpu_surface_font_unregister_id);
+        // The null platform's register seam is off by default, so the
+        // runtime captured ownership token 0 (nothing installed
+        // host-side) and the teardown call must carry exactly that.
+        try std.testing.expectEqual(@as(u64, 0), null_platform.gpu_surface_font_unregister_token);
     }
+}
+
+test "embedded app deinit leaves a newer runtime's re-registration of the same font id intact" {
+    // Host font state is per-process while font ids are only permanent
+    // per-runtime, so two live runtimes can pass the same id through one
+    // host: the later registration wins (the documented lifecycle), and
+    // the OLDER runtime's deinit must return only its own already-
+    // replaced registration — never the newer runtime's live face,
+    // which that runtime's engine still holds and draws through. The
+    // null platform's host-font mirror models the stateful host (the
+    // shape of macOS's descriptor and token tables): one instance
+    // stands in for the process, both runtimes register through it, and
+    // the per-registration ownership token is what the unregister guard
+    // matches. An id-keyed removal is exactly the regression this test
+    // catches — it would empty the mirror at A's deinit and fail the
+    // survives assertion below.
+    var host_platform = platform.NullPlatform.init(.{});
+    host_platform.gpu_surface_font_registrations = true;
+    var state_a: u8 = 0;
+    var state_b: u8 = 0;
+    const embedded_a = try std.testing.allocator.create(EmbeddedApp);
+    defer std.testing.allocator.destroy(embedded_a);
+    const embedded_b = try std.testing.allocator.create(EmbeddedApp);
+    defer std.testing.allocator.destroy(embedded_b);
+    embedded_a.initInPlace(.{
+        .context = &state_a,
+        .name = "embedded-font-owner-a",
+        .source = platform.WebViewSource.html("<p>A</p>"),
+    }, host_platform.platform());
+    defer embedded_a.deinit();
+    embedded_b.initInPlace(.{
+        .context = &state_b,
+        .name = "embedded-font-owner-b",
+        .source = platform.WebViewSource.html("<p>B</p>"),
+    }, host_platform.platform());
+    defer embedded_b.deinit();
+    embedded_a.runtime.owned_allocator = std.testing.allocator;
+    embedded_b.runtime.owned_allocator = std.testing.allocator;
+
+    // A registers first, B re-registers the same id: last wins, each
+    // runtime captured its own never-repeating ownership token.
+    try embedded_a.runtime.registerCanvasFont(canvas.min_registered_font_id, canvas.font_ttf.geist_mono_bytes);
+    const token_a = embedded_a.runtime.canvas_font_entries[0].host_registration_token;
+    try embedded_b.runtime.registerCanvasFont(canvas.min_registered_font_id, canvas.font_ttf.geist_mono_bytes);
+    const token_b = embedded_b.runtime.canvas_font_entries[0].host_registration_token;
+    try std.testing.expect(token_a != 0);
+    try std.testing.expect(token_b != 0);
+    try std.testing.expect(token_a != token_b);
+    const live = host_platform.gpuSurfaceFont(canvas.min_registered_font_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(token_b, live.token);
+
+    // A's deinit presents its stale token: recorded and accepted (the
+    // registration it owned is already gone), and provably removing
+    // nothing — B's registration is still the one the host resolves.
+    embedded_a.deinit();
+    try std.testing.expectEqual(@as(usize, 1), host_platform.gpu_surface_font_unregister_count);
+    try std.testing.expectEqual(@as(u64, canvas.min_registered_font_id), host_platform.gpu_surface_font_unregister_id);
+    try std.testing.expectEqual(token_a, host_platform.gpu_surface_font_unregister_token);
+    const survivor = host_platform.gpuSurfaceFont(canvas.min_registered_font_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(token_b, survivor.token);
+
+    // B's deinit presents the live token and the host state comes out —
+    // the guard blocks the wrong owner, not teardown itself.
+    embedded_b.deinit();
+    try std.testing.expectEqual(@as(usize, 2), host_platform.gpu_surface_font_unregister_count);
+    try std.testing.expectEqual(token_b, host_platform.gpu_surface_font_unregister_token);
+    try std.testing.expect(host_platform.gpuSurfaceFont(canvas.min_registered_font_id) == null);
 }
 
 test "embedded app deinit is idempotent" {

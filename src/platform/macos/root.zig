@@ -187,8 +187,8 @@ extern fn native_sdk_appkit_close_webview(host: *AppKitHost, window_id: u64, lab
 extern fn native_sdk_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buffer_len: usize) usize;
 extern fn native_sdk_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
 extern fn native_sdk_appkit_measure_text_advances(font_id: u64, size: f64, text: [*]const u8, text_len: usize, advances: [*]f32) c_int;
-extern fn native_sdk_appkit_register_font(font_id: u64, bytes: [*]const u8, bytes_len: usize) c_int;
-extern fn native_sdk_appkit_unregister_font(font_id: u64) c_int;
+extern fn native_sdk_appkit_register_font(font_id: u64, bytes: [*]const u8, bytes_len: usize, out_token: *u64) c_int;
+extern fn native_sdk_appkit_unregister_font(font_id: u64, token: u64) c_int;
 extern fn native_sdk_appkit_register_bundled_fonts() void;
 extern fn native_sdk_appkit_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn native_sdk_appkit_clipboard_write(host: *AppKitHost, text: [*]const u8, text_len: usize) void;
@@ -1483,20 +1483,30 @@ fn removeGpuSurfaceImage(context: ?*anyopaque, id: u64) anyerror!void {
 
 /// Registered canvas fonts feed the host's single font-resolution seam
 /// (measurement AND packet text drawing), which exists on both web
-/// engines, so this is deliberately not gated on `web_engine`.
-fn registerGpuSurfaceFont(context: ?*anyopaque, font: platform_mod.GpuSurfaceFontData) anyerror!void {
+/// engines, so this is deliberately not gated on `web_engine`. Returns
+/// the registration's ownership token: the AppKit host mints one per
+/// registration (font state there is per-process, so the token is what
+/// lets teardown remove exactly this registration under a shared id);
+/// the Chromium host retains no font state and reports 0 — nothing to
+/// own, nothing for an unregister to remove.
+fn registerGpuSurfaceFont(context: ?*anyopaque, font: platform_mod.GpuSurfaceFontData) anyerror!u64 {
     _ = context;
-    if (native_sdk_appkit_register_font(font.id, font.ttf.ptr, font.ttf.len) == 0) return error.InvalidGpuSurfaceFont;
+    var token: u64 = 0;
+    if (native_sdk_appkit_register_font(font.id, font.ttf.ptr, font.ttf.len, &token) == 0) return error.InvalidGpuSurfaceFont;
+    return token;
 }
 
 /// Teardown twin of the registration above: drop the host's per-id font
 /// state (the CoreText descriptor and its caches) when the runtime that
-/// registered the id deinits. Same seam, so deliberately not gated on
-/// `web_engine` either; unregistering an id the host never saw is a
-/// no-op accept.
-fn unregisterGpuSurfaceFont(context: ?*anyopaque, id: u64) anyerror!void {
+/// registered the id deinits — but only while the id's current
+/// registration still carries `token`, so an older runtime's deinit
+/// never removes a face a newer runtime re-registered under the same
+/// id. Same seam as registration, so deliberately not gated on
+/// `web_engine` either; unregistering an id the host never saw, or with
+/// a stale token, is a no-op accept.
+fn unregisterGpuSurfaceFont(context: ?*anyopaque, id: u64, token: u64) anyerror!void {
     _ = context;
-    if (native_sdk_appkit_unregister_font(id) == 0) return error.InvalidGpuSurfaceFont;
+    if (native_sdk_appkit_unregister_font(id, token) == 0) return error.InvalidGpuSurfaceFont;
 }
 
 fn updateWidgetAccessibility(context: ?*anyopaque, snapshot: platform_mod.WidgetAccessibilitySnapshot) anyerror!void {

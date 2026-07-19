@@ -1859,9 +1859,13 @@ static NSFont *NativeSdkRegisteredFontForId(unsigned long long value, CGFloat si
 // packet text drawing resolve the id to this exact face. Returns 1 on
 // success, 0 when CoreText rejects the data — the engine already parsed
 // the face, so a rejection here is surfaced as a loud registration
-// error engine-side, never a silent fallback at draw time.
-int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len) {
-    if (font_id == 0 || !bytes || bytes_len == 0) return 0;
+// error engine-side, never a silent fallback at draw time. On success
+// `*out_token` reports the registration token minted below — the
+// ownership handle unregister_font matches against, so a teardown can
+// only remove the registration it owns.
+int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len, uint64_t *out_token) {
+    if (out_token) *out_token = 0;
+    if (font_id == 0 || !bytes || bytes_len == 0 || !out_token) return 0;
     @autoreleasepool {
         NSData *data = [NSData dataWithBytes:bytes length:bytes_len];
         CTFontDescriptorRef descriptor = CTFontManagerCreateFontDescriptorFromData((__bridge CFDataRef)data);
@@ -1883,9 +1887,14 @@ int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size
             // cannot be enumerated for eviction, so stamp the id with a
             // fresh process-global token instead: width-cache keys
             // include the token, tokens never repeat, and everything
-            // cached under any previous stamp becomes unreachable.
-            NativeSdkRegisteredFontTokens()[@(font_id)] = @(++NativeSdkRegisteredFontTokenCounter);
+            // cached under any previous stamp becomes unreachable. The
+            // stamp doubles as the registration's ownership token,
+            // reported to the caller so its teardown can name exactly
+            // this registration.
+            unsigned long long token = ++NativeSdkRegisteredFontTokenCounter;
+            NativeSdkRegisteredFontTokens()[@(font_id)] = @(token);
             table[@(font_id)] = (__bridge_transfer id)descriptor;
+            *out_token = token;
         }
         return 1;
     }
@@ -1907,12 +1916,25 @@ int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size
 // unreachable without any per-id record surviving to say so. An id
 // with no installed descriptor (never registered host-side, or already
 // returned) is a no-op accept.
-int native_sdk_appkit_unregister_font(uint64_t font_id) {
+//
+// Removal is token-guarded: `token` is the ownership handle the id's
+// register call reported, and state comes out ONLY while the id's
+// current registration still carries it. Font ids are per-runtime while
+// this state is per-process, so a later runtime may have re-registered
+// the id (last wins — its face is the live one measurement and drawing
+// resolve); an id-keyed removal here would let the OLDER runtime's
+// deinit delete the newer runtime's descriptor and caches, dropping its
+// host text to the default family while its engine still holds the
+// face. A stale token is a no-op accept, not an error: the registration
+// it owned is already gone, which is exactly the state its owner asked
+// this call to establish.
+int native_sdk_appkit_unregister_font(uint64_t font_id, uint64_t token) {
     if (font_id == 0) return 0;
     @autoreleasepool {
         NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
         @synchronized (table) {
-            if (!table[@(font_id)]) return 1;
+            NSNumber *current = NativeSdkRegisteredFontTokens()[@(font_id)];
+            if (!current || current.unsignedLongLongValue != token) return 1;
             NSMutableDictionary<NSString *, NSFont *> *sizeCache = NativeSdkRegisteredFontSizeCache();
             NSString *stalePrefix = [NSString stringWithFormat:@"%llu/", (unsigned long long)font_id];
             NSArray<NSString *> *cachedKeys = sizeCache.allKeys;

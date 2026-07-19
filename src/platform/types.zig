@@ -2205,6 +2205,16 @@ pub const PlatformServices = struct {
     /// measures with the parsed face and inks it through the reference
     /// renderer.
     register_gpu_surface_font_fn: ?*const fn (context: ?*anyopaque, font: GpuSurfaceFontData) anyerror!void = null,
+    /// Teardown twin of the registration seam above: return whatever
+    /// per-id state the host retained for a registered face (descriptor
+    /// tables, size/measurement caches) when the runtime that registered
+    /// the id deinits. Fonts are per-runtime but host font state is
+    /// per-process, so without this seam an embedder cycling runtimes
+    /// with fresh ids grows host state for the process lifetime.
+    /// Unregistering an id the host never saw is a no-op, not an error.
+    /// Null on platforms whose register seam is itself null (GTK/Win32
+    /// default) — with no host font state there is nothing to return.
+    unregister_gpu_surface_font_fn: ?*const fn (context: ?*anyopaque, id: u64) anyerror!void = null,
     update_widget_accessibility_fn: ?*const fn (context: ?*anyopaque, snapshot: WidgetAccessibilitySnapshot) anyerror!void = null,
     /// Reconcile the native scroll drivers for a gpu-surface view against
     /// the full desired set: create missing drivers, update frames /
@@ -2700,6 +2710,12 @@ pub const PlatformServices = struct {
         if (font.ttf.len == 0 or font.ttf.len > max_gpu_surface_font_bytes) return error.InvalidGpuSurfaceFont;
         const register_fn = self.register_gpu_surface_font_fn orelse return error.UnsupportedService;
         return register_fn(self.context, font);
+    }
+
+    pub fn unregisterGpuSurfaceFont(self: PlatformServices, id: u64) anyerror!void {
+        if (id == 0) return error.InvalidGpuSurfaceFont;
+        const unregister_fn = self.unregister_gpu_surface_font_fn orelse return error.UnsupportedService;
+        return unregister_fn(self.context, id);
     }
 
     pub fn updateWidgetAccessibility(self: PlatformServices, snapshot: WidgetAccessibilitySnapshot) anyerror!void {

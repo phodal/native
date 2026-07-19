@@ -828,6 +828,17 @@ pub fn build(b: *std.Build) void {
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "generations[@(font_id)] = @((previous ? previous.unsignedLongLongValue : 0) + 1);" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "unsigned long long generation = NativeSdkRegisteredFontGeneration((unsigned long long)font_id);" },
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[NSString stringWithFormat:@\"%llu/%llu/%.3f/%@\", (unsigned long long)font_id, generation, (double)clamped, value]" },
+        // The teardown half: Runtime.deinit returns the host-side
+        // registration through the platform unregister seam, and the
+        // ObjC removal runs the SAME eviction machinery before dropping
+        // the descriptor entry. Pinned like the registration half
+        // (appkit_host.m has no SDK test tier); the deinit call site is
+        // pinned too so the seam can never silently lose its one caller,
+        // and the embed cycle test asserts that call behaviorally
+        // against the null platform's recorder.
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "int native_sdk_appkit_unregister_font(uint64_t font_id) {" },
+        .{ .path = "src/platform/macos/appkit_host.m", .pattern = "[table removeObjectForKey:@(font_id)];" },
+        .{ .path = "src/runtime/core.zig", .pattern = "self.options.platform.services.unregisterGpuSurfaceFont(entry.id) catch {};" },
     });
     addFileContainsCheckStep(b, file_contains_checker, test_step, "test-appkit-gpu-widget-cursor-bridge", "Verify AppKit GPU widgets apply retained cursor intent", &.{
         .{ .path = "src/platform/macos/appkit_host.m", .pattern = "native_sdk_appkit_set_view_cursor" },

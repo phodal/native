@@ -488,6 +488,12 @@ int native_sdk_appkit_measure_text_advances(uint64_t font_id, double size, const
 // measurement and packet text drawing resolve the id to this exact face.
 // Returns 1 on success, 0 when CoreText rejects the data.
 int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size_t bytes_len);
+// Drop the per-id state a registration installed (the descriptor and its
+// caches) — the teardown twin Runtime.deinit calls, because font ids are
+// per-runtime while this host's font state is per-process. Unregistering
+// an id with no installed descriptor is a no-op accept. Returns 1 on
+// accept, 0 only for the invalid id 0.
+int native_sdk_appkit_unregister_font(uint64_t font_id);
 /* Decode encoded image bytes (PNG, JPEG, ... — whatever ImageIO supports)
  * through CGImageSource into tightly packed, row-major, straight-alpha
  * (non-premultiplied) RGBA8 written into `pixels`. Returns 1 on success

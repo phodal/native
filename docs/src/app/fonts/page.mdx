@@ -66,7 +66,7 @@ Every failure happens at registration, never at render time — a registered id 
 
 ## Ownership and lifecycle
 
-Registration copies the file into an exact-size heap allocation owned by the runtime, so the caller's buffer (an `@embedFile` slice, a transient read) is free the moment the call returns. A runtime with no registered fonts carries zero font bytes. The copy lives until `Runtime.deinit` — registration is permanent, so ownership is one allocation and one free. Apps that live for the process never think about this; embedders that create and destroy runtimes call `Runtime.deinit` (the SDK's own embed hosts already do).
+Registration copies the file into an exact-size heap allocation owned by the runtime, so the caller's buffer (an `@embedFile` slice, a transient read) is free the moment the call returns. A runtime with no registered fonts carries zero font bytes. The copy lives until `Runtime.deinit` — registration is permanent, so ownership is one allocation and one free. Apps that live for the process never think about this; embedders that create and destroy runtimes call `Runtime.deinit` (the SDK's own embed hosts already do). `Runtime.deinit` returns the host-side registration too: on macOS, each registered id's host font state (the CoreText descriptor and its measurement caches) is dropped at deinit, so runtime cycles do not accumulate host entries. Host font state is one face per id per process — concurrent runtimes in one process that share an id resolve the most recent registration; that is a deliberate current constraint, so give concurrently live runtimes disjoint ids.
 
 ## How text finds the face
 

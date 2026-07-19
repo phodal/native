@@ -461,9 +461,12 @@ pub const Runtime = struct {
     /// Release the runtime's heap-owned on-demand storage (registered
     /// canvas font bytes, registered canvas image slot buffers, and
     /// adopted media-surface texture buffers, allocated from the
-    /// init-frozen `owned_allocator`) and disarm the
-    /// media-surface wake bindings (a producer thread must never wake a
-    /// dead host). Ends the runtime's life: parsed faces, atlas keys,
+    /// init-frozen `owned_allocator`), return each registered font's
+    /// host-side registration (the platform `unregisterGpuSurfaceFont`
+    /// seam — host font state is per-process, this runtime's ids are
+    /// not), and disarm the media-surface wake bindings (a producer
+    /// thread must never wake a dead host). Ends the runtime's life:
+    /// parsed faces, atlas keys,
     /// measure providers, adopted textures, and the resource slices
     /// built over them are invalid past this point. Process-lifetime
     /// embeddings (the app runner) may skip it — the default
@@ -474,6 +477,17 @@ pub const Runtime = struct {
     pub fn deinit(self: *Runtime) void {
         self.disarmMediaSurfaceWakes();
         for (self.canvas_font_entries[0..self.canvas_font_count]) |entry| {
+            // Return the HOST side of the registration before the bytes:
+            // registration pushed the face to platforms with host-side
+            // text (macOS installs a CoreText descriptor plus caches,
+            // keyed by an id that is only permanent per-RUNTIME while
+            // that host state is per-process), so a deinit that freed
+            // only the Zig-side bytes would leave an embedder cycling
+            // runtimes growing host font state for the process lifetime.
+            // Best-effort by design — deinit cannot fail, and platforms
+            // without the seam answer `UnsupportedService` because they
+            // retained nothing to return.
+            self.options.platform.services.unregisterGpuSurfaceFont(entry.id) catch {};
             // Through the frozen identity, never `options.allocator`:
             // an embedder may have swapped the public option since these
             // bytes were made, and a free must hit the allocator that

@@ -1877,6 +1877,37 @@ int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size
     }
 }
 
+// Teardown twin of the registration above, called by Runtime.deinit for
+// each id the dying runtime registered: font ids are per-runtime but
+// every table here is per-process, so without this removal an embedder
+// cycling runtimes with fresh ids grows the descriptor table (and its
+// caches) for the process lifetime. Removal runs the SAME eviction the
+// re-registration path runs — prefix-evict the id's cached NSFonts and
+// bump its generation so measured widths keyed under the old generation
+// become unreachable — then drops the descriptor itself. An id with no
+// installed descriptor (never registered host-side, or already returned)
+// is a no-op accept.
+int native_sdk_appkit_unregister_font(uint64_t font_id) {
+    if (font_id == 0) return 0;
+    @autoreleasepool {
+        NSMutableDictionary<NSNumber *, id> *table = NativeSdkRegisteredFontDescriptors();
+        @synchronized (table) {
+            if (!table[@(font_id)]) return 1;
+            NSMutableDictionary<NSString *, NSFont *> *sizeCache = NativeSdkRegisteredFontSizeCache();
+            NSString *stalePrefix = [NSString stringWithFormat:@"%llu/", (unsigned long long)font_id];
+            NSArray<NSString *> *cachedKeys = sizeCache.allKeys;
+            for (NSString *cachedKey in cachedKeys) {
+                if ([cachedKey hasPrefix:stalePrefix]) [sizeCache removeObjectForKey:cachedKey];
+            }
+            NSMutableDictionary<NSNumber *, NSNumber *> *generations = NativeSdkRegisteredFontGenerations();
+            NSNumber *previous = generations[@(font_id)];
+            generations[@(font_id)] = @((previous ? previous.unsignedLongLongValue : 0) + 1);
+            [table removeObjectForKey:@(font_id)];
+        }
+        return 1;
+    }
+}
+
 // Resolves a canvas font id to the NSFont presentation draws with. Both
 // packet text drawing and native_sdk_appkit_measure_text go through this
 // single function so measured layout and drawn glyphs share font

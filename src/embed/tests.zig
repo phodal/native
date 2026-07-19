@@ -109,6 +109,17 @@ test "embedded app deinit returns registered font bytes across create-destroy cy
         try embedded.runtime.registerCanvasFont(canvas.min_registered_font_id, canvas.font_ttf.geist_mono_bytes);
         try std.testing.expectEqual(@as(usize, 1), embedded.runtime.registeredCanvasFontCount());
         try embedded.stop();
+
+        // Deinit returns BOTH sides of the registration: the Zig-side
+        // bytes (the leak-checking allocator above) and the host-side
+        // registration — the runtime must call the platform's
+        // font-unregister seam per registered id, the call a macOS host
+        // answers by dropping its CoreText descriptor and caches. The
+        // null platform records that call; the deferred second deinit
+        // stays the idempotence backstop.
+        embedded.deinit();
+        try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_font_unregister_count);
+        try std.testing.expectEqual(@as(u64, canvas.min_registered_font_id), null_platform.gpu_surface_font_unregister_id);
     }
 }
 
@@ -127,10 +138,13 @@ test "embedded app deinit is idempotent" {
 
     // The documented idiom is `defer embedded.deinit()`, which must
     // compose with an explicit early teardown: the second call is a
-    // no-op, never a double free.
+    // no-op, never a double free — and never a double host unregister
+    // (the first deinit already returned the host-side registration).
     embedded.deinit();
     try std.testing.expectEqual(@as(usize, 0), embedded.runtime.registeredCanvasFontCount());
+    try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_font_unregister_count);
     embedded.deinit();
+    try std.testing.expectEqual(@as(usize, 1), null_platform.gpu_surface_font_unregister_count);
 }
 
 test "mobile C ABI destroy returns registered font bytes through the embedded deinit" {

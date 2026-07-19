@@ -433,6 +433,14 @@ pub const NullPlatform = struct {
     gpu_surface_image_upload_byte_len: usize = 0,
     gpu_surface_image_upload_sample_rgba: [4]u8 = .{ 0, 0, 0, 0 },
     gpu_surface_image_remove_id: u64 = 0,
+    /// Font-unregister recorder for the host-teardown seam Runtime.deinit
+    /// drives. The null platform has no register seam (no host-side text
+    /// — engine-side registration is the whole story here), but it does
+    /// accept and record the teardown call, so embed tests can pin that
+    /// deinit returns the host-side registration on platforms that do
+    /// retain per-id font state (macOS's CoreText descriptor and caches).
+    gpu_surface_font_unregister_count: usize = 0,
+    gpu_surface_font_unregister_id: u64 = 0,
     timers: [max_null_timers]NullTimer = [_]NullTimer{.{}} ** max_null_timers,
     timer_count: usize = 0,
     timer_start_count: usize = 0,
@@ -619,6 +627,7 @@ pub const NullPlatform = struct {
                 .present_gpu_surface_packet_binary_fn = presentGpuSurfacePacketBinary,
                 .upload_gpu_surface_image_fn = uploadGpuSurfaceImage,
                 .remove_gpu_surface_image_fn = removeGpuSurfaceImage,
+                .unregister_gpu_surface_font_fn = unregisterGpuSurfaceFont,
                 .decode_image_fn = decodeImage,
                 .set_gpu_surface_scroll_drivers_fn = setGpuSurfaceScrollDrivers,
                 .show_context_menu_fn = if (self.context_menus) showContextMenu else null,
@@ -1759,6 +1768,16 @@ pub const NullPlatform = struct {
         if (index != last) self.gpu_surface_images[index] = self.gpu_surface_images[last];
         self.gpu_surface_images[last] = .{};
         self.gpu_surface_image_count = last;
+    }
+
+    /// Recording no-op (see the recorder fields): there is no host font
+    /// state to drop, and unlike the image seam this one is not gated on
+    /// `gpu_surfaces` — Runtime.deinit unregisters every registered font
+    /// regardless of what the surface renders through.
+    fn unregisterGpuSurfaceFont(context: ?*anyopaque, id: u64) anyerror!void {
+        const self: *NullPlatform = @ptrCast(@alignCast(context.?));
+        self.gpu_surface_font_unregister_id = id;
+        self.gpu_surface_font_unregister_count += 1;
     }
 
     /// The recorded side-channel entry for `id`, or null when the id was

@@ -2466,6 +2466,14 @@ int native_sdk_appkit_register_font(uint64_t font_id, const uint8_t *bytes, size
     return 1;
 }
 
+/* Teardown twin of the stateless accept above: registration retained no
+ * host state here, so Runtime.deinit's per-id unregister has nothing to
+ * return — accept it for the same start-identically reason. */
+int native_sdk_appkit_unregister_font(uint64_t font_id) {
+    if (font_id == 0) return 0;
+    return 1;
+}
+
 /* The Chromium host has no packet text renderer, so there are no host
  * metrics to match: return the documented negative sentinel and the canvas
  * provider uses its estimator (the same fallback the AppKit host takes for

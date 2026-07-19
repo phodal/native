@@ -188,6 +188,7 @@ extern fn native_sdk_appkit_clipboard_read(host: *AppKitHost, buffer: [*]u8, buf
 extern fn native_sdk_appkit_measure_text(font_id: u64, size: f64, text: [*]const u8, text_len: usize) f64;
 extern fn native_sdk_appkit_measure_text_advances(font_id: u64, size: f64, text: [*]const u8, text_len: usize, advances: [*]f32) c_int;
 extern fn native_sdk_appkit_register_font(font_id: u64, bytes: [*]const u8, bytes_len: usize) c_int;
+extern fn native_sdk_appkit_unregister_font(font_id: u64) c_int;
 extern fn native_sdk_appkit_register_bundled_fonts() void;
 extern fn native_sdk_appkit_decode_image(bytes: [*]const u8, bytes_len: usize, pixels: [*]u8, pixels_len: usize, out_width: *usize, out_height: *usize) c_int;
 extern fn native_sdk_appkit_clipboard_write(host: *AppKitHost, text: [*]const u8, text_len: usize) void;
@@ -640,6 +641,7 @@ pub const MacPlatform = struct {
                 .upload_gpu_surface_image_fn = uploadGpuSurfaceImage,
                 .remove_gpu_surface_image_fn = removeGpuSurfaceImage,
                 .register_gpu_surface_font_fn = registerGpuSurfaceFont,
+                .unregister_gpu_surface_font_fn = unregisterGpuSurfaceFont,
                 .update_widget_accessibility_fn = updateWidgetAccessibility,
                 .measure_text_fn = measureText,
                 .measure_text_advances_fn = measureTextAdvances,
@@ -932,6 +934,7 @@ pub fn installHeadlessTextServices(services: *platform_mod.PlatformServices) voi
     services.measure_text_fn = measureText;
     services.measure_text_advances_fn = measureTextAdvances;
     services.register_gpu_surface_font_fn = registerGpuSurfaceFont;
+    services.unregister_gpu_surface_font_fn = unregisterGpuSurfaceFont;
 }
 
 fn measureText(context: ?*anyopaque, font_id: u64, size: f32, text: []const u8) f32 {
@@ -1484,6 +1487,16 @@ fn removeGpuSurfaceImage(context: ?*anyopaque, id: u64) anyerror!void {
 fn registerGpuSurfaceFont(context: ?*anyopaque, font: platform_mod.GpuSurfaceFontData) anyerror!void {
     _ = context;
     if (native_sdk_appkit_register_font(font.id, font.ttf.ptr, font.ttf.len) == 0) return error.InvalidGpuSurfaceFont;
+}
+
+/// Teardown twin of the registration above: drop the host's per-id font
+/// state (the CoreText descriptor and its caches) when the runtime that
+/// registered the id deinits. Same seam, so deliberately not gated on
+/// `web_engine` either; unregistering an id the host never saw is a
+/// no-op accept.
+fn unregisterGpuSurfaceFont(context: ?*anyopaque, id: u64) anyerror!void {
+    _ = context;
+    if (native_sdk_appkit_unregister_font(id) == 0) return error.InvalidGpuSurfaceFont;
 }
 
 fn updateWidgetAccessibility(context: ?*anyopaque, snapshot: platform_mod.WidgetAccessibilitySnapshot) anyerror!void {

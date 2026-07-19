@@ -18,6 +18,7 @@ test {
     _ = @import("vector_tests.zig");
     _ = @import("font_ttf_tests.zig");
     _ = @import("svg_icon_tests.zig");
+    _ = @import("svg_tests.zig");
     _ = @import("png.zig");
     _ = @import("app_icon.zig");
     _ = @import("text_tests.zig");

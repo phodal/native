@@ -11,6 +11,7 @@ const widget_model = @import("widgets.zig");
 const widget_runtime = @import("widget_runtime.zig");
 const event_model = @import("events.zig");
 const serialization = @import("serialization.zig");
+const svg_model = @import("svg.zig");
 
 pub const Error = error{
     DisplayListFull,
@@ -327,6 +328,16 @@ pub const icons = @import("icons.zig");
 
 // Deterministic PNG writer (stored-deflate zlib stream) lives in `png.zig`.
 pub const png = @import("png.zig");
+
+// Standalone scene export: vector SVG where portable, with an explicit
+// deterministic reference-raster mode for effects SVG cannot preserve.
+pub const SvgError = svg_model.Error;
+pub const SvgRenderMode = svg_model.RenderMode;
+pub const SvgMissingImagePolicy = svg_model.MissingImagePolicy;
+pub const SvgResources = svg_model.Resources;
+pub const SvgScene = svg_model.Scene;
+pub const SvgOptions = svg_model.Options;
+pub const writeSvg = svg_model.write;
 
 // One-image app-icon pipeline: PNG/SVG source in, per-platform icon
 // artifacts (.icns/.ico/size sets) out, all through the vector core.

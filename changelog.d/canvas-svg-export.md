@@ -1,0 +1,1 @@
+feature: **Reusable canvas-to-SVG export**: any Native SDK `DisplayList` or `CanvasFrame` can now produce a standalone SVG with rounded clips, transforms, gradients, embedded image resources, registered-font glyph outlines, strict missing-resource handling, and deterministic reference-raster fallback for backdrop blur.

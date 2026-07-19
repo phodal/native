@@ -443,6 +443,47 @@ test "runtime handles built-in JavaScript platform support commands" {
     } });
     try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":false") != null);
 
+    // Both spellings of window_hide_on_close answer the same seam: the null
+    // platform models full hide-on-close support by default, and flipping the
+    // seam off (the GTK model) flips both spellings together.
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"hide-snake\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"window_hide_on_close\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"hide-camel\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"windowHideOnClose\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
+
+    harness.null_platform.window_hide_on_close = false;
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"hide-snake-off\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"window_hide_on_close\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":false") != null);
+
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"hide-camel-off\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"windowHideOnClose\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":false") != null);
+
+    // Camel-cohort spot check: the backfilled audioSpectrum alias resolves to
+    // audio_spectrum, which the default null platform supports.
+    try harness.runtime.dispatchPlatformEvent(app_state.app(), .{ .bridge_message = .{
+        .bytes = "{\"id\":\"spectrum-camel\",\"command\":\"native-sdk.platform.supports\",\"payload\":{\"feature\":\"audioSpectrum\"}}",
+        .origin = "zero://inline",
+        .window_id = 1,
+    } });
+    try std.testing.expect(std.mem.indexOf(u8, harness.null_platform.lastBridgeResponse(), "\"result\":true") != null);
+
     var chromium_platform = platform.NullPlatform.initWithEngine(.{}, .chromium);
     harness.runtime.options.platform = chromium_platform.platform();
     try std.testing.expect(!harness.runtime.supports(.tray));
